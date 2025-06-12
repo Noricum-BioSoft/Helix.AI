@@ -1,0 +1,10 @@
+markdownify
+smolagents
+smolagents[gradio]
+requests
+duckduckgo_search
+pandas
+
+PyPDF2
+
+pymsaviz
