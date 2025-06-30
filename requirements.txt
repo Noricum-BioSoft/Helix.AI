@@ -8,3 +8,14 @@ pandas
 PyPDF2
 
 pymsaviz
+streamlit
+
+langchain
+langchain-community
+langchain-openai
+langgraph
+
+seaborn
+
+biopython
+tabulate
