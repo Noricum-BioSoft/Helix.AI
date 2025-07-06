@@ -1,0 +1,36 @@
+{
+  "mcpServers": {
+    "enhanced-bioinformatics": {
+      "command": "python",
+      "args": ["mcp_server_enhanced.py"],
+      "env": {
+        "PYTHONPATH": ".",
+        "MCP_LOG_LEVEL": "INFO",
+        "MCP_VALIDATION_STRICT": "true"
+      },
+      "capabilities": {
+        "tools": {
+          "listChanged": true
+        }
+      }
+    }
+  },
+  "settings": {
+    "validation": {
+      "strict_mode": true,
+      "max_sequence_length": 100000,
+      "max_variants": 1000,
+      "allowed_algorithms": ["clustal", "muscle", "mafft"]
+    },
+    "logging": {
+      "level": "INFO",
+      "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+      "file": "mcp_server.log"
+    },
+    "performance": {
+      "timeout_seconds": 300,
+      "max_concurrent_requests": 10,
+      "cache_results": true
+    }
+  }
+} 

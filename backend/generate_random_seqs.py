@@ -37,4 +37,4 @@ def generate_random_dna_csv(csv_path: str, num_sequences):
 
 
 if __name__ ==  "__main__":
-    generate_random_dna_csv("./tests/data/random_sequences.csv", num_sequences=20)
+    generate_random_dna_csv("../tests/data/random_sequences.csv", num_sequences=20)

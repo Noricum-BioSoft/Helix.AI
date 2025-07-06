@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 from pathlib import Path
-from utils import fasta_to_csv, csv_to_fasta
+from backend.utils import fasta_to_csv, csv_to_fasta
 
 import pymsaviz
 from smolagents import tool

@@ -19,3 +19,12 @@ seaborn
 
 biopython
 tabulate
+
+pytest
+pytest-asyncio
+python-dotenv
+
+# MCP (Model Context Protocol) dependencies
+mcp>=1.0.0
+fastapi
+uvicorn
