@@ -1,22 +1,37 @@
-# 🧬 DataBloom.AI - Bioinformatics MCP Server
+# 🧬 DataBloom.AI - Bioinformatics AI Platform
 
-An AI-powered web application for managing biotechnology workflows via natural language commands, featuring a Model Context Protocol (MCP) server for standardized bioinformatics operations.
+An AI-powered web application for managing biotechnology workflows via natural language commands, featuring a Model Context Protocol (MCP) server for standardized bioinformatics operations with session management and history tracking.
 
 ---
 
 ## 🚀 Features
 
-- ✍️ **Prompt-Based Interface** — Users enter commands like:
-  - "Align the given sequences"
-  - "Mutate this sequence and generate 96 variants"
-  - "Calculate sequence statistics"
-  - "Generate reverse complement"
-- 🤖 **MCP-Powered Backend** — Standardized bioinformatics tools via Model Context Protocol
-- 📊 **Interactive Visualizations** — Supports graphical results (e.g., Plotly plots for alignments)
-- 🧰 **Modular Tool System** — Easily extend with new bioinformatics tools
-- 🔄 **React Frontend** — Built with Bootstrap for a responsive, clean UI
-- ⚡ **FastAPI Backend** — Lightweight and scalable RESTful API
-- 🔍 **Enhanced Validation** — Comprehensive input validation and error handling
+### 🤖 **Natural Language Commands**
+- **Intelligent Command Parsing**: Understand commands like "from the sequence variants, pick 10 sequences randomly and output them"
+- **Multi-step Workflows**: Chain commands together for complex bioinformatics pipelines
+- **Context Awareness**: Maintains session history for continuous workflows
+
+### 📊 **Interactive Visualizations**
+- **Plotly Integration**: Dynamic charts for sequence analysis, mutations, and alignments
+- **Real-time Updates**: Live visualizations that update as you work
+- **Export Capabilities**: Save plots and results in multiple formats
+
+### 🧰 **Comprehensive Tool Suite**
+- **Sequence Alignment**: Multiple algorithms (ClustalW, Muscle, MAFFT)
+- **Mutation Analysis**: Generate and analyze sequence variants
+- **Data Science Tools**: Statistical analysis and feature engineering
+- **Variant Selection**: Smart selection based on diversity, length, or custom criteria
+
+### 🔄 **Session Management**
+- **Persistent Sessions**: Track your workflow across multiple commands
+- **History Tracking**: Complete audit trail of all operations
+- **Context Preservation**: Maintain state between commands
+
+### 🎯 **User Experience**
+- **Drag-and-Drop File Upload**: Upload FASTA/CSV files directly
+- **Command Mode Toggle**: Switch between natural language and structured commands
+- **Real-time Feedback**: Immediate response and progress indicators
+- **Responsive Design**: Works on desktop and mobile devices
 
 ---
 
@@ -24,19 +39,27 @@ An AI-powered web application for managing biotechnology workflows via natural l
 
 ```
 DataBloom.AI/
-├── frontend/                 # React frontend with MCP integration
+├── frontend/                 # React frontend with natural language support
 │   ├── src/
-│   │   ├── services/        # MCP API service
-│   │   ├── utils/           # Command parser
-│   │   └── App.tsx         # Main application
+│   │   ├── services/        # MCP API service with session management
+│   │   ├── utils/           # Command parser and utilities
+│   │   └── App.tsx         # Main application with drag-and-drop
 │   └── package.json
-├── backend/                  # FastAPI + MCP server
-│   ├── mcp_server.py        # Basic MCP server
-│   ├── mcp_server_enhanced.py # Enhanced MCP server
-│   ├── main_with_mcp.py    # FastAPI with MCP integration
-│   ├── tools/               # Bioinformatics tools
+├── backend/                  # FastAPI + MCP server with session tracking
+│   ├── main_with_mcp.py    # FastAPI with natural language integration
+│   ├── history_manager.py   # Session and history management
+│   ├── agent.py            # Command handling and routing
 │   └── requirements.txt
 ├── tools/                    # Bioinformatics tool modules
+│   ├── mutations.py         # Sequence mutation and variant generation
+│   ├── alignment.py         # Sequence alignment tools
+│   ├── data_science.py      # Statistical analysis and visualization
+│   ├── variant_selection.py # Smart variant selection algorithms
+│   ├── command_parser.py    # Natural language command parsing
+│   ├── command_executor.py  # Command execution engine
+│   └── command_handler.py   # Combined parser and executor
+├── tests/                    # Test files and sample data
+│   └── sample_files/        # Example FASTA and CSV files
 └── start-app.sh             # Complete startup script
 ```
 
@@ -47,7 +70,8 @@ DataBloom.AI/
 ### Prerequisites
 
 - **Node.js** >= 16
-- **Python** >= 3.9
+- **Python** >= 3.10
+- **Conda** (recommended for environment management)
 - **Git** (for cloning the repository)
 
 ### 1. Clone and Setup Repository
@@ -67,24 +91,22 @@ chmod +x start-app.sh
 # Navigate to backend directory
 cd backend
 
-# Create virtual environment
-python -m venv venv
+# Create conda environment (recommended)
+conda create -n databloom python=3.10
+conda activate databloom
 
-# Activate virtual environment
-# On macOS/Linux:
-source venv/bin/activate
-# On Windows:
-# venv\Scripts\activate
+# Or use virtual environment
+python -m venv venv
+source venv/bin/activate  # macOS/Linux
+# venv\Scripts\activate   # Windows
 
 # Install Python dependencies
 pip install -r requirements.txt
 
-# Install bioinformatics tools (optional but recommended)
-# For Clustal Omega (sequence alignment)
-# macOS:
-brew install clustalo
-# Ubuntu/Debian:
-# sudo apt-get install clustalo
+# Install additional bioinformatics tools
+conda install -c bioconda clustalo muscle mafft
+# Or on macOS:
+# brew install clustalo muscle mafft
 ```
 
 ### 3. Frontend Setup
@@ -96,8 +118,8 @@ cd frontend
 # Install Node.js dependencies
 npm install
 
-# Build the project (optional)
-npm run build
+# Install additional dependencies for natural language support
+npm install axios @types/axios
 ```
 
 ### 4. Environment Configuration
@@ -120,6 +142,10 @@ DEEPSEEK_API_KEY=your-deepseek-api-key
 MCP_LOG_LEVEL=INFO
 MCP_VALIDATION_STRICT=true
 
+# Session Management
+SESSION_TIMEOUT=3600
+MAX_SESSION_SIZE=1000
+
 # Database (if using)
 DATABASE_URL=sqlite:///./data.db
 ```
@@ -138,32 +164,24 @@ Use the provided startup script to run everything at once:
 ```
 
 This script will:
-- ✅ Check prerequisites
-- ✅ Install dependencies
-- ✅ Start the backend MCP server
+- ✅ Check prerequisites and dependencies
+- ✅ Start the backend MCP server with session management
 - ✅ Start the frontend development server
 - ✅ Wait for services to be ready
 - ✅ Open the application in your browser
 
 ### Option 2: Manual Startup
 
-#### Start Backend MCP Server
+#### Start Backend with Session Management
 
 ```bash
 # Navigate to backend
 cd backend
 
-# Activate virtual environment
-source venv/bin/activate  # macOS/Linux
-# venv\Scripts\activate   # Windows
+# Activate conda environment
+conda activate databloom
 
-# Start the enhanced MCP server
-python mcp_server_enhanced.py
-
-# Or start the basic MCP server
-python mcp_server.py
-
-# Or start the FastAPI server with MCP integration
+# Start the FastAPI server with MCP integration
 python main_with_mcp.py
 ```
 
@@ -179,28 +197,22 @@ npm run dev
 
 ### Option 3: Individual Component Testing
 
-#### Test Backend MCP Server
+#### Test Natural Language Commands
 
 ```bash
 cd backend
+conda activate databloom
 
-# Test the enhanced MCP server
-python test_enhanced_mcp.py
+# Test command parsing
+python -c "
+import sys; sys.path.append('../tools')
+from command_parser import parse_command_raw
+result = parse_command_raw('from the sequence variants, pick 10 sequences randomly')
+print(result)
+"
 
-# Test basic integration
-python test_mcp_integration.py
-
-# Test API endpoints
-python -m pytest tests/  # if tests exist
-```
-
-#### Test Frontend Integration
-
-```bash
-cd frontend
-
-# Test API integration
-node test-integration.js
+# Test complete workflow
+python test_command_handling.py
 ```
 
 ---
@@ -216,190 +228,187 @@ Once running, access the application at:
 
 ---
 
-## 🧪 Testing the MCP Server
+## 🧪 Testing the Natural Language Commands
 
-### Run Comprehensive Tests
-
-```bash
-cd backend
-python test_enhanced_mcp.py
-```
-
-### Test API Endpoints
+### Complete Workflow Example
 
 ```bash
-# Test health endpoint
-curl http://localhost:8001/health
-
-# Test MCP tools listing
-curl http://localhost:8001/mcp/tools
-
-# Test sequence alignment
-curl -X POST http://localhost:8001/mcp/sequence-alignment \
+# 1. Create a session and generate mutations
+curl -X POST http://localhost:8001/session/create \
   -H "Content-Type: application/json" \
-  -d '{
-    "sequences": ">seq1\nACTGTTGAC\n>seq2\nACTGCATCC",
-    "algorithm": "clustal"
-  }'
+  -d '{}'
 
-# Test sequence statistics
-curl -X POST http://localhost:8001/mcp/sequence-statistics \
+# 2. Generate mutations (replace SESSION_ID with actual session ID)
+curl -X POST http://localhost:8001/mcp/mutate-sequence \
   -H "Content-Type: application/json" \
   -d '{
     "sequence": "ACTGTTGAC",
-    "include_composition": true
+    "num_variants": 10,
+    "session_id": "SESSION_ID"
   }'
+
+# 3. Use natural language to select variants
+curl -X POST http://localhost:8001/mcp/handle-natural-command \
+  -H "Content-Type: application/json" \
+  -d '{
+    "command": "from the sequence variants, pick 5 sequences randomly and output them",
+    "session_id": "SESSION_ID"
+  }'
+```
+
+### Frontend Testing
+
+1. **Open the web interface** at http://localhost:5173
+2. **Switch to "Natural Language" mode**
+3. **Run these example commands**:
+
+```
+# Step 1: Generate variants
+mutate sequence ACTGTTGAC with 10 variants
+
+# Step 2: Select variants using natural language
+from the sequence variants, pick 5 sequences randomly and output them
+
+# Step 3: Analyze the selected variants
+analyze the selected variants and show me the most diverse ones
+
+# Step 4: Create a multi-step workflow
+mutate this sequence, then align the variants and pick the best ones
 ```
 
 ---
 
 ## 🧠 Example Commands
 
-### Frontend Interface Commands
+### Natural Language Commands
+
+| Command | Action | Description |
+|---------|--------|-------------|
+| `"from the sequence variants, pick 10 sequences randomly and output them"` | Variant Selection | Selects 10 random variants from previous mutation results |
+| `"select 5 sequences with the highest mutation rate"` | Smart Selection | Uses custom criteria for variant selection |
+| `"analyze the alignment and show me the most conserved regions"` | Analysis | Performs statistical analysis on alignment data |
+| `"mutate this sequence, then align the variants and pick the best ones"` | Multi-step Workflow | Chains multiple operations together |
+
+### Structured Commands
 
 | Command | Action | MCP Tool Used |
 |---------|--------|---------------|
 | `"align sequences ACTGTTGAC ACTGCATCC"` | Sequence alignment | `sequence_alignment` |
 | `"mutate sequence ACTGTTGAC with 10 variants"` | Generate mutations | `mutate_sequence` |
-| `"calculate statistics for ACTGTTGAC"` | Sequence analysis | `sequence_statistics` |
-| `"reverse complement of ACTGTTGAC"` | DNA manipulation | `reverse_complement` |
-| `"validate sequence ACTGTTGAC"` | Input validation | `sequence_validation` |
+| `"analyze sequence data for phylogeny"` | Sequence analysis | `analyze_sequence_data` |
+| `"visualize alignment in PNG format"` | Create visualization | `visualize_alignment` |
 
-### API Endpoints
+### File Upload Examples
 
-#### MCP-Specific Endpoints
+1. **Upload FASTA file** and choose action:
+   - Align sequences
+   - Mutate sequences
+   - Analyze data
+
+2. **Upload CSV file** for data analysis:
+   - Statistical analysis
+   - Feature engineering
+   - Visualization
+
+---
+
+## 🔧 API Endpoints
+
+### Natural Language Commands
+
+```http
+POST /mcp/handle-natural-command
+POST /mcp/parse-command
+POST /mcp/execute-command
+```
+
+### Session Management
+
+```http
+POST /session/create
+GET /session/{session_id}
+```
+
+### Traditional MCP Endpoints
 
 ```http
 POST /mcp/sequence-alignment
 POST /mcp/mutate-sequence
 POST /mcp/analyze-sequence-data
 POST /mcp/visualize-alignment
-POST /mcp/sequence-statistics
-POST /mcp/reverse-complement
-POST /mcp/sequence-validation
+POST /mcp/select-variants
 GET /mcp/tools
 ```
 
-#### Legacy Endpoints
+### Health and Status
 
 ```http
-POST /execute  # General command execution
-GET /health    # Health check
-```
-
----
-
-## 🔧 MCP Server Configuration
-
-### Enhanced MCP Server Features
-
-The enhanced MCP server (`mcp_server_enhanced.py`) includes:
-
-- **Input Validation**: Comprehensive validation of DNA/RNA sequences
-- **Error Handling**: Structured error responses with timestamps
-- **Performance Tracking**: Execution time measurement
-- **Additional Tools**: Sequence statistics, reverse complement, validation
-
-### Configuration Files
-
-- `mcp_config.json` - Basic MCP server configuration
-- `mcp_config_enhanced.json` - Enhanced configuration with validation settings
-
-### Environment Variables
-
-```bash
-export MCP_LOG_LEVEL="INFO"
-export MCP_VALIDATION_STRICT="true"
-export PYTHONPATH="."
+GET /health
+GET /execute
 ```
 
 ---
 
 ## 🛠️ Development
 
-### Adding New Bioinformatics Tools
+### Adding New Natural Language Commands
 
-1. **Create Tool Function** in `backend/tools/`:
+1. **Update Command Parser** in `tools/command_parser.py`:
 
 ```python
-# backend/tools/new_tool.py
-from langchain.agents import tool
+def parse_command_raw(command: str, session_id: str = None) -> Dict[str, Any]:
+    # Add new command patterns
+    if "new command pattern" in command.lower():
+        return {
+            "action": "new_action",
+            "tool": "new_tool",
+            "parameters": {"param": "value"},
+            "session_id": session_id
+        }
+```
 
-@tool
-def run_new_tool(sequence: str):
-    """Description of the new tool."""
+2. **Add Tool Implementation** in `tools/new_tool.py`:
+
+```python
+def run_new_tool_raw(param: str) -> Dict[str, Any]:
+    """Execute the new tool with raw parameters."""
+    # Implementation here
     return {
-        "text": "Tool executed successfully.",
+        "status": "success",
         "result": {"data": "processed_data"}
     }
 ```
 
-2. **Add to MCP Server** in `mcp_server_enhanced.py`:
-
-```python
-# Add tool to handle_list_tools()
-Tool(
-    name="new_tool",
-    description="Description of the new tool",
-    inputSchema={
-        "type": "object",
-        "properties": {
-            "sequence": {
-                "type": "string",
-                "description": "Input sequence"
-            }
-        },
-        "required": ["sequence"]
-    }
-)
-
-# Add handler function
-async def handle_new_tool(arguments: Dict[str, Any]) -> Dict[str, Any]:
-    sequence = arguments.get("sequence", "")
-    if not validate_sequence(sequence):
-        raise ValidationError("Invalid sequence")
-    
-    result = run_new_tool(sequence)
-    return {
-        "status": "success",
-        "tool": "new_tool",
-        "result": result
-    }
-
-# Add to tool router
-elif name == "new_tool":
-    result = await handle_new_tool(arguments)
-```
-
-3. **Update Frontend** in `frontend/src/utils/commandParser.ts`:
+3. **Update Frontend** in `frontend/src/App.tsx`:
 
 ```typescript
-// Add keywords
-private static newToolKeywords = [
-    'new tool', 'process sequence'
-];
-
-// Add parsing method
-private static parseNewToolCommand(command: string): ParsedCommand {
-    // Implementation
-}
+// Add to renderOutput function
+{actualResult.new_data && (
+  <div className="bg-light p-3 border rounded mb-3">
+    <h5>New Tool Results</h5>
+    <pre>{JSON.stringify(actualResult.new_data, null, 2)}</pre>
+  </div>
+)}
 ```
 
 ### Testing New Features
 
 ```bash
-# Test backend tools
-cd backend
-python test_enhanced_mcp.py
+# Test command parsing
+python -c "
+import sys; sys.path.append('../tools')
+from command_parser import parse_command_raw
+result = parse_command_raw('your new command')
+print(result)
+"
 
-# Test frontend integration
-cd frontend
-npm test
+# Test complete workflow
+python test_command_handling.py
 
 # Test API endpoints
-curl -X POST http://localhost:8001/mcp/new-tool \
+curl -X POST http://localhost:8001/mcp/handle-natural-command \
   -H "Content-Type: application/json" \
-  -d '{"sequence": "ACTGTTGAC"}'
+  -d '{"command": "your new command", "session_id": "test"}'
 ```
 
 ---
@@ -408,12 +417,34 @@ curl -X POST http://localhost:8001/mcp/new-tool \
 
 ### Common Issues
 
+#### Natural Language Commands Not Working
+
+1. **Check Session Management**:
+   ```bash
+   # Verify session creation
+   curl -X POST http://localhost:8001/session/create
+   
+   # Check session history
+   curl http://localhost:8001/session/{session_id}
+   ```
+
+2. **Check Command Parsing**:
+   ```bash
+   # Test command parser directly
+   python -c "
+   import sys; sys.path.append('../tools')
+   from command_parser import parse_command_raw
+   result = parse_command_raw('your command')
+   print(result)
+   "
+   ```
+
 #### Backend Issues
 
 1. **Import Errors**:
    ```bash
-   # Ensure virtual environment is activated
-   source venv/bin/activate
+   # Ensure conda environment is activated
+   conda activate databloom
    
    # Reinstall dependencies
    pip install -r requirements.txt
@@ -425,16 +456,7 @@ curl -X POST http://localhost:8001/mcp/new-tool \
    export PYTHONPATH="."
    
    # Check dependencies
-   python -c "import mcp"
-   ```
-
-3. **Tool Not Found**:
-   ```bash
-   # Check tool registration
-   curl http://localhost:8001/mcp/tools
-   
-   # Check logs
-   tail -f logs/mcp_server.log
+   python -c "import plotly, pandas, biopython"
    ```
 
 #### Frontend Issues
@@ -448,14 +470,11 @@ curl -X POST http://localhost:8001/mcp/new-tool \
    # Ensure backend allows frontend origin
    ```
 
-2. **Build Errors**:
+2. **Natural Language Mode Not Working**:
    ```bash
-   # Clear node modules
-   rm -rf node_modules package-lock.json
-   npm install
-   
-   # Check TypeScript
-   npm run build
+   # Check browser console for errors
+   # Verify session ID is being set
+   # Check network tab for API calls
    ```
 
 ### Debugging
@@ -465,31 +484,33 @@ curl -X POST http://localhost:8001/mcp/new-tool \
    export MCP_LOG_LEVEL="DEBUG"
    ```
 
-2. **Check Logs**:
+2. **Check Session Logs**:
    ```bash
-   # Backend logs
-   tail -f logs/mcp_server.log
+   # Check session files
+   ls -la backend/sessions/
    
-   # Frontend logs
-   # Check browser developer tools
+   # Check session content
+   cat backend/sessions/{session_id}.json
    ```
 
 3. **Test Individual Components**:
    ```bash
-   # Test MCP server
-   python test_enhanced_mcp.py
+   # Test command parsing
+   python test_command_handling.py
    
    # Test API
-   node test-integration.js
+   curl -X POST http://localhost:8001/mcp/handle-natural-command \
+     -H "Content-Type: application/json" \
+     -d '{"command": "test command"}'
    ```
 
 ---
 
 ## 📚 Documentation
 
-- **Backend MCP**: `backend/MCP_README.md`
+- **Backend MCP**: `backend/MCP_SERVER_README.md`
 - **Enhanced MCP**: `backend/ENHANCED_MCP_README.md`
-- **Frontend**: `frontend/README.md`
+- **History Tracking**: `backend/HISTORY_TRACKING.md`
 - **API Documentation**: http://localhost:8001/docs
 
 ---
@@ -497,18 +518,19 @@ curl -X POST http://localhost:8001/mcp/new-tool \
 ## 🤝 Contributing
 
 1. **Fork the repository**
-2. **Create a feature branch**: `git checkout -b feature/new-tool`
+2. **Create a feature branch**: `git checkout -b feature/natural-language`
 3. **Add your changes**: Follow the development guidelines above
 4. **Test thoroughly**: Run all tests and verify functionality
 5. **Submit a pull request**: Include detailed description of changes
 
 ### Development Guidelines
 
-- **Follow existing patterns** for tool development
+- **Follow existing patterns** for natural language command development
 - **Add comprehensive tests** for new features
-- **Update documentation** for new tools
+- **Update documentation** for new commands
 - **Validate inputs** using existing validation functions
-- **Include error handling** for all new tools
+- **Include error handling** for all new commands
+- **Maintain session compatibility** for multi-step workflows
 
 ---
 
@@ -524,3 +546,4 @@ MIT License - see LICENSE file for details.
 - **Documentation**: Check the README files in each directory
 - **API Docs**: Visit http://localhost:8001/docs when running
 - **Testing**: Use the provided test scripts to verify functionality
+- **Examples**: See `tests/sample_files/` for example data files
