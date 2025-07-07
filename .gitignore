@@ -199,6 +199,20 @@ cython_debug/
 
 **/*.DS_Store
 
+# Session data and user-specific files
+sessions/
+backend/sessions/
+**/sessions/
+*.session
+*.session.json
+
+# Additional user data patterns
+**/user_data/
+**/user_sessions/
+**/temp_sessions/
+*.user.json
+*.temp.json
+
 # =============================================================================
 # Node.js and Frontend
 # =============================================================================

@@ -199,6 +199,18 @@ cython_debug/
 
 **/*.DS_Store
 
+# Session data and user-specific files
+sessions/
+*.session
+*.session.json
+
+# Additional user data patterns
+**/user_data/
+**/user_sessions/
+**/temp_sessions/
+*.user.json
+*.temp.json
+
 # =============================================================================
 # Project-specific backend ignores
 # =============================================================================

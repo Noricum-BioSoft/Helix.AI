@@ -1,9 +1,9 @@
 from typing import Any, Optional
-from smolagents.tools import Tool
+# from smolagents.tools import Tool
 import duckduckgo_search
 
 
-class DuckDuckGoSearchTool(Tool):
+class DuckDuckGoSearchTool:
     name = "web_search"
     description = "Performs a duckduckgo web search based on your query (think a Google search) then returns the top search results."
     inputs = {

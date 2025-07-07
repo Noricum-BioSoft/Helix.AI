@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import asyncio
 import json
 import subprocess
@@ -12,6 +12,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent))
 
 from agent import handle_command
+from history_manager import history_manager
 
 app = FastAPI(title="DataBloom.AI Bioinformatics API", version="1.0.0")
 
@@ -25,70 +26,279 @@ app.add_middleware(
 
 class CommandRequest(BaseModel):
     command: str
+    session_id: Optional[str] = None
 
 class MCPToolRequest(BaseModel):
     tool_name: str
     arguments: Dict[str, Any]
+    session_id: Optional[str] = None
 
 class MCPResponse(BaseModel):
     success: bool
     result: Dict[str, Any]
     error: Optional[str] = None
+    session_id: Optional[str] = None
 
 class SequenceAlignmentRequest(BaseModel):
     sequences: str
     algorithm: str = "clustal"
+    session_id: Optional[str] = None
 
 class MutationRequest(BaseModel):
     sequence: str
     num_variants: int = 96
     mutation_rate: float = 0.1
+    session_id: Optional[str] = None
 
 class AnalysisRequest(BaseModel):
     data: str
     analysis_type: str = "alignment"
+    session_id: Optional[str] = None
+
+class VariantSelectionRequest(BaseModel):
+    session_id: str
+    selection_criteria: str = "diversity"
+    num_variants: int = 10
+    custom_filters: Optional[Dict[str, Any]] = None
+
+class CommandParseRequest(BaseModel):
+    command: str
+    session_id: Optional[str] = None
+
+class CommandExecuteRequest(BaseModel):
+    parsed_command: Dict[str, Any]
+
+class NaturalCommandRequest(BaseModel):
+    command: str
+    session_id: Optional[str] = None
+
+class SessionRequest(BaseModel):
+    user_id: Optional[str] = None
+
+@app.post("/session/create")
+async def create_session(req: SessionRequest):
+    """Create a new session for tracking user interactions."""
+    try:
+        session_id = history_manager.create_session(req.user_id)
+        return {
+            "success": True,
+            "session_id": session_id,
+            "message": "Session created successfully"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/session/{session_id}")
+async def get_session_info(session_id: str):
+    """Get session information and history."""
+    try:
+        session = history_manager.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        summary = history_manager.get_session_summary(session_id)
+        return {
+            "success": True,
+            "session": session,
+            "summary": summary
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/execute")
 async def execute(req: CommandRequest):
-    """Execute a general command using the existing agent."""
-    return await handle_command(req.command)
+    """Execute a general command using the existing agent with session tracking."""
+    try:
+        # Create session if not provided
+        if not req.session_id:
+            req.session_id = history_manager.create_session()
+        
+        # Execute command
+        result = await handle_command(req.command)
+        
+        # Track in history
+        history_manager.add_history_entry(
+            req.session_id,
+            req.command,
+            "general_command",
+            result
+        )
+        
+        return {
+            "success": True,
+            "result": result,
+            "session_id": req.session_id
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "session_id": req.session_id
+        }
 
 @app.post("/mcp/sequence-alignment")
 async def sequence_alignment_mcp(req: SequenceAlignmentRequest):
-    """Perform sequence alignment using MCP server."""
+    """Perform sequence alignment using MCP server with session tracking."""
     try:
+        # Create session if not provided
+        if not req.session_id:
+            req.session_id = history_manager.create_session()
+        
         result = await call_mcp_tool("sequence_alignment", {
             "sequences": req.sequences,
             "algorithm": req.algorithm
         })
-        return MCPResponse(success=True, result=result)
+        
+        # Track in history
+        history_manager.add_history_entry(
+            req.session_id,
+            f"Align sequences using {req.algorithm}",
+            "sequence_alignment",
+            result,
+            {"algorithm": req.algorithm}
+        )
+        
+        return MCPResponse(success=True, result=result, session_id=req.session_id)
     except Exception as e:
-        return MCPResponse(success=False, error=str(e))
+        return MCPResponse(success=False, result={}, error=str(e), session_id=req.session_id)
 
 @app.post("/mcp/mutate-sequence")
 async def mutate_sequence_mcp(req: MutationRequest):
-    """Generate sequence mutations using MCP server."""
+    """Generate sequence mutations using MCP server with session tracking."""
     try:
+        # Create session if not provided
+        if not req.session_id:
+            req.session_id = history_manager.create_session()
+        
         result = await call_mcp_tool("mutate_sequence", {
             "sequence": req.sequence,
             "num_variants": req.num_variants,
             "mutation_rate": req.mutation_rate
         })
-        return MCPResponse(success=True, result=result)
+        
+        # Track in history
+        history_manager.add_history_entry(
+            req.session_id,
+            f"Generate {req.num_variants} variants with mutation rate {req.mutation_rate}",
+            "mutate_sequence",
+            result,
+            {
+                "num_variants": req.num_variants,
+                "mutation_rate": req.mutation_rate
+            }
+        )
+        
+        return MCPResponse(success=True, result=result, session_id=req.session_id)
     except Exception as e:
-        return MCPResponse(success=False, error=str(e))
+        return MCPResponse(success=False, result={}, error=str(e), session_id=req.session_id)
 
 @app.post("/mcp/analyze-sequence-data")
 async def analyze_sequence_data_mcp(req: AnalysisRequest):
-    """Analyze sequence data using MCP server."""
+    """Analyze sequence data using MCP server with session tracking."""
     try:
+        # Create session if not provided
+        if not req.session_id:
+            req.session_id = history_manager.create_session()
+        
         result = await call_mcp_tool("analyze_sequence_data", {
             "data": req.data,
             "analysis_type": req.analysis_type
         })
-        return MCPResponse(success=True, result=result)
+        
+        # Track in history
+        history_manager.add_history_entry(
+            req.session_id,
+            f"Analyze sequence data with type {req.analysis_type}",
+            "analyze_sequence_data",
+            result,
+            {"analysis_type": req.analysis_type}
+        )
+        
+        return MCPResponse(success=True, result=result, session_id=req.session_id)
     except Exception as e:
-        return MCPResponse(success=False, error=str(e))
+        return MCPResponse(success=False, result={}, error=str(e), session_id=req.session_id)
+
+@app.post("/mcp/select-variants")
+async def select_variants_mcp(req: VariantSelectionRequest):
+    """Select variants from previous mutation results."""
+    try:
+        # Add tools directory to path
+        tools_path = str((Path(__file__).resolve().parent.parent / "tools").resolve())
+        sys.path.insert(0, tools_path)
+        
+        import variant_selection
+        
+        result = variant_selection.run_variant_selection_raw(
+            req.session_id,
+            req.selection_criteria,
+            req.num_variants,
+            req.custom_filters
+        )
+        
+        # Track in history
+        history_manager.add_history_entry(
+            req.session_id,
+            f"Select {req.num_variants} variants using {req.selection_criteria} criteria",
+            "select_variants",
+            result,
+            {
+                "selection_criteria": req.selection_criteria,
+                "num_variants": req.num_variants,
+                "custom_filters": req.custom_filters
+            }
+        )
+        
+        return MCPResponse(success=True, result=result, session_id=req.session_id)
+    except Exception as e:
+        return MCPResponse(success=False, result={}, error=str(e), session_id=req.session_id)
+
+@app.post("/mcp/parse-command")
+async def parse_command_mcp(req: CommandParseRequest):
+    """Parse a natural language command into structured parameters."""
+    try:
+        # Add tools directory to path
+        tools_path = str((Path(__file__).resolve().parent.parent / "tools").resolve())
+        sys.path.insert(0, tools_path)
+        
+        import command_parser
+        
+        result = command_parser.parse_command_raw(req.command, req.session_id)
+        
+        return MCPResponse(success=True, result=result, session_id=req.session_id)
+    except Exception as e:
+        return MCPResponse(success=False, result={}, error=str(e), session_id=req.session_id)
+
+@app.post("/mcp/execute-command")
+async def execute_command_mcp(req: CommandExecuteRequest):
+    """Execute a parsed command using appropriate tools."""
+    try:
+        # Add tools directory to path
+        tools_path = str((Path(__file__).resolve().parent.parent / "tools").resolve())
+        sys.path.insert(0, tools_path)
+        
+        import command_executor
+        
+        result = command_executor.execute_command_raw(req.parsed_command)
+        
+        return MCPResponse(success=True, result=result, session_id=req.parsed_command.get("session_id"))
+    except Exception as e:
+        return MCPResponse(success=False, result={}, error=str(e))
+
+@app.post("/mcp/handle-natural-command")
+async def handle_natural_command_mcp(req: NaturalCommandRequest):
+    """Handle a natural language command by parsing and executing it."""
+    try:
+        # Add tools directory to path
+        tools_path = str((Path(__file__).resolve().parent.parent / "tools").resolve())
+        sys.path.insert(0, tools_path)
+        
+        import command_handler
+        
+        result = command_handler.handle_command_raw(req.command, req.session_id)
+        
+        return MCPResponse(success=True, result=result, session_id=req.session_id)
+    except Exception as e:
+        return MCPResponse(success=False, result={}, error=str(e), session_id=req.session_id)
 
 @app.post("/mcp/visualize-alignment")
 async def visualize_alignment_mcp(alignment_file: str, output_format: str = "png"):
@@ -100,7 +310,7 @@ async def visualize_alignment_mcp(alignment_file: str, output_format: str = "png
         })
         return MCPResponse(success=True, result=result)
     except Exception as e:
-        return MCPResponse(success=False, error=str(e))
+        return MCPResponse(success=False, result={}, error=str(e))
 
 @app.get("/mcp/tools")
 async def list_mcp_tools():
@@ -134,6 +344,16 @@ async def list_mcp_tools():
                 }
             },
             {
+                "name": "select_variants",
+                "description": "Select variants from previous mutation results based on criteria",
+                "parameters": {
+                    "session_id": "string (session ID)",
+                    "selection_criteria": "string (diversity, random, length, custom)",
+                    "num_variants": "integer (default: 10)",
+                    "custom_filters": "object (optional custom filters)"
+                }
+            },
+            {
                 "name": "visualize_alignment",
                 "description": "Create visual representation of sequence alignments",
                 "parameters": {
@@ -148,22 +368,23 @@ async def list_mcp_tools():
 
 async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
     """Call an MCP tool and return the result."""
-    # For now, we'll use the existing tools directly
-    # In a full implementation, this would communicate with the MCP server
+    # Add tools directory to path
+    tools_path = str((Path(__file__).resolve().parent.parent / "tools").resolve())
+    sys.path.insert(0, tools_path)
     
     if tool_name == "sequence_alignment":
-        from tools.alignment import run_alignment
-        return run_alignment(arguments.get("sequences", ""))
+        import alignment
+        return alignment.run_alignment(arguments.get("sequences", ""))
     
     elif tool_name == "mutate_sequence":
-        from tools.mutations import mutate_sequence
-        return mutate_sequence(
+        import mutations
+        return mutations.run_mutation_raw(
             arguments.get("sequence", ""),
             arguments.get("num_variants", 96)
         )
     
     elif tool_name == "analyze_sequence_data":
-        from tools.bio import align_and_visualize_fasta
+        import bio
         import pandas as pd
         
         data = arguments.get("data", "")
@@ -175,11 +396,11 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
         else:
             df = data
         
-        return {"result": str(align_and_visualize_fasta(df))}
+        return {"result": str(bio.align_and_visualize_fasta(df))}
     
     elif tool_name == "visualize_alignment":
-        from tools.bio import align_and_visualize_fasta
-        return {"result": str(align_and_visualize_fasta(None))}
+        import bio
+        return {"result": str(bio.align_and_visualize_fasta(None))}
     
     else:
         raise ValueError(f"Unknown tool: {tool_name}")

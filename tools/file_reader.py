@@ -2,10 +2,10 @@ import PyPDF2
 
 from pathlib import Path
 from typing import Any, Optional
-from smolagents.tools import Tool
+# from smolagents.tools import Tool
 
 
-class FileReaderTool(Tool):
+class FileReaderTool:
 
     name = "file_reader"
     description = "reads and analyzes the content of a given file."

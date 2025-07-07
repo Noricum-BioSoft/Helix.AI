@@ -25,13 +25,13 @@ from mcp.types import (
     EmbeddedResource,
 )
 
-# Add the tools directory to the path
-sys.path.append(str(Path(__file__).parent / "tools"))
+tools_path = str((Path(__file__).resolve().parent.parent / "tools").resolve())
+sys.path.insert(0, tools_path)
 
 from tools.alignment import run_alignment
 from tools.bio import align_and_visualize_fasta
-from tools.mutations import mutate_sequence
-from tools.data_science import analyze_data
+from tools.mutations import run_mutation_raw
+from tools.data_science import analyze_basic_stats
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -190,7 +190,7 @@ async def handle_mutate_sequence(arguments: Dict[str, Any]) -> Dict[str, Any]:
     mutation_rate = arguments.get("mutation_rate", 0.1)
     
     # Use the existing mutation tool
-    result = mutate_sequence(sequence, num_variants)
+    result = run_mutation_raw(sequence, num_variants)
     
     return {
         "status": "success",
@@ -221,7 +221,7 @@ async def handle_analyze_sequence_data(arguments: Dict[str, Any]) -> Dict[str, A
     if analysis_type == "alignment":
         result = align_and_visualize_fasta(df)
     else:
-        result = analyze_data(df)
+        result = analyze_basic_stats(df)
     
     return {
         "status": "success",

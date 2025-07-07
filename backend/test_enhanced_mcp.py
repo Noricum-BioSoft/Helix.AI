@@ -178,13 +178,13 @@ ACTGCATCC"""
     # Test integration with mutation tool
     print("\n2. Testing mutation tool integration...")
     try:
-        from tools.mutations import run_mutation
+        from tools.mutations import run_mutation_raw
         from mcp_server_enhanced import validate_sequence
         
         test_sequence = "ACTGTTGAC"
         
         if validate_sequence(test_sequence):
-            result = run_mutation(test_sequence, 5)
+            result = run_mutation_raw(test_sequence, 5)
             print(f"   ✅ Mutation integration successful: {result['text']}")
         else:
             print("   ❌ Sequence validation failed")

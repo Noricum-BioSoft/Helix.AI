@@ -1,8 +1,8 @@
 from typing import Any, Optional
-from smolagents.tools import Tool
+# from smolagents.tools import Tool
 
 
-class FinalAnswerTool(Tool):
+class FinalAnswerTool:
     name = "final_answer"
     description = "Provides a final answer to the given problem."
     inputs = {

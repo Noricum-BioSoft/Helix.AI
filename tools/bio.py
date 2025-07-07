@@ -6,15 +6,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from backend.utils import fasta_to_csv, csv_to_fasta
 
 import pymsaviz
-from smolagents import tool
+# from smolagents import tool
 
 import subprocess
 
 
-@tool
 def align_and_visualize_fasta(data: pd.DataFrame) -> Path:
     """
     Aligns sequences from a FASTA file using Clustal Omega and visualizes the alignment.

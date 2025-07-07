@@ -1,11 +1,10 @@
 from typing import Any, Optional
-from smolagents.tools import Tool
 import requests
 import markdownify
-import smolagents
+import re
 
 
-class VisitWebpageTool(Tool):
+class VisitWebpageTool:
     name = "visit_webpage"
     description = "Visits a webpage at the given url and reads its content as a markdown string. Use this to browse webpages."
     inputs = {
@@ -21,8 +20,6 @@ class VisitWebpageTool(Tool):
             import requests
             from markdownify import markdownify
             from requests.exceptions import RequestException
-
-            from smolagents.utils import truncate_content
         except ImportError as e:
             raise ImportError(
                 "You must install packages `markdownify` and `requests` to run this tool: for instance run `pip install markdownify requests`."
@@ -38,7 +35,7 @@ class VisitWebpageTool(Tool):
             # Remove multiple line breaks
             markdown_content = re.sub(r"\n{3,}", "\n\n", markdown_content)
 
-            return truncate_content(markdown_content, 10000)
+            return markdown_content
 
         except requests.exceptions.Timeout:
             return "The request timed out. Please try again later or check the URL."
