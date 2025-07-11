@@ -53,28 +53,21 @@ class OutputFormatter(BaseModel):
 
 @tool
 def sequence_alignment(sequences: str) -> Dict:
-    """performs a sequence alignment on a given set of sequences."""
-
-    seq_align_dict = [
-        {"name": "seq1", "sequence": "ACTG--TTGAC"},
-        {"name": "seq2", "sequence": "ACTGCA-T--C"},
-        {"name": "seq3", "sequence": "ACTGCAATGAC"},
-    ]
-
-    from pymsaviz import MsaViz
-
-    with open("msa_file.fa", "w") as fp:
-        fp.write(">seq01\nACTG--TTGAC")
-        fp.write(">seq02\nACTGCA-T--C")
-        fp.write(">seq03\nACTGCAATGAC")
-
-    with open("msa_file.fa", "r") as fp:
-        msa_data = fp. readlines()
-
+    """Performs a sequence alignment on a given set of sequences."""
+    
+    # Import the alignment function
+    import sys
+    import os
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'tools'))
+    from alignment import run_alignment_tool
+    
+    result = run_alignment_tool(sequences)
+    
     return {
-        "text": "Sequences aligned successfully.",
+        "text": result.get("text", "Sequences aligned successfully."),
         "input": sequences,
-        "output": msa_data,
+        "output": result.get("alignment", []),
+        "statistics": result.get("statistics", {}),
         "plot": {
             "data": [{"x": [1, 2, 3], "y": [3, 3, 3], "type": "bar"}],
             "layout": {"title": "Alignment Visualization"},
@@ -84,30 +77,150 @@ def sequence_alignment(sequences: str) -> Dict:
 
 @tool
 def mutate_sequence(sequence: str, num_variants: int = 96) -> Dict:
-    """mutates a given sequence and returns 96 variants per default."""
-
-    seq_mut_dict = [
-        {"name": "seq01", "sequence": "ACTG"},
-        {"name": "seq02", "sequence": "ACGA"},
-        {"name": "seq03", "sequence": "ACGT"},
-        {"name": "seq04", "sequence": "ACGC"},
-        {"name": "seq05", "sequence": "ACTG"},
-        {"name": "seq06", "sequence": "TCGA"},
-        {"name": "seq07", "sequence": "CCGT"},
-        {"name": "seq08", "sequence": "GCGC"},
-    ]
-
+    """Mutates a given sequence and returns the specified number of variants. Use this when you need to CREATE new sequence variants from an input sequence."""
+    
+    # Import the mutation function
+    import sys
+    import os
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'tools'))
+    from mutations import run_mutation_raw
+    
+    result = run_mutation_raw(sequence, num_variants)
+    
     return {
-        "text": "Sequence mutated successfully.",
+        "text": result.get("text", "Sequence mutated successfully."),
         "input": {
             "sequence": sequence,
             "variants": num_variants,
         },
-        "output": seq_mut_dict,
-        "plot": {
+        "output": result.get("statistics", {}),
+        "plot": result.get("plot", {
             "data": [{"x": [1, 2, 3], "y": [1, 1, 1], "type": "bar"}],
             "layout": {"title": "Mutation Visualization"},
+        }),
+    }
+
+
+@tool
+def dna_vendor_research(command: str, sequence_length: int = None, quantity: str = "standard") -> Dict:
+    """Research DNA synthesis vendors and testing options for experimental validation. Use this when the user wants to ORDER sequences, find VENDORS, or research TESTING options. Keywords: order, vendor, synthesis, test, assay, expression, function, binding."""
+    
+    # Import the research function
+    import sys
+    import os
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'tools'))
+    from dna_vendor_research import run_dna_vendor_research_raw
+    
+    result = run_dna_vendor_research_raw(command, sequence_length, quantity)
+    
+    return {
+        "text": f"DNA vendor research completed: {result.get('message', 'Research done')}",
+        "input": {
+            "command": command,
+            "sequence_length": sequence_length,
+            "quantity": quantity
         },
+        "output": result,
+        "plot": {
+            "data": [{"x": ["Vendors", "Testing Options"], "y": [result.get('total_vendors', 0), result.get('total_testing_options', 0)], "type": "bar"}],
+            "layout": {"title": "DNA Vendor Research Results"},
+        },
+    }
+
+
+@tool
+def phylogenetic_tree(aligned_sequences: str) -> Dict:
+    """Create phylogenetic tree visualization from aligned sequences."""
+    
+    # Import the phylogenetic tree function
+    import sys
+    import os
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'tools'))
+    from phylogenetic_tree import run_phylogenetic_tree
+    
+    result = run_phylogenetic_tree(aligned_sequences)
+    
+    return {
+        "text": result.get("text", "Phylogenetic tree created successfully."),
+        "input": aligned_sequences,
+        "output": result.get("statistics", {}),
+        "plot": result.get("plot", {
+            "data": [{"x": [1, 2, 3], "y": [1, 1, 1], "type": "bar"}],
+            "layout": {"title": "Phylogenetic Tree"},
+        }),
+    }
+
+
+@tool
+def sequence_selection(aligned_sequences: str, selection_type: str = "random", num_sequences: int = 1) -> Dict:
+    """Select sequences from aligned sequences based on various criteria (random, best_conservation, lowest_gaps, highest_gc, longest, shortest)."""
+    
+    # Import the sequence selection function
+    import sys
+    import os
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'tools'))
+    from sequence_selection import run_sequence_selection_raw
+    
+    result = run_sequence_selection_raw(aligned_sequences, selection_type, num_sequences)
+    
+    return {
+        "text": result.get("text", "Sequence selection completed successfully."),
+        "input": {
+            "aligned_sequences": aligned_sequences,
+            "selection_type": selection_type,
+            "num_sequences": num_sequences
+        },
+        "output": result.get("selected_sequences", []),
+        "selection_criteria": result.get("selection_criteria", {}),
+    }
+
+
+@tool
+def synthesis_submission(sequences: str, vendor_preference: str = None, quantity: str = "standard", delivery_time: str = "standard") -> Dict:
+    """Submit sequences for DNA synthesis and get pricing quote. Quantity options: standard, large, custom. Delivery options: rush, standard, economy."""
+    
+    # Import the synthesis submission function
+    import sys
+    import os
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'tools'))
+    from synthesis_submission import run_synthesis_submission_raw
+    
+    result = run_synthesis_submission_raw(sequences, vendor_preference, quantity, delivery_time)
+    
+    return {
+        "text": result.get("text", "Synthesis submission completed successfully."),
+        "input": {
+            "sequences": sequences,
+            "vendor_preference": vendor_preference,
+            "quantity": quantity,
+            "delivery_time": delivery_time
+        },
+        "output": result.get("quote", {}),
+        "validation_results": result.get("validation_results", {}),
+    }
+
+
+@tool
+def plasmid_visualization(vector_name: str, cloning_sites: str, insert_sequence: str) -> Dict:
+    """Generate plasmid visualization data from vector name, cloning sites, and insert sequence."""
+    
+    # Import the plasmid visualization function
+    import sys
+    import os
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'tools'))
+    from plasmid_visualizer import run_plasmid_visualization_raw
+    
+    result = run_plasmid_visualization_raw(vector_name, cloning_sites, insert_sequence)
+    
+    return {
+        "text": result.get("text", "Plasmid visualization created successfully."),
+        "input": {
+            "vector_name": vector_name,
+            "cloning_sites": cloning_sites,
+            "insert_sequence": insert_sequence
+        },
+        "output": result.get("plasmid_data", {}),
+        "visualization_type": result.get("visualization_type", "circular_plasmid"),
     }
 
 
@@ -126,23 +239,77 @@ llm = ChatDeepSeek(
 memory = MemorySaver()
 model = init_chat_model("openai:gpt-4o")
 config = {"configurable": {"thread_id": "abc123"}}
+
+# Create a custom prompt that helps the agent choose the right tool
+CUSTOM_PROMPT = """You are a bioinformatics assistant with access to the following tools:
+
+1. sequence_alignment - Use for aligning DNA/RNA sequences
+2. mutate_sequence - Use for CREATING new sequence variants from an input sequence
+3. dna_vendor_research - Use for ORDERING sequences, finding VENDORS, or researching TESTING options
+4. phylogenetic_tree - Use for creating phylogenetic trees from aligned sequences
+5. sequence_selection - Use for selecting sequences from alignments based on criteria
+6. synthesis_submission - Use for submitting sequences for DNA synthesis
+
+IMPORTANT: 
+- When the user mentions "order", "vendor", "synthesis", "test", "assay", "expression", "function", "binding" - use the dna_vendor_research tool.
+- When the user wants to CREATE new variants from a sequence, use mutate_sequence.
+- When the user wants to COMPARE existing sequences, use sequence_alignment.
+- When the user wants to create a phylogenetic tree from aligned sequences, use phylogenetic_tree.
+- When the user wants to select sequences from an alignment, use sequence_selection.
+- When the user wants to submit sequences for synthesis, use synthesis_submission.
+
+The user's request: {input}
+
+Think step by step about what tool to use, then respond accordingly."""
+
 agent = create_react_agent(
     model=model,
-    tools=[sequence_alignment, mutate_sequence],
+    tools=[sequence_alignment, mutate_sequence, dna_vendor_research, phylogenetic_tree, sequence_selection, synthesis_submission, plasmid_visualization],
     checkpointer=memory,
-    # prompt=PromptTemplate.from_template(PROMPT_TEMPLATE),
 )
 
 
-async def handle_command(command: str):
+async def handle_command(command: str, session_id: str = "default"):
     print(f"[handle_command] command: {command}")
+    print(f"[handle_command] session_id: {session_id}")
 
+    # Check if this is a vendor research command
+    vendor_keywords = ['order', 'vendor', 'synthesis', 'test', 'assay', 'expression', 'function', 'binding']
+    if any(keyword in command.lower() for keyword in vendor_keywords):
+        print("[handle_command] Detected vendor research command, using dna_vendor_research tool")
+        
+        # Extract sequence length from command if mentioned
+        sequence_length = None
+        if '96' in command or 'variants' in command:
+            sequence_length = 1000  # Default length for variants
+        
+        # Use the vendor research tool directly
+        import sys
+        import os
+        sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'tools'))
+        from dna_vendor_research import run_dna_vendor_research_raw
+        
+        result = run_dna_vendor_research_raw(command, sequence_length, 'large')
+        
+        return {
+            "text": f"DNA vendor research completed: {result.get('message', 'Research done')}",
+            "input": command,
+            "output": result,
+            "plot": {
+                "data": [{"x": ["Vendors", "Testing Options"], "y": [result.get('total_vendors', 0), result.get('total_testing_options', 0)], "type": "bar"}],
+                "layout": {"title": "DNA Vendor Research Results"},
+            },
+        }
+
+    # For other commands, use the agent with session-specific config
     input_message = {
         "role": "user",
         "content": command,
     }
 
-    result = agent.invoke({"messages": [input_message]}, config)
+    # Use session-specific config
+    session_config = {"configurable": {"thread_id": session_id}}
+    result = agent.invoke({"messages": [input_message]}, session_config)
     print(f"[handle_command] result: {result}")
 
     return result

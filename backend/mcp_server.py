@@ -32,6 +32,7 @@ from tools.alignment import run_alignment
 from tools.bio import align_and_visualize_fasta
 from tools.mutations import run_mutation_raw
 from tools.data_science import analyze_basic_stats
+from tools.dna_vendor_research import run_dna_vendor_research_raw
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -128,6 +129,30 @@ async def handle_list_tools() -> ListToolsResult:
                     },
                     "required": ["alignment_file"]
                 }
+            ),
+            Tool(
+                name="dna_vendor_research",
+                description="Research DNA synthesis vendors and testing options for experimental validation",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "Research command (e.g., 'order sequences', 'find testing options')"
+                        },
+                        "sequence_length": {
+                            "type": "integer",
+                            "description": "Length of sequences to synthesize (optional)"
+                        },
+                        "quantity": {
+                            "type": "string",
+                            "enum": ["standard", "large", "custom"],
+                            "default": "standard",
+                            "description": "Quantity needed for synthesis"
+                        }
+                    },
+                    "required": ["command"]
+                }
             )
         ]
     )
@@ -145,6 +170,8 @@ async def handle_call_tool(name: str, arguments: Dict[str, Any]) -> CallToolResu
             result = await handle_analyze_sequence_data(arguments)
         elif name == "visualize_alignment":
             result = await handle_visualize_alignment(arguments)
+        elif name == "dna_vendor_research":
+            result = await handle_dna_vendor_research(arguments)
         else:
             raise ValueError(f"Unknown tool: {name}")
         
@@ -243,6 +270,24 @@ async def handle_visualize_alignment(arguments: Dict[str, Any]) -> Dict[str, Any
         "tool": "visualize_alignment",
         "output_format": output_format,
         "result": str(result)
+    }
+
+async def handle_dna_vendor_research(arguments: Dict[str, Any]) -> Dict[str, Any]:
+    """Handle DNA vendor research requests."""
+    command = arguments.get("command", "")
+    sequence_length = arguments.get("sequence_length", None)
+    quantity = arguments.get("quantity", "standard")
+    
+    # Use the DNA vendor research tool
+    result = run_dna_vendor_research_raw(command, sequence_length, quantity)
+    
+    return {
+        "status": "success",
+        "tool": "dna_vendor_research",
+        "command": command,
+        "sequence_length": sequence_length,
+        "quantity": quantity,
+        "result": result
     }
 
 def parse_fasta_to_dataframe(fasta_content: str) -> pd.DataFrame:

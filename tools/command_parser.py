@@ -20,23 +20,17 @@ class CommandParser:
     def __init__(self):
         self.action_patterns = {
             'select_variants': [
-                r'pick\s+(\d+)\s+sequences?\s+randomly',
-                r'select\s+(\d+)\s+sequences?\s+randomly',
-                r'choose\s+(\d+)\s+sequences?\s+randomly',
-                r'from\s+.*variants?.*pick\s+(\d+)\s+sequences?\s+randomly',
-                r'from\s+.*variants?.*select\s+(\d+)\s+sequences?\s+randomly',
-                r'randomly\s+pick\s+(\d+)\s+sequences?',
-                r'randomly\s+select\s+(\d+)\s+sequences?',
+                r'select\s+(\d+)\s+variants?',
+                r'pick\s+(\d+)\s+variants?',
+                r'choose\s+(\d+)\s+variants?',
+                r'from\s+.*variants?.*pick\s+(\d+)',
             ],
             'select_variants_diverse': [
-                r'pick\s+(\d+)\s+diverse\s+sequences?',
-                r'select\s+(\d+)\s+diverse\s+sequences?',
-                r'choose\s+(\d+)\s+diverse\s+sequences?',
-                r'from\s+.*variants?.*pick\s+(\d+)\s+diverse\s+sequences?',
-                r'from\s+.*variants?.*select\s+(\d+)\s+diverse\s+sequences?',
+                r'select\s+(\d+)\s+diverse\s+variants?',
+                r'pick\s+(\d+)\s+diverse\s+variants?',
+                r'choose\s+(\d+)\s+diverse\s+variants?',
             ],
             'select_variants_length': [
-                r'pick\s+(\d+)\s+sequences?\s+by\s+length',
                 r'select\s+(\d+)\s+sequences?\s+by\s+length',
                 r'choose\s+(\d+)\s+sequences?\s+by\s+length',
                 r'from\s+.*variants?.*pick\s+(\d+)\s+sequences?\s+by\s+length',
@@ -47,8 +41,20 @@ class CommandParser:
                 r'mutate\s+.*to\s+generate\s+(\d+)\s+variants?',
                 r'generate\s+(\d+)\s+mutations?',
             ],
+            'dna_vendor_research': [
+                r'order\s+.*variants?.*from\s+.*vendor',
+                r'find\s+.*synthesis\s+vendor',
+                r'research\s+.*vendor',
+                r'what\s+.*testing\s+options',
+                r'find\s+.*testing\s+options',
+                r'order\s+.*sequences?.*from\s+.*vendor',
+                r'find\s+.*dna\s+synthesis',
+                r'research\s+.*synthesis',
+                r'what\s+.*vendors?.*can\s+.*synthesize',
+                r'find\s+.*companies?.*can\s+.*make',
+            ],
             'align_sequences': [
-                r'align\s+sequences?',
+                r'align.*sequences?',
                 r'perform\s+alignment',
                 r'sequence\s+alignment',
             ],
@@ -56,6 +62,37 @@ class CommandParser:
                 r'analyze\s+data',
                 r'perform\s+analysis',
                 r'data\s+analysis',
+            ],
+            'plasmid_visualization': [
+                r'visualize\s+plasmid',
+                r'show\s+plasmid',
+                r'create\s+plasmid\s+visualization',
+                r'plasmid\s+viewer',
+                r'circular\s+plasmid',
+            ],
+            'phylogenetic_tree': [
+                r'create\s+phylogenetic\s+tree',
+                r'build\s+phylogenetic\s+tree',
+                r'phylogenetic\s+tree',
+                r'evolutionary\s+tree',
+                r'tree\s+from\s+alignment',
+            ],
+            'sequence_selection': [
+                r'pick\s+(\d+)\s+sequence',
+                r'select\s+(\d+)\s+sequence',
+                r'choose\s+(\d+)\s+sequence',
+                r'pick\s+(\d+)\s+from\s+alignment',
+                r'select\s+(\d+)\s+from\s+alignment',
+                r'randomly\s+pick\s+(\d+)',
+                r'randomly\s+select\s+(\d+)',
+            ],
+            'synthesis_submission': [
+                r'submit\s+.*synthesis',
+                r'order\s+.*synthesis',
+                r'get\s+quote\s+for\s+synthesis',
+                r'synthesis\s+quote',
+                r'order\s+sequences',
+                r'submit\s+sequences',
             ]
         }
         
@@ -157,6 +194,24 @@ class CommandParser:
                 confidence=0.8
             )
         
+        elif action == 'dna_vendor_research':
+            # Extract sequence length if mentioned
+            sequence_length = None
+            if '96' in original_command or 'variants' in original_command:
+                sequence_length = 1000  # Default for variants
+            
+            return ParsedCommand(
+                action="dna_vendor_research",
+                tool="dna_vendor_research",
+                parameters={
+                    "command": original_command,
+                    "sequence_length": sequence_length,
+                    "quantity": "large"  # Default for vendor research
+                },
+                session_id=session_id,
+                confidence=0.9
+            )
+        
         elif action == 'align_sequences':
             sequences = self._extract_sequences(original_command)
             
@@ -166,6 +221,65 @@ class CommandParser:
                 parameters={
                     "sequences": sequences,
                     "algorithm": "clustal"  # default
+                },
+                session_id=session_id,
+                confidence=0.8
+            )
+        
+        elif action == 'phylogenetic_tree':
+            return ParsedCommand(
+                action="phylogenetic_tree",
+                tool="phylogenetic_tree",
+                parameters={
+                    "aligned_sequences": original_command,
+                },
+                session_id=session_id,
+                confidence=0.8
+            )
+        
+        elif action == 'sequence_selection':
+            count = self._extract_count(original_command)
+            selection_type = "random"  # default to random selection
+            
+            return ParsedCommand(
+                action="sequence_selection",
+                tool="sequence_selection",
+                parameters={
+                    "aligned_sequences": original_command,
+                    "selection_type": selection_type,
+                    "num_sequences": count,
+                },
+                session_id=session_id,
+                confidence=0.8
+            )
+        
+        elif action == 'synthesis_submission':
+            return ParsedCommand(
+                action="synthesis_submission",
+                tool="synthesis_submission",
+                parameters={
+                    "sequences": original_command,
+                    "vendor_preference": None,
+                    "quantity": "standard",
+                    "delivery_time": "standard",
+                },
+                session_id=session_id,
+                confidence=0.8
+            )
+        
+        elif action == 'plasmid_visualization':
+            # Extract plasmid parameters from command
+            vector_name = self._extract_vector_name(original_command)
+            cloning_sites = self._extract_cloning_sites(original_command)
+            insert_sequence = self._extract_sequence(original_command)
+            
+            return ParsedCommand(
+                action="plasmid_visualization",
+                tool="plasmid_visualization",
+                parameters={
+                    "vector_name": vector_name,
+                    "cloning_sites": cloning_sites,
+                    "insert_sequence": insert_sequence
                 },
                 session_id=session_id,
                 confidence=0.8
@@ -185,8 +299,26 @@ class CommandParser:
         """Infer command type from context when no specific pattern matches."""
         command_lower = command.lower()
         
+        # Check for vendor research keywords
+        if any(word in command_lower for word in ['order', 'vendor', 'synthesis', 'test', 'assay', 'expression', 'function', 'binding']):
+            sequence_length = None
+            if '96' in command or 'variants' in command:
+                sequence_length = 1000
+            
+            return ParsedCommand(
+                action="dna_vendor_research",
+                tool="dna_vendor_research",
+                parameters={
+                    "command": command,
+                    "sequence_length": sequence_length,
+                    "quantity": "large"
+                },
+                session_id=session_id,
+                confidence=0.8
+            )
+        
         # Check for selection-related keywords
-        if any(word in command_lower for word in ['pick', 'select', 'choose']):
+        elif any(word in command_lower for word in ['pick', 'select', 'choose']):
             count = self._extract_count(command)
             criteria = self._extract_selection_criteria(command_lower)
             
@@ -276,16 +408,70 @@ class CommandParser:
     
     def _extract_sequences(self, command: str) -> str:
         """Extract multiple sequences from command."""
-        # Look for multiple DNA/RNA sequences
-        sequences = re.findall(r'[ATCGU]{4,}', command.upper())
+        # Try to extract sequences after a colon, separated by 'and', ',' or whitespace
+        import re
+        command_upper = command.upper()
+        if ':' in command_upper:
+            after_colon = command_upper.split(':', 1)[1]
+            # Split on 'and', ',' or whitespace
+            seqs = re.split(r'\s+AND\s+|,|\s{2,}', after_colon)
+            seqs = [s.strip() for s in seqs if re.search(r'[ATCGU]{4,}', s)]
+            if len(seqs) >= 2:
+                # Convert to FASTA
+                fasta = ''
+                for i, seq in enumerate(seqs, 1):
+                    # Extract only the sequence part
+                    match = re.search(r'([ATCGU]{4,})', seq)
+                    if match:
+                        fasta += f">sequence_{i}\n{match.group(1)}\n"
+                return fasta
+        # Fallback: find all long DNA/RNA substrings
+        sequences = re.findall(r'[ATCGU]{4,}', command_upper)
         if sequences:
-            # Convert to FASTA format
-            fasta = ""
+            fasta = ''
             for i, seq in enumerate(sequences, 1):
                 fasta += f">sequence_{i}\n{seq}\n"
             return fasta
-        
         return ""
+    
+    def _extract_vector_name(self, command: str) -> str:
+        """Extract vector name from command."""
+        # Look for common vector patterns like pTet, pUC, etc.
+        vector_patterns = [
+            r'p[A-Z][a-zA-Z0-9]*',  # pTet, pUC, etc.
+            r'vector\s+([a-zA-Z0-9]+)',
+            r'plasmid\s+([a-zA-Z0-9]+)'
+        ]
+        
+        for pattern in vector_patterns:
+            match = re.search(pattern, command, re.IGNORECASE)
+            if match:
+                return match.group(0) if 'vector' not in pattern and 'plasmid' not in pattern else match.group(1)
+        
+        return "pTet"  # Default vector name
+    
+    def _extract_cloning_sites(self, command: str) -> str:
+        """Extract cloning sites from command."""
+        # Look for restriction enzyme patterns
+        enzyme_patterns = [
+            r'([A-Za-z]+I):(\d+)-(\d+)',  # BsaI:123-456
+            r'([A-Za-z]+I)\s+(\d+)-(\d+)',  # BsaI 123-456
+            r'([A-Za-z]+I)',  # Just enzyme name
+        ]
+        
+        sites = []
+        for pattern in enzyme_patterns:
+            matches = re.findall(pattern, command)
+            for match in matches:
+                if len(match) == 3:  # Has positions
+                    sites.append(f"{match[0]}:{match[1]}-{match[2]}")
+                elif len(match) == 1:  # Just enzyme name
+                    sites.append(f"{match[0]}:1-100")  # Default positions
+        
+        if sites:
+            return ", ".join(sites)
+        
+        return "BsaI:1-100"  # Default cloning site
 
 def parse_command_raw(command: str, session_id: Optional[str] = None) -> Dict[str, Any]:
     """Raw function for command parsing (for direct calls)."""

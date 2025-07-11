@@ -3,16 +3,26 @@ import { MSAView } from 'react-msaview';
 import Plot from 'react-plotly.js';
 import { mcpApi } from './services/mcpApi';
 import { CommandParser, ParsedCommand } from './utils/commandParser';
+import { PlasmidVisualizer } from './components/PlasmidVisualizer';
 
 import 'bootstrap/dist/css/bootstrap.min.css';
 import Modal from 'react-bootstrap/Modal';
 import Button from 'react-bootstrap/Button';
+import Nav from 'react-bootstrap/Nav';
+import Tab from 'react-bootstrap/Tab';
 
 interface HistoryItem {
   input: string;
   output: any;
   type: string;
   timestamp: Date;
+}
+
+interface WorkflowContext {
+  alignedSequences?: string;
+  selectedSequences?: string[];
+  mutatedSequences?: string[];
+  plasmidData?: any;
 }
 
 function App() {
@@ -22,28 +32,36 @@ function App() {
   const [availableTools, setAvailableTools] = useState<any[]>([]);
   const [serverStatus, setServerStatus] = useState<string>('unknown');
   const [dragActive, setDragActive] = useState(false);
-  const [droppedFile, setDroppedFile] = useState<File | null>(null);
-  const [fileContent, setFileContent] = useState<string>('');
-  const [showFileModal, setShowFileModal] = useState(false);
-  const [fileAction, setFileAction] = useState<string>('');
-  const [sessionId, setSessionId] = useState<string>('');
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const [commandMode, setCommandMode] = useState<'structured' | 'natural'>('natural');
+  const [activeTab, setActiveTab] = useState<string>('command');
+  const [uploadedFile, setUploadedFile] = useState<{ name: string; content: string } | null>(null);
+  const [workflowContext, setWorkflowContext] = useState<WorkflowContext>({});
 
-  useEffect(() => {
-    // Check server health and load available tools on component mount
-    checkServerHealth();
-    loadAvailableTools();
-    createSession();
-  }, []);
-
-  const createSession = async () => {
-    try {
-      const session = await mcpApi.createSession();
-      setSessionId((session as any).session_id);
-    } catch (error) {
-      console.error('Failed to create session:', error);
-    }
+  const handleExampleClick = (exampleCommand: string) => {
+    setCommand(exampleCommand);
   };
+
+  // Create a session on mount and check server health
+  useEffect(() => {
+    const initializeApp = async () => {
+      try {
+        // Check server health first
+        await checkServerHealth();
+        
+        // Load available tools
+        await loadAvailableTools();
+        
+        // Create session
+        const res = await mcpApi.createSession() as { session_id: string };
+        setSessionId(res.session_id);
+        console.log('Session created:', res.session_id);
+      } catch (err) {
+        console.error('Failed to initialize app:', err);
+      }
+    };
+    initializeApp();
+  }, []);
 
   const checkServerHealth = async () => {
     try {
@@ -64,8 +82,58 @@ function App() {
     }
   };
 
+  const updateWorkflowContext = (stepType: string, data: any) => {
+    setWorkflowContext(prev => {
+      switch (stepType) {
+        case 'sequence_alignment':
+          return { ...prev, alignedSequences: data };
+        case 'sequence_selection':
+          return { ...prev, selectedSequences: data };
+        case 'mutate_sequence':
+          return { ...prev, mutatedSequences: data };
+        case 'plasmid_visualization':
+          return { ...prev, plasmidData: data };
+        default:
+          return prev;
+      }
+    });
+  };
+
+  const enhanceCommandWithContext = (command: string): string => {
+    const lowerCommand = command.toLowerCase();
+    
+    console.log('Enhancing command:', command);
+    console.log('Current workflow context:', workflowContext);
+    
+    // If command mentions "aligned sequences" and we have them in context
+    if ((lowerCommand.includes('aligned sequences') || lowerCommand.includes('select sequence')) && workflowContext.alignedSequences) {
+      const enhancedCommand = `${command}\n\nAligned sequences from previous step:\n${workflowContext.alignedSequences}`;
+      console.log('Enhanced command with aligned sequences:', enhancedCommand);
+      return enhancedCommand;
+    }
+    
+    // If command mentions "selected sequences" and we have them in context
+    if (lowerCommand.includes('selected sequences') && workflowContext.selectedSequences) {
+      const sequencesText = workflowContext.selectedSequences.map((seq, i) => `>selected_sequence_${i+1}\n${seq}`).join('\n');
+      const enhancedCommand = `${command}\n\nSelected sequences from previous step:\n${sequencesText}`;
+      console.log('Enhanced command with selected sequences:', enhancedCommand);
+      return enhancedCommand;
+    }
+    
+    // If command mentions "mutated sequences" and we have them in context
+    if (lowerCommand.includes('mutated sequences') && workflowContext.mutatedSequences) {
+      const sequencesText = workflowContext.mutatedSequences.map((seq, i) => `>mutant_${i+1}\n${seq}`).join('\n');
+      const enhancedCommand = `${command}\n\nMutated sequences from previous step:\n${sequencesText}`;
+      console.log('Enhanced command with mutated sequences:', enhancedCommand);
+      return enhancedCommand;
+    }
+    
+    console.log('No context enhancement applied');
+    return command;
+  };
+
   const handleSubmit = async () => {
-    if (!command.trim()) return;
+    if (!command.trim() || !sessionId) return;
     
     setLoading(true);
     
@@ -76,11 +144,24 @@ function App() {
       console.log('Command mode:', commandMode);
       console.log('Session ID:', sessionId);
       console.log('Command:', command);
+      console.log('Workflow context:', workflowContext);
+      
+      // Enhance command with workflow context
+      let finalCommand = enhanceCommandWithContext(command);
+      
+      console.log('Original command:', command);
+      console.log('Enhanced command:', finalCommand);
+      console.log('Workflow context before sending:', workflowContext);
+      
+      // If there's an uploaded file, append its content to the command
+      if (uploadedFile) {
+        finalCommand = `${finalCommand}\n\nFile content:\n${uploadedFile.content}`;
+      }
       
       if (commandMode === 'natural') {
         // Use natural language command handling
         console.log('Calling handleNaturalCommand...');
-        response = await mcpApi.handleNaturalCommand(command, sessionId);
+        response = await mcpApi.executeCommand(finalCommand, sessionId);
         console.log('Natural command response:', response);
       } else {
         // Use structured command parsing
@@ -88,25 +169,102 @@ function App() {
         
         switch (parsedCommand.type) {
           case 'sequence_alignment':
-            response = await mcpApi.sequenceAlignment(parsedCommand.parameters as any);
+            response = await mcpApi.sequenceAlignment(parsedCommand.parameters as any, sessionId);
             break;
             
           case 'mutate_sequence':
-            response = await mcpApi.mutateSequence(parsedCommand.parameters as any);
+            response = await mcpApi.mutateSequence(parsedCommand.parameters as any, sessionId);
             break;
             
           case 'analyze_sequence_data':
-            response = await mcpApi.analyzeSequenceData(parsedCommand.parameters as any);
+            response = await mcpApi.analyzeSequenceData(parsedCommand.parameters as any, sessionId);
             break;
             
           case 'visualize_alignment':
-            response = await mcpApi.visualizeAlignment(parsedCommand.parameters as any);
+            response = await mcpApi.visualizeAlignment(parsedCommand.parameters as any, sessionId);
+            break;
+            
+          case 'dna_vendor_research':
+            response = await mcpApi.executeCommand(command, sessionId);
             break;
             
           default:
             // Fallback to general command execution
-            response = await mcpApi.executeCommand(command);
+            response = await mcpApi.executeCommand(command, sessionId);
             break;
+        }
+      }
+      
+      // Update workflow context based on the response
+      if ((response as any).success && (response as any).result) {
+        const result = (response as any).result.result || (response as any).result;
+        
+        console.log('Processing response result:', result);
+        
+        // Extract aligned sequences from alignment response
+        // Check for the tool response structure
+        if (result.messages && Array.isArray(result.messages)) {
+          // Look for tool messages with sequence alignment output
+          for (const message of result.messages) {
+            if (message.type === 'tool' && message.name === 'sequence_alignment') {
+              try {
+                const toolResult = JSON.parse(message.content);
+                if (toolResult.output && Array.isArray(toolResult.output)) {
+                  const alignedSequences = toolResult.output.map((seq: any) => 
+                    `>${seq.name}\n${seq.sequence}`
+                  ).join('\n');
+                  console.log('Updating workflow context with aligned sequences:', alignedSequences);
+                  updateWorkflowContext('sequence_alignment', alignedSequences);
+                  break;
+                }
+              } catch (e) {
+                console.log('Could not parse tool result:', e);
+              }
+            }
+            
+            // Look for tool messages with sequence selection output
+            if (message.type === 'tool' && message.name === 'sequence_selection') {
+              try {
+                const toolResult = JSON.parse(message.content);
+                if (toolResult.output && Array.isArray(toolResult.output)) {
+                  const selectedSequences = toolResult.output.map((seq: any) => seq.sequence);
+                  console.log('Updating workflow context with selected sequences:', selectedSequences);
+                  updateWorkflowContext('sequence_selection', selectedSequences);
+                  break;
+                }
+              } catch (e) {
+                console.log('Could not parse tool result:', e);
+              }
+            }
+          }
+        }
+        
+        // Fallback: try direct result.output structure
+        if (result.output && Array.isArray(result.output) && result.output.length > 0 && result.output[0].name && result.output[0].sequence) {
+          const alignedSequences = result.output.map((seq: any) => 
+            `>${seq.name}\n${seq.sequence}`
+          ).join('\n');
+          console.log('Updating workflow context with aligned sequences (fallback):', alignedSequences);
+          updateWorkflowContext('sequence_alignment', alignedSequences);
+        }
+        
+        // Extract selected sequences from selection response (fallback)
+        if (result.output && Array.isArray(result.output) && result.output.length > 0 && result.output[0].sequence) {
+          const selectedSequences = result.output.map((seq: any) => seq.sequence);
+          console.log('Updating workflow context with selected sequences (fallback):', selectedSequences);
+          updateWorkflowContext('sequence_selection', selectedSequences);
+        }
+        
+        // Extract mutated sequences from mutation response
+        if (result.output && result.output.variants && Array.isArray(result.output.variants)) {
+          console.log('Updating workflow context with mutated sequences:', result.output.variants);
+          updateWorkflowContext('mutate_sequence', result.output.variants);
+        }
+        
+        // Extract plasmid data from plasmid visualization response
+        if (result.output && result.output.features) {
+          console.log('Updating workflow context with plasmid data:', result.output);
+          updateWorkflowContext('plasmid_visualization', result.output);
         }
       }
       
@@ -134,6 +292,7 @@ function App() {
       setHistory(prev => [historyItem, ...prev]);
     } finally {
       setCommand('');
+      setUploadedFile(null); // Clear uploaded file after processing
       setLoading(false);
     }
   };
@@ -155,65 +314,18 @@ function App() {
     setDragActive(false);
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       const file = e.dataTransfer.files[0];
-      setDroppedFile(file);
       const reader = new FileReader();
       reader.onload = (event) => {
-        setFileContent(event.target?.result as string);
-        setShowFileModal(true);
+        const content = event.target?.result as string;
+        setUploadedFile({ name: file.name, content });
+        // Update command placeholder to suggest what to do with the file
+        setCommand(`analyze the uploaded file ${file.name}`);
       };
       reader.readAsText(file);
     }
   };
 
-  // Handle file action selection
-  const handleFileAction = async (action: string) => {
-    setFileAction(action);
-    setShowFileModal(false);
-    if (!fileContent) return;
-    setLoading(true);
-    let response;
-    let inputText = '';
-    try {
-      if (action === 'align') {
-        inputText = `align sequences ${fileContent.trim()}`;
-        response = await mcpApi.sequenceAlignment({ sequences: fileContent });
-      } else if (action === 'mutate') {
-        inputText = `mutate sequence ${fileContent.trim()}`;
-        response = await mcpApi.mutateSequence({ sequence: fileContent });
-      } else if (action === 'analyze') {
-        inputText = `analyze sequence data`;
-        response = await mcpApi.analyzeSequenceData({ data: fileContent });
-      } else {
-        // Cancel
-        setDroppedFile(null);
-        setFileContent('');
-        setFileAction('');
-        setLoading(false);
-        return;
-      }
-      // Add to history
-      const historyItem: HistoryItem = {
-        input: inputText,
-        output: response,
-        type: action,
-        timestamp: new Date()
-      };
-      setHistory(prev => [historyItem, ...prev]);
-    } catch (error) {
-      const historyItem: HistoryItem = {
-        input: inputText,
-        output: { error: error instanceof Error ? error.message : 'Unknown error' },
-        type: 'error',
-        timestamp: new Date()
-      };
-      setHistory(prev => [historyItem, ...prev]);
-    } finally {
-      setDroppedFile(null);
-      setFileContent('');
-      setFileAction('');
-      setLoading(false);
-    }
-  };
+
 
   const renderOutput = (item: HistoryItem) => {
     const { output, type } = item;
@@ -336,6 +448,90 @@ function App() {
               layout={actualResult.plot.layout}
             />
           )}
+          
+          {/* DNA Vendor Research Results */}
+          {actualResult.result && actualResult.result.vendors && (
+            <div className="bg-light p-3 border rounded mb-3">
+              <h5>DNA Synthesis Vendors</h5>
+              <div className="row">
+                {Object.entries(actualResult.result.vendors).map(([vendorId, vendor]: [string, any]) => (
+                  <div key={vendorId} className="col-md-6 mb-3">
+                    <div className="card h-100">
+                      <div className="card-body">
+                        <h6 className="card-title">{vendor.name}</h6>
+                        <p className="card-text">
+                          <strong>Services:</strong> {vendor.services.join(', ')}
+                        </p>
+                        <p className="card-text">
+                          <strong>Pricing:</strong> {vendor.pricing_range}
+                        </p>
+                        <p className="card-text">
+                          <strong>Turnaround:</strong> {vendor.turnaround_time}
+                        </p>
+                        <p className="card-text">
+                          <strong>Max Length:</strong> {vendor.max_length}
+                        </p>
+                        <p className="card-text">
+                          <strong>Specialties:</strong> {vendor.specialties.join(', ')}
+                        </p>
+                        <a href={vendor.website} target="_blank" rel="noopener noreferrer" className="btn btn-sm btn-outline-primary">
+                          Visit Website
+                        </a>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          
+          {/* Testing Options Results */}
+          {actualResult.result && actualResult.result.testing_options && (
+            <div className="bg-light p-3 border rounded mb-3">
+              <h5>Testing Options</h5>
+              <div className="row">
+                {Object.entries(actualResult.result.testing_options).map(([testId, test]: [string, any]) => (
+                  <div key={testId} className="col-md-6 mb-3">
+                    <div className="card h-100">
+                      <div className="card-body">
+                        <h6 className="card-title">{test.name}</h6>
+                        <p className="card-text">
+                          <strong>Services:</strong> {test.services.join(', ')}
+                        </p>
+                        <p className="card-text">
+                          <strong>Vendors:</strong> {test.vendors.join(', ')}
+                        </p>
+                        <p className="card-text">
+                          <strong>Pricing:</strong> {test.pricing_range}
+                        </p>
+                        <p className="card-text">
+                          <strong>Turnaround:</strong> {test.turnaround_time}
+                        </p>
+                        <p className="card-text">
+                          <strong>Description:</strong> {test.description}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          
+          {/* Recommendations */}
+          {actualResult.result && actualResult.result.recommendations && (
+            <div className="bg-light p-3 border rounded mb-3">
+              <h5>Recommendations</h5>
+              <ul className="list-unstyled">
+                {actualResult.result.recommendations.map((rec: string, index: number) => (
+                  <li key={index} className="mb-2">
+                    <i className="bi bi-lightbulb text-warning me-2"></i>
+                    {rec}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       );
     }
@@ -370,6 +566,20 @@ function App() {
       <div className="row">
         <div className="col-md-8">
           <h1 className="mb-4">DataBloom.AI Bioinformatics Interface</h1>
+          
+          {/* Navigation Tabs */}
+          <Nav variant="tabs" activeKey={activeTab} onSelect={(k) => setActiveTab(k || 'command')} className="mb-4">
+            <Nav.Item>
+              <Nav.Link eventKey="command">Command Interface</Nav.Link>
+            </Nav.Item>
+            <Nav.Item>
+              <Nav.Link eventKey="plasmid">Plasmid Visualizer</Nav.Link>
+            </Nav.Item>
+          </Nav>
+          
+          {/* Tab Content */}
+          <Tab.Content>
+            <Tab.Pane eventKey="command" active={activeTab === 'command'}>
           
           {/* Server Status */}
           <div className="mb-3">
@@ -411,6 +621,88 @@ function App() {
               </label>
             </div>
           </div>
+          
+          {/* Workflow Context Display */}
+          {(workflowContext.alignedSequences || workflowContext.selectedSequences || workflowContext.mutatedSequences || workflowContext.plasmidData) && (
+            <div className="alert alert-success mb-3">
+              <h6 className="mb-2">🔄 Workflow Context Available:</h6>
+              <div className="row">
+                {workflowContext.alignedSequences && (
+                  <div className="col-md-6 mb-2">
+                    <strong>📊 Aligned Sequences:</strong>
+                    <br />
+                    <small className="text-muted">
+                      {workflowContext.alignedSequences.split('\n').length} lines available
+                    </small>
+                  </div>
+                )}
+                {workflowContext.selectedSequences && (
+                  <div className="col-md-6 mb-2">
+                    <strong>🎯 Selected Sequences:</strong>
+                    <br />
+                    <small className="text-muted">
+                      {workflowContext.selectedSequences.length} sequences available
+                    </small>
+                  </div>
+                )}
+                {workflowContext.mutatedSequences && (
+                  <div className="col-md-6 mb-2">
+                    <strong>🧬 Mutated Sequences:</strong>
+                    <br />
+                    <small className="text-muted">
+                      {workflowContext.mutatedSequences.length} variants available
+                    </small>
+                  </div>
+                )}
+                {workflowContext.plasmidData && (
+                  <div className="col-md-6 mb-2">
+                    <strong>🧪 Plasmid Data:</strong>
+                    <br />
+                    <small className="text-muted">
+                      Vector visualization available
+                    </small>
+                  </div>
+                )}
+              </div>
+              <button 
+                className="btn btn-sm btn-outline-secondary mt-2"
+                onClick={() => setWorkflowContext({})}
+              >
+                🗑️ Clear Context
+              </button>
+              <button 
+                className="btn btn-sm btn-outline-primary mt-2 ms-2"
+                onClick={() => {
+                  const testSequences = ">sequence1\nATGCGATCGATGCGATCG\n>sequence2\nATGCGATCGATGCGATC-\n>sequence3\nATGCGATCGATGCGATC-";
+                  setWorkflowContext(prev => ({ ...prev, alignedSequences: testSequences }));
+                  console.log('Test: Set aligned sequences in workflow context');
+                }}
+              >
+                🧪 Test Context
+              </button>
+            </div>
+          )}
+
+          {/* Uploaded File Display */}
+          {uploadedFile && (
+            <div className="alert alert-info mb-3">
+              <div className="d-flex justify-content-between align-items-center">
+                <div>
+                  <strong>📁 File uploaded:</strong> {uploadedFile.name}
+                  <br />
+                  <small className="text-muted">
+                    Content length: {uploadedFile.content.length} characters
+                  </small>
+                </div>
+                <button 
+                  className="btn btn-sm btn-outline-secondary"
+                  onClick={() => setUploadedFile(null)}
+                >
+                  ✕ Remove
+                </button>
+              </div>
+            </div>
+          )}
           
           {/* Command Input with Drag-and-Drop */}
       <div
@@ -474,29 +766,7 @@ function App() {
         )}
       </div>
 
-      {/* File Action Modal */}
-      <Modal show={showFileModal} onHide={() => setShowFileModal(false)}>
-        <Modal.Header closeButton>
-          <Modal.Title>File Uploaded</Modal.Title>
-        </Modal.Header>
-        <Modal.Body>
-          <p>What would you like to do with the file <strong>{droppedFile?.name}</strong>?</p>
-          <div className="d-grid gap-2">
-            <Button variant="primary" onClick={() => handleFileAction('align')}>
-              Align Sequences
-            </Button>
-            <Button variant="secondary" onClick={() => handleFileAction('mutate')}>
-              Mutate Sequence
-            </Button>
-            <Button variant="success" onClick={() => handleFileAction('analyze')}>
-              Analyze Data
-            </Button>
-            <Button variant="outline-secondary" onClick={() => handleFileAction('cancel')}>
-              Cancel
-            </Button>
-          </div>
-        </Modal.Body>
-      </Modal>
+
 
           {/* History */}
           {history.map((item, index) => (
@@ -510,6 +780,12 @@ function App() {
               {renderOutput(item)}
             </div>
           ))}
+            </Tab.Pane>
+            
+            <Tab.Pane eventKey="plasmid" active={activeTab === 'plasmid'}>
+              <PlasmidVisualizer sessionId={sessionId || undefined} />
+            </Tab.Pane>
+          </Tab.Content>
           </div>
 
         {/* Sidebar with Available Tools */}
@@ -528,7 +804,7 @@ function App() {
                       <strong>Parameters:</strong>
                       <ul className="list-unstyled mt-1">
                         {Object.entries(tool.parameters).map(([key, value]) => (
-                          <li key={key}><code>{key}</code>: {value}</li>
+                          <li key={key}><code>{key}</code>: {String(value)}</li>
                         ))}
                       </ul>
                     </div>
@@ -546,43 +822,166 @@ function App() {
             <div className="card-body">
               {commandMode === 'natural' ? (
                 <>
-                  <div className="mb-2">
-                    <strong>Natural Language:</strong>
-                    <div className="small text-muted">"from the sequence variants, pick 10 sequences randomly and output them"</div>
+                  <div className="mb-3">
+                    <strong>🧬 Sequence Analysis:</strong>
+                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("align these sequences: >seq1 ATGCGATCG >seq2 ATGCGATC")} style={{cursor: 'pointer'}}>
+                      "align these sequences: {'>'}seq1 ATGCGATCG {'>'}seq2 ATGCGATC"
+                    </div>
+                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("perform multiple sequence alignment on the uploaded sequences")} style={{cursor: 'pointer'}}>
+                      "perform multiple sequence alignment on the uploaded sequences"
+                    </div>
+                    <div className="small text-muted cursor-pointer" onClick={() => handleExampleClick("show me the alignment of these DNA sequences")} style={{cursor: 'pointer'}}>
+                      "show me the alignment of these DNA sequences"
+                    </div>
                   </div>
-                  <div className="mb-2">
-                    <strong>Variant Selection:</strong>
-                    <div className="small text-muted">"select 5 sequences with the highest mutation rate"</div>
+                  
+                  <div className="mb-3">
+                    <strong>🎯 Sequence Selection:</strong>
+                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("from the sequence variants, pick 10 sequences randomly")} style={{cursor: 'pointer'}}>
+                      "from the sequence variants, pick 10 sequences randomly"
+                    </div>
+                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("select 5 sequences with the highest mutation rate")} style={{cursor: 'pointer'}}>
+                      "select 5 sequences with the highest mutation rate"
+                    </div>
+                    <div className="small text-muted cursor-pointer" onClick={() => handleExampleClick("choose the most diverse sequences from the alignment")} style={{cursor: 'pointer'}}>
+                      "choose the most diverse sequences from the alignment"
+                    </div>
                   </div>
-                  <div className="mb-2">
-                    <strong>Analysis:</strong>
-                    <div className="small text-muted">"analyze the alignment and show me the most conserved regions"</div>
+                  
+                  <div className="mb-3">
+                    <strong>🧪 Mutation Generation:</strong>
+                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("mutate the sequence ATGCGATCG to create 96 variants")} style={{cursor: 'pointer'}}>
+                      "mutate the sequence ATGCGATCG to create 96 variants"
+                    </div>
+                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("generate variants of this DNA sequence")} style={{cursor: 'pointer'}}>
+                      "generate variants of this DNA sequence"
+                    </div>
+                    <div className="small text-muted cursor-pointer" onClick={() => handleExampleClick("create mutations with 0.2 mutation rate")} style={{cursor: 'pointer'}}>
+                      "create mutations with 0.2 mutation rate"
+                    </div>
                   </div>
-                  <div className="mb-2">
-                    <strong>Multi-step:</strong>
-                    <div className="small text-muted">"mutate this sequence, then align the variants and pick the best ones"</div>
+                  
+                  <div className="mb-3">
+                    <strong>🔬 Data Analysis:</strong>
+                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("analyze the alignment and show me the most conserved regions")} style={{cursor: 'pointer'}}>
+                      "analyze the alignment and show me the most conserved regions"
+                    </div>
+                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("create visualizations of the sequence data")} style={{cursor: 'pointer'}}>
+                      "create visualizations of the sequence data"
+                    </div>
+                    <div className="small text-muted cursor-pointer" onClick={() => handleExampleClick("show me statistics for these sequences")} style={{cursor: 'pointer'}}>
+                      "show me statistics for these sequences"
+                    </div>
+                  </div>
+                  
+                  <div className="mb-3">
+                    <strong>🧬 DNA Synthesis & Testing:</strong>
+                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("I want to order these sequences from a DNA synthesis vendor")} style={{cursor: 'pointer'}}>
+                      "I want to order these sequences from a DNA synthesis vendor"
+                    </div>
+                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("find DNA synthesis companies for my sequences")} style={{cursor: 'pointer'}}>
+                      "find DNA synthesis companies for my sequences"
+                    </div>
+                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("what testing options are available for my sequences?")} style={{cursor: 'pointer'}}>
+                      "what testing options are available for my sequences?"
+                    </div>
+                    <div className="small text-muted cursor-pointer" onClick={() => handleExampleClick("research vendors for gene synthesis and validation")} style={{cursor: 'pointer'}}>
+                      "research vendors for gene synthesis and validation"
+                    </div>
+                  </div>
+                  
+                  <div className="mb-3">
+                    <strong>🔄 Multi-step Workflows:</strong>
+                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("mutate this sequence, then align the variants and pick the best ones")} style={{cursor: 'pointer'}}>
+                      "mutate this sequence, then align the variants and pick the best ones"
+                    </div>
+                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("analyze these sequences and then find vendors to synthesize them")} style={{cursor: 'pointer'}}>
+                      "analyze these sequences and then find vendors to synthesize them"
+                    </div>
+                    <div className="small text-muted cursor-pointer" onClick={() => handleExampleClick("align sequences and find synthesis vendors with testing options")} style={{cursor: 'pointer'}}>
+                      "align sequences and find synthesis vendors with testing options"
+                    </div>
                   </div>
                 </>
               ) : (
                 <>
-                  <div className="mb-2">
-                    <strong>Sequence Alignment:</strong>
-                    <div className="small text-muted">"align sequences ACTGTTGAC ACTGCATCC"</div>
+                  <div className="mb-3">
+                    <strong>🧬 Sequence Alignment:</strong>
+                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("align sequences ACTGTTGAC ACTGCATCC")} style={{cursor: 'pointer'}}>
+                      "align sequences ACTGTTGAC ACTGCATCC"
+                    </div>
+                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("align with clustal algorithm")} style={{cursor: 'pointer'}}>
+                      "align with clustal algorithm"
+                    </div>
+                    <div className="small text-muted cursor-pointer" onClick={() => handleExampleClick("multiple sequence alignment")} style={{cursor: 'pointer'}}>
+                      "multiple sequence alignment"
+                    </div>
                   </div>
-                  <div className="mb-2">
-                    <strong>Mutation:</strong>
-                    <div className="small text-muted">"mutate sequence ACTGTTGAC with 10 variants"</div>
+                  
+                  <div className="mb-3">
+                    <strong>🧪 Mutation Analysis:</strong>
+                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("mutate sequence ACTGTTGAC with 96 variants")} style={{cursor: 'pointer'}}>
+                      "mutate sequence ACTGTTGAC with 96 variants"
+                    </div>
+                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("generate 10 variants of ACTGTTGAC")} style={{cursor: 'pointer'}}>
+                      "generate 10 variants of ACTGTTGAC"
+                    </div>
+                    <div className="small text-muted cursor-pointer" onClick={() => handleExampleClick("create mutations with 0.1 mutation rate")} style={{cursor: 'pointer'}}>
+                      "create mutations with 0.1 mutation rate"
+                    </div>
                   </div>
-                  <div className="mb-2">
-                    <strong>Analysis:</strong>
-                    <div className="small text-muted">"analyze sequence data for phylogeny"</div>
+                  
+                  <div className="mb-3">
+                    <strong>📊 Data Analysis:</strong>
+                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("analyze sequence data for phylogeny")} style={{cursor: 'pointer'}}>
+                      "analyze sequence data for phylogeny"
+                    </div>
+                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("sequence composition analysis")} style={{cursor: 'pointer'}}>
+                      "sequence composition analysis"
+                    </div>
+                    <div className="small text-muted cursor-pointer" onClick={() => handleExampleClick("statistical analysis of alignment")} style={{cursor: 'pointer'}}>
+                      "statistical analysis of alignment"
+                    </div>
                   </div>
-                  <div className="mb-2">
-                    <strong>Visualization:</strong>
-                    <div className="small text-muted">"visualize alignment in PNG format"</div>
+                  
+                  <div className="mb-3">
+                    <strong>📈 Visualization:</strong>
+                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("visualize alignment in PNG format")} style={{cursor: 'pointer'}}>
+                      "visualize alignment in PNG format"
+                    </div>
+                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("create phylogenetic tree plot")} style={{cursor: 'pointer'}}>
+                      "create phylogenetic tree plot"
+                    </div>
+                    <div className="small text-muted cursor-pointer" onClick={() => handleExampleClick("generate sequence composition chart")} style={{cursor: 'pointer'}}>
+                      "generate sequence composition chart"
+                    </div>
+                  </div>
+                  
+                  <div className="mb-3">
+                    <strong>🔬 Plasmid Visualization:</strong>
+                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("express ATGCGATCG in pTet vector")} style={{cursor: 'pointer'}}>
+                      "express ATGCGATCG in pTet vector"
+                    </div>
+                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("create plasmid visualization for the variants")} style={{cursor: 'pointer'}}>
+                      "create plasmid visualization for the variants"
+                    </div>
+                    <div className="small text-muted cursor-pointer" onClick={() => handleExampleClick("show cloning sites in pUC19 vector")} style={{cursor: 'pointer'}}>
+                      "show cloning sites in pUC19 vector"
+                    </div>
                   </div>
                 </>
               )}
+              
+              <hr className="my-3" />
+              <div className="small text-muted">
+                <strong>💡 Tips:</strong>
+                <ul className="mb-0 mt-1">
+                  <li>Upload FASTA files by dragging and dropping</li>
+                  <li>Use natural language for complex workflows</li>
+                  <li>Combine multiple steps in one command</li>
+                  <li>Ask for vendor research and testing options</li>
+                </ul>
+              </div>
             </div>
           </div>
         </div>

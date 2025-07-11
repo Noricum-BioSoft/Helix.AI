@@ -1,8 +1,12 @@
 # 🧬 DataBloom.AI - Bioinformatics AI Platform
 
-An AI-powered web application for managing biotechnology workflows via natural language commands, featuring a Model Context Protocol (MCP) server for standardized bioinformatics operations with session management and history tracking.
+[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Node.js](https://img.shields.io/badge/Node.js-16+-green.svg)](https://nodejs.org/)
+[![React](https://img.shields.io/badge/React-18+-blue.svg)](https://reactjs.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)](https://fastapi.tiangolo.com/)
+[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
----
+An AI-powered web application for managing biotechnology workflows via natural language commands, featuring a Model Context Protocol (MCP) server for standardized bioinformatics operations with session management and history tracking.
 
 ## 🚀 Features
 
@@ -21,6 +25,8 @@ An AI-powered web application for managing biotechnology workflows via natural l
 - **Mutation Analysis**: Generate and analyze sequence variants
 - **Data Science Tools**: Statistical analysis and feature engineering
 - **Variant Selection**: Smart selection based on diversity, length, or custom criteria
+- **DNA Synthesis Research**: Vendor research and testing options
+- **Plasmid Visualization**: Interactive plasmid and vector visualization
 
 ### 🔄 **Session Management**
 - **Persistent Sessions**: Track your workflow across multiple commands
@@ -33,14 +39,13 @@ An AI-powered web application for managing biotechnology workflows via natural l
 - **Real-time Feedback**: Immediate response and progress indicators
 - **Responsive Design**: Works on desktop and mobile devices
 
----
-
 ## 🗂 Project Structure
 
 ```
 DataBloom.AI/
 ├── frontend/                 # React frontend with natural language support
 │   ├── src/
+│   │   ├── components/      # React components including PlasmidVisualizer
 │   │   ├── services/        # MCP API service with session management
 │   │   ├── utils/           # Command parser and utilities
 │   │   └── App.tsx         # Main application with drag-and-drop
@@ -57,13 +62,18 @@ DataBloom.AI/
 │   ├── variant_selection.py # Smart variant selection algorithms
 │   ├── command_parser.py    # Natural language command parsing
 │   ├── command_executor.py  # Command execution engine
-│   └── command_handler.py   # Combined parser and executor
+│   ├── command_handler.py   # Combined parser and executor
+│   ├── plasmid_visualizer.py # Plasmid and vector visualization
+│   └── dna_vendor_research.py # DNA synthesis vendor research
 ├── tests/                    # Test files and sample data
 │   └── sample_files/        # Example FASTA and CSV files
+├── docs/                     # Documentation
+│   ├── MCP_SERVER_README.md
+│   ├── ENHANCED_MCP_README.md
+│   ├── HISTORY_TRACKING.md
+│   └── NATURAL_LANGUAGE_GUIDE.md
 └── start-app.sh             # Complete startup script
 ```
-
----
 
 ## 📦 Installation & Setup
 
@@ -78,7 +88,7 @@ DataBloom.AI/
 
 ```bash
 # Clone the repository
-git clone <repository-url>
+git clone https://github.com/yourusername/DataBloom.AI.git
 cd DataBloom.AI
 
 # Make startup script executable
@@ -117,9 +127,6 @@ cd frontend
 
 # Install Node.js dependencies
 npm install
-
-# Install additional dependencies for natural language support
-npm install axios @types/axios
 ```
 
 ### 4. Environment Configuration
@@ -149,8 +156,6 @@ MAX_SESSION_SIZE=1000
 # Database (if using)
 DATABASE_URL=sqlite:///./data.db
 ```
-
----
 
 ## 🚀 Running the Application
 
@@ -195,28 +200,6 @@ cd frontend
 npm run dev
 ```
 
-### Option 3: Individual Component Testing
-
-#### Test Natural Language Commands
-
-```bash
-cd backend
-conda activate databloom
-
-# Test command parsing
-python -c "
-import sys; sys.path.append('../tools')
-from command_parser import parse_command_raw
-result = parse_command_raw('from the sequence variants, pick 10 sequences randomly')
-print(result)
-"
-
-# Test complete workflow
-python test_command_handling.py
-```
-
----
-
 ## 🌐 Accessing the Application
 
 Once running, access the application at:
@@ -225,8 +208,6 @@ Once running, access the application at:
 - **Backend API**: http://localhost:8001
 - **API Documentation**: http://localhost:8001/docs
 - **Health Check**: http://localhost:8001/health
-
----
 
 ## 🧪 Testing the Natural Language Commands
 
@@ -276,8 +257,6 @@ analyze the selected variants and show me the most diverse ones
 mutate this sequence, then align the variants and pick the best ones
 ```
 
----
-
 ## 🧠 Example Commands
 
 ### Natural Language Commands
@@ -288,6 +267,8 @@ mutate this sequence, then align the variants and pick the best ones
 | `"select 5 sequences with the highest mutation rate"` | Smart Selection | Uses custom criteria for variant selection |
 | `"analyze the alignment and show me the most conserved regions"` | Analysis | Performs statistical analysis on alignment data |
 | `"mutate this sequence, then align the variants and pick the best ones"` | Multi-step Workflow | Chains multiple operations together |
+| `"I want to order these sequences from a DNA synthesis vendor"` | Vendor Research | Research DNA synthesis vendors and pricing |
+| `"what testing options are available for my sequences?"` | Testing Research | Find validation and testing options |
 
 ### Structured Commands
 
@@ -297,6 +278,7 @@ mutate this sequence, then align the variants and pick the best ones
 | `"mutate sequence ACTGTTGAC with 10 variants"` | Generate mutations | `mutate_sequence` |
 | `"analyze sequence data for phylogeny"` | Sequence analysis | `analyze_sequence_data` |
 | `"visualize alignment in PNG format"` | Create visualization | `visualize_alignment` |
+| `"express ATGCGATCG in pTet vector"` | Plasmid visualization | `plasmid_visualization` |
 
 ### File Upload Examples
 
@@ -309,8 +291,6 @@ mutate this sequence, then align the variants and pick the best ones
    - Statistical analysis
    - Feature engineering
    - Visualization
-
----
 
 ## 🔧 API Endpoints
 
@@ -337,6 +317,7 @@ POST /mcp/mutate-sequence
 POST /mcp/analyze-sequence-data
 POST /mcp/visualize-alignment
 POST /mcp/select-variants
+POST /mcp/plasmid-visualization
 GET /mcp/tools
 ```
 
@@ -346,8 +327,6 @@ GET /mcp/tools
 GET /health
 GET /execute
 ```
-
----
 
 ## 🛠️ Development
 
@@ -410,8 +389,6 @@ curl -X POST http://localhost:8001/mcp/handle-natural-command \
   -H "Content-Type: application/json" \
   -d '{"command": "your new command", "session_id": "test"}'
 ```
-
----
 
 ## 🐛 Troubleshooting
 
@@ -504,16 +481,14 @@ curl -X POST http://localhost:8001/mcp/handle-natural-command \
      -d '{"command": "test command"}'
    ```
 
----
-
 ## 📚 Documentation
 
 - **Backend MCP**: `backend/MCP_SERVER_README.md`
 - **Enhanced MCP**: `backend/ENHANCED_MCP_README.md`
 - **History Tracking**: `backend/HISTORY_TRACKING.md`
+- **Natural Language Guide**: `NATURAL_LANGUAGE_GUIDE.md`
+- **Complete Workflow Example**: `COMPLETE_WORKFLOW_EXAMPLE.md`
 - **API Documentation**: http://localhost:8001/docs
-
----
 
 ## 🤝 Contributing
 
@@ -532,13 +507,9 @@ curl -X POST http://localhost:8001/mcp/handle-natural-command \
 - **Include error handling** for all new commands
 - **Maintain session compatibility** for multi-step workflows
 
----
-
 ## 📄 License
 
-MIT License - see LICENSE file for details.
-
----
+MIT License - see [LICENSE](LICENSE) file for details.
 
 ## 🆘 Support
 
@@ -547,3 +518,11 @@ MIT License - see LICENSE file for details.
 - **API Docs**: Visit http://localhost:8001/docs when running
 - **Testing**: Use the provided test scripts to verify functionality
 - **Examples**: See `tests/sample_files/` for example data files
+
+## 🙏 Acknowledgments
+
+- **BioPython** for bioinformatics tools
+- **Plotly** for interactive visualizations
+- **FastAPI** for the backend framework
+- **React** for the frontend framework
+- **MCP** for the Model Context Protocol implementation

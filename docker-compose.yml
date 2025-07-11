@@ -1,0 +1,177 @@
+version: '3.8'
+
+services:
+  # Infrastructure Services
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: databloom
+      POSTGRES_USER: databloom
+      POSTGRES_PASSWORD: databloom123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+
+  minio:
+    image: minio/minio:latest
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+
+  # API Gateway
+  api-gateway:
+    build: ./api-gateway
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - POSTGRES_URL=postgresql://databloom:databloom123@postgres:5432/databloom
+    depends_on:
+      - redis
+      - postgres
+    volumes:
+      - ./api-gateway:/app
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Workflow Engine
+  workflow-engine:
+    build: ./workflow-engine
+    ports:
+      - "8001:8001"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - POSTGRES_URL=postgresql://databloom:databloom123@postgres:5432/databloom
+    depends_on:
+      - redis
+      - postgres
+    volumes:
+      - ./workflow-engine:/app
+    command: uvicorn main:app --host 0.0.0.0 --port 8001 --reload
+
+  # Bioinformatics Services
+  alignment-service:
+    build: ./bioinformatics-services/alignment-service
+    ports:
+      - "8002:8002"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - MINIO_URL=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin123
+    depends_on:
+      - redis
+      - minio
+    volumes:
+      - ./bioinformatics-services/alignment-service:/app
+    command: uvicorn main:app --host 0.0.0.0 --port 8002 --reload
+
+  mutation-service:
+    build: ./bioinformatics-services/mutation-service
+    ports:
+      - "8003:8003"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - MINIO_URL=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin123
+    depends_on:
+      - redis
+      - minio
+    volumes:
+      - ./bioinformatics-services/mutation-service:/app
+    command: uvicorn main:app --host 0.0.0.0 --port 8003 --reload
+
+  selection-service:
+    build: ./bioinformatics-services/selection-service
+    ports:
+      - "8004:8004"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - MINIO_URL=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin123
+    depends_on:
+      - redis
+      - minio
+    volumes:
+      - ./bioinformatics-services/selection-service:/app
+    command: uvicorn main:app --host 0.0.0.0 --port 8004 --reload
+
+  plasmid-service:
+    build: ./bioinformatics-services/plasmid-service
+    ports:
+      - "8005:8005"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - MINIO_URL=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin123
+    depends_on:
+      - redis
+      - minio
+    volumes:
+      - ./bioinformatics-services/plasmid-service:/app
+    command: uvicorn main:app --host 0.0.0.0 --port 8005 --reload
+
+  synthesis-service:
+    build: ./bioinformatics-services/synthesis-service
+    ports:
+      - "8006:8006"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - MINIO_URL=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin123
+    depends_on:
+      - redis
+      - minio
+    volumes:
+      - ./bioinformatics-services/synthesis-service:/app
+    command: uvicorn main:app --host 0.0.0.0 --port 8006 --reload
+
+  # NLP Service
+  nlp-service:
+    build: ./nlp-service
+    ports:
+      - "8007:8007"
+    environment:
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - redis
+    volumes:
+      - ./nlp-service:/app
+    command: uvicorn main:app --host 0.0.0.0 --port 8007 --reload
+
+  # Notification Service
+  notification-service:
+    build: ./notification-service
+    ports:
+      - "8008:8008"
+    environment:
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - redis
+    volumes:
+      - ./notification-service:/app
+    command: uvicorn main:app --host 0.0.0.0 --port 8008 --reload
+
+volumes:
+  redis_data:
+  postgres_data:
+  minio_data: 

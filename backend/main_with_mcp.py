@@ -72,6 +72,12 @@ class NaturalCommandRequest(BaseModel):
     command: str
     session_id: Optional[str] = None
 
+class PlasmidVisualizationRequest(BaseModel):
+    vector_name: str
+    cloning_sites: str
+    insert_sequence: str
+    session_id: Optional[str] = None
+
 class SessionRequest(BaseModel):
     user_id: Optional[str] = None
 
@@ -312,6 +318,43 @@ async def visualize_alignment_mcp(alignment_file: str, output_format: str = "png
     except Exception as e:
         return MCPResponse(success=False, result={}, error=str(e))
 
+@app.post("/mcp/plasmid-visualization")
+async def plasmid_visualization_mcp(req: PlasmidVisualizationRequest):
+    """Generate plasmid visualization data from vector, cloning sites, and insert sequence."""
+    try:
+        # Create session if not provided
+        if not req.session_id:
+            req.session_id = history_manager.create_session()
+        
+        # Add tools directory to path
+        tools_path = str((Path(__file__).resolve().parent.parent / "tools").resolve())
+        sys.path.insert(0, tools_path)
+        
+        import plasmid_visualizer
+        
+        result = plasmid_visualizer.run_plasmid_visualization_raw(
+            req.vector_name,
+            req.cloning_sites,
+            req.insert_sequence
+        )
+        
+        # Track in history
+        history_manager.add_history_entry(
+            req.session_id,
+            f"Visualize plasmid {req.vector_name} with {req.cloning_sites} and insert {req.insert_sequence}",
+            "plasmid_visualization",
+            result,
+            {
+                "vector_name": req.vector_name,
+                "cloning_sites": req.cloning_sites,
+                "insert_sequence": req.insert_sequence
+            }
+        )
+        
+        return MCPResponse(success=True, result=result, session_id=req.session_id)
+    except Exception as e:
+        return MCPResponse(success=False, result={}, error=str(e), session_id=req.session_id)
+
 @app.get("/mcp/tools")
 async def list_mcp_tools():
     """List available MCP tools."""
@@ -360,6 +403,15 @@ async def list_mcp_tools():
                     "alignment_file": "string (path to FASTA file)",
                     "output_format": "string (png, svg, pdf)"
                 }
+            },
+            {
+                "name": "plasmid_visualization",
+                "description": "Generate plasmid visualization data from vector, cloning sites, and insert sequence",
+                "parameters": {
+                    "vector_name": "string (e.g., pTet)",
+                    "cloning_sites": "string (e.g., BsaI:123-456, EcoRI:789-1012)",
+                    "insert_sequence": "string (DNA sequence to insert)"
+                }
             }
         ]
         return {"tools": tools}
@@ -401,6 +453,14 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
     elif tool_name == "visualize_alignment":
         import bio
         return {"result": str(bio.align_and_visualize_fasta(None))}
+    
+    elif tool_name == "plasmid_visualization":
+        import plasmid_visualizer
+        return plasmid_visualizer.run_plasmid_visualization_raw(
+            arguments.get("vector_name", ""),
+            arguments.get("cloning_sites", ""),
+            arguments.get("insert_sequence", "")
+        )
     
     else:
         raise ValueError(f"Unknown tool: {tool_name}")

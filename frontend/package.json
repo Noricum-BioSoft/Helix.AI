@@ -16,7 +16,8 @@
     "react-bootstrap": "^2.10.10",
     "react-dom": "^18.2.0",
     "react-msaview": "^4.4.3",
-    "react-plotly.js": "^2.5.1"
+    "react-plotly.js": "^2.5.1",
+    "seqviz": "^3.10.9"
   },
   "devDependencies": {
     "@types/react-bootstrap": "^1.0.1",

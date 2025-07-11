@@ -45,6 +45,8 @@ class CommandExecutor:
                 result = await self._execute_sequence_alignment(parameters, session_id)
             elif tool == "analyze_sequence_data":
                 result = await self._execute_analyze_data(parameters, session_id)
+            elif tool == "dna_vendor_research":
+                result = await self._execute_dna_vendor_research(parameters, session_id)
             else:
                 result = {
                     "status": "error",
@@ -190,6 +192,39 @@ class CommandExecutor:
             return {
                 "status": "error",
                 "message": f"Error analyzing data: {str(e)}"
+            }
+
+    async def _execute_dna_vendor_research(self, parameters: Dict[str, Any], session_id: Optional[str]) -> Dict[str, Any]:
+        """Execute DNA vendor research command."""
+        try:
+            import dna_vendor_research
+            
+            command = parameters.get("command", "")
+            sequence_length = parameters.get("sequence_length")
+            quantity = parameters.get("quantity", "standard")
+            
+            if not command:
+                return {
+                    "status": "error",
+                    "message": "Command required for DNA vendor research"
+                }
+            
+            # Convert sequence_length to int if it's not None
+            if sequence_length is not None:
+                try:
+                    sequence_length = int(sequence_length)
+                except (ValueError, TypeError):
+                    sequence_length = None
+            
+            result = dna_vendor_research.run_dna_vendor_research_raw(command, sequence_length, quantity)
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error in DNA vendor research: {e}")
+            return {
+                "status": "error",
+                "message": f"Error researching DNA vendors: {str(e)}"
             }
 
 def execute_command_raw(parsed_command: Dict[str, Any]) -> Dict[str, Any]:

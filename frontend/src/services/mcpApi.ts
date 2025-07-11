@@ -16,8 +16,11 @@ export const mcpApi = {
   },
 
   // General command execution
-  executeCommand: async (command: string) => {
-    const response = await axios.post(`${API_BASE_URL}/execute`, { command });
+  executeCommand: async (command: string, sessionId?: string) => {
+    const response = await axios.post(`${API_BASE_URL}/execute`, { 
+      command,
+      session_id: sessionId 
+    });
     return response.data;
   },
 
@@ -48,10 +51,8 @@ export const mcpApi = {
   },
 
   // Session management
-  createSession: async (userId?: string) => {
-    const response = await axios.post(`${API_BASE_URL}/session/create`, {
-      user_id: userId
-    });
+  createSession: async () => {
+    const response = await axios.post(`${API_BASE_URL}/create_session`);
     return response.data;
   },
 
@@ -61,20 +62,20 @@ export const mcpApi = {
   },
 
   // Sequence alignment
-  sequenceAlignment: async (params: { sequences: string; algorithm?: string }) => {
-    const response = await axios.post(`${API_BASE_URL}/mcp/sequence-alignment`, params);
+  sequenceAlignment: async (params: { sequences: string; algorithm?: string }, sessionId?: string) => {
+    const response = await axios.post(`${API_BASE_URL}/mcp/sequence-alignment`, { ...params, session_id: sessionId });
     return response.data;
   },
 
   // Mutate sequence
-  mutateSequence: async (params: { sequence: string; num_variants?: number; mutation_rate?: number }) => {
-    const response = await axios.post(`${API_BASE_URL}/mcp/mutate-sequence`, params);
+  mutateSequence: async (params: { sequence: string; num_variants?: number; mutation_rate?: number }, sessionId?: string) => {
+    const response = await axios.post(`${API_BASE_URL}/mcp/mutate-sequence`, { ...params, session_id: sessionId });
     return response.data;
   },
 
   // Analyze sequence data
-  analyzeSequenceData: async (params: { data: string; analysis_type?: string }) => {
-    const response = await axios.post(`${API_BASE_URL}/mcp/analyze-sequence-data`, params);
+  analyzeSequenceData: async (params: { data: string; analysis_type?: string }, sessionId?: string) => {
+    const response = await axios.post(`${API_BASE_URL}/mcp/analyze-sequence-data`, { ...params, session_id: sessionId });
     return response.data;
   },
 
@@ -90,8 +91,48 @@ export const mcpApi = {
   },
 
   // Visualize alignment
-  visualizeAlignment: async (params: { alignment_file: string; output_format?: string }) => {
-    const response = await axios.post(`${API_BASE_URL}/mcp/visualize-alignment`, params);
+  visualizeAlignment: async (params: { alignment_file: string; output_format?: string }, sessionId?: string) => {
+    const response = await axios.post(`${API_BASE_URL}/mcp/visualize-alignment`, { ...params, session_id: sessionId });
+    return response.data;
+  },
+
+  // Plasmid visualization
+  plasmidVisualization: async (params: { 
+    vector_name: string; 
+    cloning_sites: string; 
+    insert_sequence: string 
+  }, sessionId?: string) => {
+    const response = await axios.post(`${API_BASE_URL}/mcp/plasmid-visualization`, {
+      ...params,
+      session_id: sessionId
+    });
+    return response.data;
+  },
+
+  // Phylogenetic tree
+  phylogeneticTree: async (params: { aligned_sequences: string }) => {
+    const response = await axios.post(`${API_BASE_URL}/mcp/phylogenetic-tree`, params);
+    return response.data;
+  },
+
+  // Sequence selection
+  sequenceSelection: async (params: { 
+    aligned_sequences: string; 
+    selection_type?: string; 
+    num_sequences?: number 
+  }) => {
+    const response = await axios.post(`${API_BASE_URL}/mcp/sequence-selection`, params);
+    return response.data;
+  },
+
+  // Synthesis submission
+  synthesisSubmission: async (params: { 
+    sequences: string; 
+    vendor_preference?: string; 
+    quantity?: string; 
+    delivery_time?: string 
+  }) => {
+    const response = await axios.post(`${API_BASE_URL}/mcp/synthesis-submission`, params);
     return response.data;
   }
 }; 

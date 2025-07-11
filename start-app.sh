@@ -61,8 +61,8 @@ if [ ! -d "frontend" ]; then
 fi
 
 # Check if Python is available
-if ! command -v python3 &> /dev/null; then
-    echo "❌ Python 3 is not installed"
+if ! command -v python &> /dev/null; then
+    echo "❌ Python is not installed"
     exit 1
 fi
 
@@ -87,11 +87,19 @@ check_port 5173 || exit 1
 # Install backend dependencies
 echo "📦 Installing backend dependencies..."
 cd backend
+
+# Install essential packages for the application
+echo "   Installing essential Python packages..."
+python -m pip install fastapi uvicorn langchain langgraph pydantic requests pandas
+
+# Try to install requirements.txt if it exists
 if [ -f "requirements.txt" ]; then
-    pip install -r requirements.txt
+    echo "   Installing from requirements.txt..."
+    python -m pip install -r requirements.txt 2>/dev/null || echo "   ⚠️  Some packages from requirements.txt failed to install, continuing with essential packages"
 else
-    echo "⚠️  requirements.txt not found, skipping backend dependency installation"
+    echo "   ⚠️  requirements.txt not found, using essential packages only"
 fi
+
 cd ..
 
 # Install frontend dependencies
@@ -100,57 +108,27 @@ cd frontend
 if [ -f "package.json" ]; then
     npm install
 else
-    echo "⚠️  package.json not found, skipping frontend dependency installation"
+    echo "   ⚠️  package.json not found, skipping frontend dependency installation"
 fi
 cd ..
 
-# Start MCP server
-echo "🔧 Starting MCP server..."
+# Start FastAPI server (main server with plasmid visualization)
+echo "🔧 Starting FastAPI server with plasmid visualization..."
 cd backend
 
-if [ -f "simple_mcp_server.py" ]; then
-    echo "   Starting simplified MCP server..."
+# Set up Python path for tools
+export PYTHONPATH="../tools:$PYTHONPATH"
+
+# Test if plasmid visualizer can be imported
+echo "   Testing plasmid visualizer import..."
+python -c "import plasmid_visualizer; print('✅ Plasmid visualizer imported successfully')" 2>/dev/null || {
+    echo "   ❌ Failed to import plasmid visualizer"
     echo "   Current directory: $(pwd)"
-    
-    # Check if conda is available and activate databloom environment
-    if command -v conda &> /dev/null; then
-        echo "   Activating databloom conda environment..."
-        source $(conda info --base)/etc/profile.d/conda.sh
-        conda activate databloom
-        echo "   Python version: $(python --version)"
-        echo "   Python executable: $(which python)"
-    else
-        echo "   ⚠️  Conda not found, using system Python"
-        echo "   Python version: $(python --version)"
-    fi
-    
-    echo "   Checking for required modules..."
-    
-    # Check if required modules are available
-    PYTHONPATH="$PYTHONPATH:$(pwd)/../tools" python -c "import tools.mutations" 2>/dev/null && echo "   ✅ tools.mutations module found" || echo "   ❌ tools.mutations module not found"
-    PYTHONPATH="$PYTHONPATH:$(pwd)/../tools" python -c "import tools.alignment" 2>/dev/null && echo "   ✅ tools.alignment module found" || echo "   ❌ tools.alignment module not found"
-    PYTHONPATH="$PYTHONPATH:$(pwd)/../tools" python -c "import tools.data_science" 2>/dev/null && echo "   ✅ tools.data_science module found" || echo "   ❌ tools.data_science module not found"
-    
-    echo "   Starting MCP server..."
-    python simple_mcp_server.py &
-    MCP_PID=$!
-    sleep 3  # Give MCP server time to start
-
-    # No longer check for process name, rely on MCP server log output
-    # If you want, you can tail the log or print a message here
-    # echo "   MCP server started with PID $MCP_PID (check logs for details)"
-
-else
-    echo "❌ simple_mcp_server.py not found"
-    echo "   Current directory contents:"
-    ls -la
+    echo "   PYTHONPATH: $PYTHONPATH"
     exit 1
-fi
-cd ..
+}
 
-# Start FastAPI server
-echo "🔧 Starting FastAPI server..."
-cd backend
+echo "   Starting FastAPI server..."
 python main_with_mcp.py &
 BACKEND_PID=$!
 cd ..
@@ -160,7 +138,6 @@ if wait_for_service "http://localhost:8001/health"; then
     echo "✅ FastAPI server is running on http://localhost:8001"
 else
     echo "❌ FastAPI server failed to start"
-    kill $MCP_PID 2>/dev/null
     kill $BACKEND_PID 2>/dev/null
     exit 1
 fi
@@ -177,7 +154,6 @@ if wait_for_service "http://localhost:5173"; then
     echo "✅ Frontend server is running on http://localhost:5173"
 else
     echo "❌ Frontend server failed to start"
-    kill $MCP_PID 2>/dev/null
     kill $BACKEND_PID 2>/dev/null
     kill $FRONTEND_PID 2>/dev/null
     exit 1
@@ -189,7 +165,7 @@ echo "=========================================="
 echo "🌐 Frontend: http://localhost:5173"
 echo "🔧 FastAPI:  http://localhost:8001"
 echo "📚 API Docs: http://localhost:8001/docs"
-echo "🔬 MCP Server: Running (PID: $MCP_PID)"
+echo "🧬 Plasmid Visualizer: Available in the UI"
 echo ""
 echo "Press Ctrl+C to stop all servers"
 
@@ -197,7 +173,6 @@ echo "Press Ctrl+C to stop all servers"
 cleanup() {
     echo ""
     echo "🛑 Stopping servers..."
-    kill $MCP_PID 2>/dev/null
     kill $BACKEND_PID 2>/dev/null
     kill $FRONTEND_PID 2>/dev/null
     echo "✅ Servers stopped"

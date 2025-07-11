@@ -1,7 +1,7 @@
 // Command Parser for MCP Integration
 
 export interface ParsedCommand {
-  type: 'sequence_alignment' | 'mutate_sequence' | 'analyze_sequence_data' | 'visualize_alignment' | 'general';
+  type: 'sequence_alignment' | 'mutate_sequence' | 'analyze_sequence_data' | 'visualize_alignment' | 'dna_vendor_research' | 'general';
   parameters: Record<string, any>;
   originalCommand: string;
 }
@@ -27,6 +27,12 @@ export class CommandParser {
     'visualize alignment', 'alignment visualization'
   ];
 
+  private static vendorResearchKeywords = [
+    'order', 'vendor', 'synthesis', 'test', 'assay', 'expression', 'function', 'binding',
+    'dna synthesis', 'gene synthesis', 'find vendor', 'research vendor',
+    'testing options', 'quality control', 'validation'
+  ];
+
   static parseCommand(command: string): ParsedCommand {
     const lowerCommand = command.toLowerCase();
     
@@ -48,6 +54,11 @@ export class CommandParser {
     // Check for visualization
     if (this.visualizationKeywords.some(keyword => lowerCommand.includes(keyword))) {
       return this.parseVisualizationCommand(command);
+    }
+    
+    // Check for vendor research
+    if (this.vendorResearchKeywords.some(keyword => lowerCommand.includes(keyword))) {
+      return this.parseVendorResearchCommand(command);
     }
     
     // Default to general command
@@ -142,6 +153,32 @@ export class CommandParser {
       parameters: {
         alignment_file: alignmentFile,
         output_format: outputFormat
+      },
+      originalCommand: command
+    };
+  }
+
+  private static parseVendorResearchCommand(command: string): ParsedCommand {
+    const lowerCommand = command.toLowerCase();
+    
+    // Extract vendor type
+    let vendorType = 'dna_synthesis';
+    if (lowerCommand.includes('gene_synthesis')) vendorType = 'gene_synthesis';
+    else if (lowerCommand.includes('find_vendor')) vendorType = 'find_vendor';
+    else if (lowerCommand.includes('research_vendor')) vendorType = 'research_vendor';
+    
+    // Extract specific details
+    const details: Record<string, any> = {};
+    const detailMatch = command.match(/(\w+)\s*:\s*(.+)/i);
+    if (detailMatch) {
+      details[detailMatch[1].toLowerCase()] = detailMatch[2];
+    }
+
+    return {
+      type: 'dna_vendor_research',
+      parameters: {
+        vendor_type: vendorType,
+        details
       },
       originalCommand: command
     };
