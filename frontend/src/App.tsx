@@ -554,11 +554,211 @@ function App() {
       );
     }
     
-    return (
-      <pre className="bg-light p-3 border rounded mb-3">
-        {JSON.stringify(output, null, 2)}
-      </pre>
-    );
+    // Intelligent fallback for unknown response types
+    const formatResponse = (data: any): React.ReactNode => {
+      // If it's a simple string or has a message
+      if (typeof data === 'string') {
+        return (
+          <div className="bg-light p-3 border rounded mb-3">
+            <p className="mb-0">{data}</p>
+          </div>
+        );
+      }
+      
+      // If it has a status and result
+      if (data.status && data.result) {
+        return (
+          <div className="bg-light p-3 border rounded mb-3">
+            <div className={`alert ${data.status === 'success' ? 'alert-success' : 'alert-warning'} mb-3`}>
+              <strong>Status:</strong> {data.status}
+            </div>
+            {typeof data.result === 'string' ? (
+              <p className="mb-0">{data.result}</p>
+            ) : (
+              <div>
+                <h6>Results:</h6>
+                <pre className="small">{JSON.stringify(data.result, null, 2)}</pre>
+              </div>
+            )}
+          </div>
+        );
+      }
+      
+      // If it has a text field
+      if (data.text) {
+        return (
+          <div className="bg-light p-3 border rounded mb-3">
+            <p className="mb-0">{data.text}</p>
+          </div>
+        );
+      }
+      
+      // If it has statistics
+      if (data.statistics) {
+        return (
+          <div className="bg-light p-3 border rounded mb-3">
+            <h6>Analysis Results</h6>
+            <div className="row">
+              {Object.entries(data.statistics).map(([key, value]) => (
+                <div key={key} className="col-md-6 mb-2">
+                  <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
+                </div>
+              ))}
+            </div>
+            {data.variants && (
+              <div className="mt-3">
+                <h6>Generated Variants:</h6>
+                <div className="small">
+                  {data.variants.slice(0, 5).map((variant: string, index: number) => (
+                    <div key={index} className="mb-1">
+                      <code>{variant}</code>
+                    </div>
+                  ))}
+                  {data.variants.length > 5 && (
+                    <p className="text-muted">... and {data.variants.length - 5} more variants</p>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      }
+      
+      // If it has sequences
+      if (data.sequences) {
+        return (
+          <div className="bg-light p-3 border rounded mb-3">
+            <h6>Sequences</h6>
+            <div className="small">
+              {data.sequences.map((seq: any, index: number) => (
+                <div key={index} className="mb-2">
+                  <strong>{seq.name || `Sequence ${index + 1}`}:</strong>
+                  <br />
+                  <code>{seq.sequence}</code>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      }
+      
+      // If it has vendors
+      if (data.vendors) {
+        return (
+          <div className="bg-light p-3 border rounded mb-3">
+            <h6>DNA Synthesis Vendors</h6>
+            <div className="row">
+              {Object.entries(data.vendors).map(([vendorId, vendor]: [string, any]) => (
+                <div key={vendorId} className="col-md-6 mb-3">
+                  <div className="card h-100">
+                    <div className="card-body">
+                      <h6 className="card-title">{vendor.name}</h6>
+                      <p className="card-text">
+                        <strong>Services:</strong> {vendor.services?.join(', ') || 'N/A'}
+                      </p>
+                      <p className="card-text">
+                        <strong>Pricing:</strong> {vendor.pricing_range || 'N/A'}
+                      </p>
+                      <p className="card-text">
+                        <strong>Turnaround:</strong> {vendor.turnaround_time || 'N/A'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      }
+      
+      // If it has testing options
+      if (data.testing_options) {
+        return (
+          <div className="bg-light p-3 border rounded mb-3">
+            <h6>Testing Options</h6>
+            <div className="row">
+              {Object.entries(data.testing_options).map(([testId, test]: [string, any]) => (
+                <div key={testId} className="col-md-6 mb-3">
+                  <div className="card h-100">
+                    <div className="card-body">
+                      <h6 className="card-title">{test.name}</h6>
+                      <p className="card-text">
+                        <strong>Services:</strong> {test.services?.join(', ') || 'N/A'}
+                      </p>
+                      <p className="card-text">
+                        <strong>Vendors:</strong> {test.vendors?.join(', ') || 'N/A'}
+                      </p>
+                      <p className="card-text">
+                        <strong>Pricing:</strong> {test.pricing_range || 'N/A'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      }
+      
+      // If it has recommendations
+      if (data.recommendations) {
+        return (
+          <div className="bg-light p-3 border rounded mb-3">
+            <h6>Recommendations</h6>
+            <ul className="list-unstyled">
+              {data.recommendations.map((rec: string, index: number) => (
+                <li key={index} className="mb-2">
+                  <i className="bi bi-lightbulb text-warning me-2"></i>
+                  {rec}
+                </li>
+              ))}
+            </ul>
+          </div>
+        );
+      }
+      
+      // If it has error information
+      if (data.error) {
+        return (
+          <div className="alert alert-danger">
+            <h6>Error</h6>
+            <p className="mb-0">{data.error}</p>
+          </div>
+        );
+      }
+      
+      // If it has success information
+      if (data.success !== undefined) {
+        return (
+          <div className={`alert ${data.success ? 'alert-success' : 'alert-warning'}`}>
+            <h6>{data.success ? 'Success' : 'Warning'}</h6>
+            {data.message && <p className="mb-0">{data.message}</p>}
+            {data.result && (
+              <div className="mt-2">
+                <strong>Result:</strong>
+                <pre className="small mt-1">{JSON.stringify(data.result, null, 2)}</pre>
+              </div>
+            )}
+          </div>
+        );
+      }
+      
+      // Last resort: show formatted JSON with a note
+      return (
+        <div className="bg-light p-3 border rounded mb-3">
+          <div className="alert alert-info mb-3">
+            <i className="bi bi-info-circle me-2"></i>
+            Raw response data (for debugging)
+          </div>
+          <details>
+            <summary>View Raw Data</summary>
+            <pre className="small mt-2">{JSON.stringify(data, null, 2)}</pre>
+          </details>
+        </div>
+      );
+    };
+    
+    return formatResponse(output);
   };
 
   return (
