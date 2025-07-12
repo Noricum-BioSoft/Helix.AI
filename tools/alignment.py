@@ -17,9 +17,13 @@ def parse_fasta_string(fasta_string: str) -> List[Dict[str, str]]:
     current_name = ""
     current_sequence = ""
     
-    for line in fasta_string.strip().split('\n'):
+    # Split by lines and process each line
+    lines = fasta_string.strip().split('\n')
+    
+    for line in lines:
         line = line.strip()
         print(f"🔍 Processing line: '{line}'")
+        
         if line.startswith('>'):
             # Save previous sequence if exists
             if current_name and current_sequence:
@@ -28,14 +32,24 @@ def parse_fasta_string(fasta_string: str) -> List[Dict[str, str]]:
                     "name": current_name,
                     "sequence": current_sequence
                 })
-            # Start new sequence
-            current_name = line[1:].strip()
-            current_sequence = ""
-            print(f"🔍 Starting new sequence with name: '{current_name}'")
+            
+            # Parse the header line - it might contain sequence data
+            header_parts = line[1:].split(None, 1)  # Split on whitespace, max 1 split
+            if len(header_parts) == 2:
+                # Header contains both name and sequence
+                current_name = header_parts[0]
+                current_sequence = header_parts[1]
+                print(f"🔍 Header contains sequence: name='{current_name}', sequence='{current_sequence}'")
+            else:
+                # Header contains only name
+                current_name = header_parts[0]
+                current_sequence = ""
+                print(f"🔍 Starting new sequence with name: '{current_name}'")
         else:
             # Add to current sequence
-            current_sequence += line
-            print(f"🔍 Added to current sequence: '{line}' -> current_sequence='{current_sequence}'")
+            if current_name:  # Only add if we have a name (we're in a sequence)
+                current_sequence += line
+                print(f"🔍 Added to current sequence: '{line}' -> current_sequence='{current_sequence}'")
     
     # Add the last sequence
     if current_name and current_sequence:

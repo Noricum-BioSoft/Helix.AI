@@ -139,7 +139,7 @@ First 5 variants:
             "deletion_count": deletion_count,
             "mutation_rate": mutation_rate,
             "original_sequence": sequence,
-            "variants": variants[:10]  # Return first 10 variants
+            "variants": variants  # Return all variants
         }
     }
 

@@ -8,11 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **🌳 Interactive Phylogenetic Tree Visualization**
+  - D3.js-based interactive tree rendering with zoom and pan
+  - Newick format parsing and display
+  - Comprehensive tree statistics and metrics
+  - Real-time tree updates during analysis
+  - Support for complex tree structures with proper error handling
+
+- **🔬 DNA Synthesis Vendor Research**
+  - Complete vendor comparison system with 7 major vendors
+  - Real-time pricing analysis and service comparisons
+  - AI-powered vendor recommendations based on sequence requirements
+  - Interactive vendor cards with detailed specifications
+  - Service matching based on sequence length and quantity
+
 - **Natural Language Command Processing**
   - Intelligent command parser that understands natural language bioinformatics commands
   - Support for complex multi-step workflows
   - Context-aware command execution with session management
-  - Example: "from the sequence variants, pick 10 sequences randomly and output them"
+  - Example: "visualize the variants in a phylogenetic tree"
 
 - **Session Management System**
   - Persistent session tracking across multiple commands
@@ -31,12 +45,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Alignment Tool**: Multiple sequence alignment with ClustalW/Muscle/MAFFT
   - **Data Science Tool**: Statistical analysis, correlation matrices, feature engineering
   - **Variant Selection Tool**: Smart selection based on diversity, length, or custom criteria
+  - **Phylogenetic Tree Tool**: Tree construction and analysis with UPGMA method
+  - **DNA Vendor Research Tool**: Vendor comparison and recommendations
 
 - **Visualization Enhancements**
   - Plotly integration for dynamic charts
   - Real-time plot updates
   - Export capabilities for plots and results
   - Interactive visualizations for sequence analysis
+  - D3.js phylogenetic tree visualization
 
 ### Changed
 - **Backend Architecture**
@@ -44,23 +61,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Improved error handling and validation
   - Better dependency management with conda environment
   - Enhanced API endpoints with session support
+  - Updated command router for better tool integration
 
 - **Frontend Architecture**
   - Updated to use axios for API calls
   - Improved state management for session handling
   - Enhanced UI with Bootstrap components
   - Better error handling and user feedback
+  - Added D3.js integration for phylogenetic trees
+  - Enhanced vendor research display components
 
 ### Fixed
 - **Import and Dependency Issues**
   - Resolved Python path issues for tool imports
   - Fixed conda environment compatibility
   - Updated dependency versions for better stability
+  - Fixed D3.js TypeScript integration issues
 
 - **Session Data Protection**
   - Added comprehensive `.gitignore` patterns to prevent session data from being committed
   - Removed tracked session files from git
   - Added patterns for user data protection
+
+- **Phylogenetic Tree Rendering**
+  - Fixed NaN coordinate issues in D3.js tree rendering
+  - Improved Newick parser for complex tree structures
+  - Enhanced error handling for malformed tree data
+  - Fixed tree layout and positioning issues
+
+- **Vendor Research Display**
+  - Fixed nested data structure handling in frontend
+  - Improved vendor card layout and information display
+  - Enhanced recommendations display
+  - Fixed API response parsing for vendor data
 
 ## [1.0.0] - 2024-01-XX
 

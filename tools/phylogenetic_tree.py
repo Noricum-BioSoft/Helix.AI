@@ -41,86 +41,49 @@ def parse_aligned_sequences(alignment_data: str) -> List[Dict[str, str]]:
             "sequence": current_sequence
         })
     
+    # Error handling: if no sequences parsed, return empty list
+    if not sequences:
+        print("[ERROR] No sequences parsed from input. Check input format.")
     return sequences
 
+
 def create_phylogenetic_tree(aligned_sequences: List[Dict[str, str]]) -> Dict[str, Any]:
-    """Create phylogenetic tree from aligned sequences."""
-    
-    if len(aligned_sequences) < 2:
+    """Create phylogenetic tree from aligned sequences and return Newick string."""
+    # Error handling: check for empty or insufficient sequences
+    if not aligned_sequences or len(aligned_sequences) < 2:
         return {
-            "text": "Error: At least 2 sequences are required for phylogenetic tree construction",
-            "error": "Insufficient sequences"
+            "text": "Error: At least 2 aligned sequences in valid FASTA format are required for phylogenetic tree construction. Example: >seq1\\nATCG...\\n>seq2\\nATCG...",
+            "error": "Insufficient or invalid sequences"
         }
-    
     try:
         # Create temporary FASTA file with aligned sequences
         with tempfile.NamedTemporaryFile(mode='w', suffix='.fasta', delete=False) as temp_fasta:
             for seq_data in aligned_sequences:
                 temp_fasta.write(f">{seq_data['name']}\n{seq_data['sequence']}\n")
             temp_fasta_path = temp_fasta.name
-        
         # Read the alignment
         alignment = AlignIO.read(temp_fasta_path, "fasta")
-        
         # Calculate distance matrix
         calculator = DistanceCalculator('identity')
         dm = calculator.get_distance(alignment)
-        
         # Construct tree using UPGMA method
         constructor = DistanceTreeConstructor(calculator, 'upgma')
         tree = constructor.build_tree(alignment)
-        
-        # Create visualization
-        plt.figure(figsize=(12, 8))
-        draw(tree, axes=plt.gca(), do_show=False)
-        plt.title("Phylogenetic Tree from Aligned Sequences")
-        plt.tight_layout()
-        
-        # Save plot to base64 string
-        img_buffer = io.BytesIO()
-        plt.savefig(img_buffer, format='png', dpi=300, bbox_inches='tight')
-        img_buffer.seek(0)
-        img_base64 = base64.b64encode(img_buffer.getvalue()).decode()
-        plt.close()
-        
+        # Export tree to Newick format
+        from Bio import Phylo
+        newick_io = io.StringIO()
+        Phylo.write(tree, newick_io, "newick")
+        newick_str = newick_io.getvalue().strip()
         # Calculate tree statistics
         num_sequences = len(aligned_sequences)
         alignment_length = len(aligned_sequences[0]["sequence"])
-        
-        # Get tree topology information
         tree_height = tree.root.branch_length if tree.root.branch_length else 0
         num_clades = len(list(tree.get_terminals()))
-        
-        # Create result text
-        result_text = f"""Phylogenetic tree constructed successfully from {num_sequences} aligned sequences.
-
-Tree Statistics:
-- Number of sequences: {num_sequences}
-- Alignment length: {alignment_length}
-- Tree height: {tree_height:.4f}
-- Number of clades: {num_clades}
-- Distance method: Identity
-- Tree construction method: UPGMA
-
-The tree shows the evolutionary relationships between the sequences based on sequence identity."""
-        
-        # Clean up temporary file
+        result_text = f"""Phylogenetic tree constructed successfully from {num_sequences} aligned sequences.\n\nTree Statistics:\n- Number of sequences: {num_sequences}\n- Alignment length: {alignment_length}\n- Tree height: {tree_height:.4f}\n- Number of clades: {num_clades}\n- Distance method: Identity\n- Tree construction method: UPGMA\n\nThe tree shows the evolutionary relationships between the sequences based on sequence identity."""
         os.unlink(temp_fasta_path)
-        
         return {
             "text": result_text,
-            "plot": {
-                "data": [{
-                    "type": "image",
-                    "source": f"data:image/png;base64,{img_base64}",
-                    "format": "png"
-                }],
-                "layout": {
-                    "title": "Phylogenetic Tree",
-                    "width": 800,
-                    "height": 600
-                }
-            },
+            "tree_newick": newick_str,
             "statistics": {
                 "num_sequences": num_sequences,
                 "alignment_length": alignment_length,
@@ -130,7 +93,6 @@ The tree shows the evolutionary relationships between the sequences based on seq
                 "tree_method": "upgma"
             }
         }
-        
     except Exception as e:
         return {
             "text": f"Error creating phylogenetic tree: {str(e)}",
@@ -140,23 +102,56 @@ The tree shows the evolutionary relationships between the sequences based on seq
 def run_phylogenetic_tree_raw(aligned_sequences: str):
     """Create phylogenetic tree from aligned sequences."""
     
+    print(f"🔧 Phylogenetic tree tool called with aligned_sequences: '{aligned_sequences}'")
+    
     if not aligned_sequences or not aligned_sequences.strip():
         return {
             "text": "Error: No aligned sequences provided",
             "error": "No sequences"
         }
     
-    # Parse aligned sequences
+    # Parse sequences
     try:
         parsed_sequences = parse_aligned_sequences(aligned_sequences)
+        print(f"🔧 Parsed {len(parsed_sequences)} sequences: {parsed_sequences}")
     except Exception as e:
         return {
-            "text": f"Error parsing aligned sequences: {str(e)}",
+            "text": f"Error parsing sequences: {str(e)}",
             "error": str(e)
         }
     
+    # Check if sequences need alignment (different lengths)
+    sequence_lengths = [len(seq["sequence"]) for seq in parsed_sequences]
+    if len(set(sequence_lengths)) > 1:
+        print(f"🔧 Sequences have different lengths: {sequence_lengths}, aligning first...")
+        
+        # Import and use the alignment tool to align sequences
+        import sys
+        import os
+        sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'tools'))
+        from alignment import run_alignment_tool
+        
+        # Convert sequences back to FASTA format for alignment
+        fasta_input = "\n".join([f">{seq['name']}\n{seq['sequence']}" for seq in parsed_sequences])
+        
+        # Align the sequences
+        alignment_result = run_alignment_tool(fasta_input)
+        
+        if "alignment" in alignment_result and alignment_result["alignment"]:
+            # Use the aligned sequences
+            aligned_parsed_sequences = alignment_result["alignment"]
+            print(f"🔧 Aligned sequences: {aligned_parsed_sequences}")
+        else:
+            return {
+                "text": f"Error aligning sequences: {alignment_result.get('text', 'Unknown error')}",
+                "error": "Alignment failed"
+            }
+    else:
+        print(f"🔧 All sequences have same length: {sequence_lengths[0]}")
+        aligned_parsed_sequences = parsed_sequences
+    
     # Create phylogenetic tree
-    return create_phylogenetic_tree(parsed_sequences)
+    return create_phylogenetic_tree(aligned_parsed_sequences)
 
 from langchain.agents import tool
 

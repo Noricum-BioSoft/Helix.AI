@@ -4,6 +4,7 @@ import Plot from 'react-plotly.js';
 import { mcpApi } from './services/mcpApi';
 import { CommandParser, ParsedCommand } from './utils/commandParser';
 import { PlasmidVisualizer } from './components/PlasmidVisualizer';
+import { PhylogeneticTree } from './components/PhylogeneticTree';
 
 import 'bootstrap/dist/css/bootstrap.min.css';
 import Modal from 'react-bootstrap/Modal';
@@ -37,6 +38,7 @@ function App() {
   const [activeTab, setActiveTab] = useState<string>('command');
   const [uploadedFile, setUploadedFile] = useState<{ name: string; content: string } | null>(null);
   const [workflowContext, setWorkflowContext] = useState<WorkflowContext>({});
+  const [isInitialized, setIsInitialized] = useState(false);
 
   const handleExampleClick = (exampleCommand: string) => {
     setCommand(exampleCommand);
@@ -45,7 +47,11 @@ function App() {
   // Create a session on mount and check server health
   useEffect(() => {
     const initializeApp = async () => {
+      if (isInitialized) return; // Prevent duplicate initialization
+      
       try {
+        setIsInitialized(true);
+        
         // Check server health first
         await checkServerHealth();
         
@@ -58,10 +64,11 @@ function App() {
         console.log('Session created:', res.session_id);
       } catch (err) {
         console.error('Failed to initialize app:', err);
+        setIsInitialized(false); // Reset on error
       }
     };
     initializeApp();
-  }, []);
+  }, [isInitialized]);
 
   const checkServerHealth = async () => {
     try {
@@ -330,12 +337,285 @@ function App() {
   const renderOutput = (item: HistoryItem) => {
     const { output, type } = item;
     
+    // Add debugging
+    console.log('renderOutput called with:', { output, type });
+    console.log('output structure:', JSON.stringify(output, null, 2));
+    console.log('output keys:', Object.keys(output));
+    
+    // --- NEW: Render phylogenetic tree if present ---
+    if (output && output.tree_newick) {
+      return (
+        <div>
+          <PhylogeneticTree newick={output.tree_newick} />
+          {output.text && (
+            <pre className="bg-light p-3 border rounded mb-3">{output.text}</pre>
+          )}
+          {output.statistics && (
+            <div className="bg-light p-3 border rounded mb-3">
+              <h6>Tree Statistics</h6>
+              <div className="row">
+                {Object.entries(output.statistics).map(([key, value]) => (
+                  <div key={key} className="col-md-6 mb-2">
+                    <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // --- NEW: Render vendor research results if present ---
+    if (output && output.output && output.output.result && output.output.result.vendors) {
+      const vendors = output.output.result.vendors;
+      const recommendations = output.output.result.recommendations || [];
+      
+      return (
+        <div>
+          {output.text && (
+            <pre className="bg-light p-3 border rounded mb-3">{output.text}</pre>
+          )}
+          
+          <div className="bg-light p-3 border rounded mb-3">
+            <h5>DNA Synthesis Vendors</h5>
+            <div className="row">
+              {Object.entries(vendors).map(([vendorId, vendor]: [string, any]) => (
+                <div key={vendorId} className="col-md-6 mb-3">
+                  <div className="card h-100">
+                    <div className="card-body">
+                      <h6 className="card-title">{vendor.name}</h6>
+                      <p className="card-text">
+                        <strong>Services:</strong> {vendor.services.join(', ')}
+                      </p>
+                      <p className="card-text">
+                        <strong>Pricing:</strong> {vendor.pricing_range}
+                      </p>
+                      <p className="card-text">
+                        <strong>Turnaround:</strong> {vendor.turnaround_time}
+                      </p>
+                      <p className="card-text">
+                        <strong>Max Length:</strong> {vendor.max_length}
+                      </p>
+                      <p className="card-text">
+                        <strong>Specialties:</strong> {vendor.specialties.join(', ')}
+                      </p>
+                      <a href={vendor.website} target="_blank" rel="noopener noreferrer" className="btn btn-sm btn-outline-primary">
+                        Visit Website
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+          
+          {recommendations.length > 0 && (
+            <div className="bg-light p-3 border rounded mb-3">
+              <h5>Recommendations</h5>
+              <ul className="list-unstyled">
+                {recommendations.map((rec: string, index: number) => (
+                  <li key={index} className="mb-2">
+                    <i className="bi bi-lightbulb text-warning me-2"></i>
+                    {rec}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      );
+    }
+    
     if (type === 'error') {
       return (
         <div className="alert alert-danger">
           <strong>Error:</strong> {output.error}
         </div>
       );
+    }
+    
+    // Handle responses with messages array directly in output
+    if (output.messages && Array.isArray(output.messages)) {
+      console.log('Found messages array directly in output with length:', output.messages.length);
+      console.log('Messages:', output.messages);
+      
+      // Find the last tool message (most recent tool result)
+      const toolMessages = output.messages.filter(
+        (msg: any) => msg.type === 'tool' && msg.content
+      );
+      console.log('Tool messages found:', toolMessages.length);
+      
+      if (toolMessages.length > 0) {
+        const lastToolMsg = toolMessages[toolMessages.length - 1];
+        console.log('Last tool message:', lastToolMsg);
+        
+        try {
+          const toolResult = JSON.parse(lastToolMsg.content);
+          console.log('Parsed last tool result:', toolResult);
+          
+          // Handle sequence selection results
+          if (lastToolMsg.name === 'sequence_selection' && toolResult.output && Array.isArray(toolResult.output)) {
+            console.log('Found selected sequences array:', toolResult.output);
+            return (
+              <div>
+                {toolResult.text && (
+                  <pre className="bg-light p-3 border rounded mb-3">{toolResult.text}</pre>
+                )}
+                <div className="bg-light p-3 border rounded mb-3">
+                  <h5>Selected Sequences</h5>
+                  <div className="table-responsive">
+                    <table className="table table-sm">
+                      <thead>
+                        <tr>
+                          <th>Name</th>
+                          <th>Sequence</th>
+                          <th>Length</th>
+                          <th>GC Content</th>
+                          <th>Gaps</th>
+                          <th>Conservation Score</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {toolResult.output.map((seq: any, index: number) => (
+                          <tr key={index}>
+                            <td>{seq.name}</td>
+                            <td className="font-monospace">{seq.sequence}</td>
+                            <td>{seq.statistics?.length || 'N/A'} bp</td>
+                            <td>{seq.statistics?.gc_content || 'N/A'}%</td>
+                            <td>{seq.statistics?.gap_count || 0} ({seq.statistics?.gap_percentage || 0}%)</td>
+                            <td>{seq.statistics?.conservation_score || 'N/A'}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+                {toolResult.selection_criteria && (
+                  <div className="bg-light p-3 border rounded mb-3">
+                    <h6>Selection Criteria</h6>
+                    <div className="row">
+                      {Object.entries(toolResult.selection_criteria).map(([key, value]) => (
+                        <div key={key} className="col-md-6 mb-2">
+                          <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          }
+          
+          // Handle mutation results
+          if (lastToolMsg.name === 'mutate_sequence' && toolResult.output && toolResult.output.variants) {
+            console.log('Found mutation variants:', toolResult.output.variants);
+            return (
+              <div>
+                {toolResult.text && (
+                  <pre className="bg-light p-3 border rounded mb-3">{toolResult.text}</pre>
+                )}
+                <div className="bg-light p-3 border rounded mb-3">
+                  <h5>Mutation Results</h5>
+                  <div className="row">
+                    <div className="col-md-6">
+                      <h6>Statistics</h6>
+                      <ul>
+                        <li><strong>Total Variants:</strong> {toolResult.output.total_variants}</li>
+                        <li><strong>Substitutions:</strong> {toolResult.output.substitution_count}</li>
+                        <li><strong>Insertions:</strong> {toolResult.output.insertion_count}</li>
+                        <li><strong>Deletions:</strong> {toolResult.output.deletion_count}</li>
+                        <li><strong>Mutation Rate:</strong> {(toolResult.output.mutation_rate * 100).toFixed(2)}%</li>
+                      </ul>
+                    </div>
+                    <div className="col-md-6">
+                      <h6>First 10 Variants</h6>
+                      <div className="table-responsive">
+                        <table className="table table-sm">
+                          <thead>
+                            <tr>
+                              <th>#</th>
+                              <th>Sequence</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {toolResult.output.variants.slice(0, 10).map((variant: string, index: number) => (
+                              <tr key={index}>
+                                <td>{index + 1}</td>
+                                <td className="font-monospace">{variant}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      {toolResult.output.variants.length > 10 && (
+                        <p className="text-muted">... and {toolResult.output.variants.length - 10} more variants</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          }
+          
+          // Handle alignment results
+          if (lastToolMsg.name === 'sequence_alignment' && toolResult.output && Array.isArray(toolResult.output)) {
+            console.log('Found alignment array:', toolResult.output);
+            return (
+              <div>
+                {toolResult.text && (
+                  <pre className="bg-light p-3 border rounded mb-3">{toolResult.text}</pre>
+                )}
+                <div className="bg-light p-3 border rounded mb-3">
+                  <h5>Alignment Result</h5>
+                  <div className="table-responsive">
+                    <table className="table table-sm">
+                      <thead>
+                        <tr>
+                          <th>Name</th>
+                          <th>Sequence</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {toolResult.output.map((seq: any, index: number) => (
+                          <tr key={index}>
+                            <td>{seq.name}</td>
+                            <td className="font-monospace">{seq.sequence}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+                {toolResult.statistics && (
+                  <div className="bg-light p-3 border rounded mb-3">
+                    <h6>Alignment Statistics</h6>
+                    <div className="row">
+                      {Object.entries(toolResult.statistics).map(([key, value]) => (
+                        <div key={key} className="col-md-6 mb-2">
+                          <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          }
+          
+          // Fallback: show any tool result as text
+          if (toolResult.text) {
+            return (
+              <div>
+                <pre className="bg-light p-3 border rounded">{toolResult.text}</pre>
+              </div>
+            );
+          }
+          
+        } catch (e) {
+          console.log('Error parsing tool result:', e);
+        }
+      }
     }
     
     // Handle MCP responses
@@ -349,9 +629,229 @@ function App() {
       }
       
       const result = output.result;
+      console.log('result structure:', JSON.stringify(result, null, 2));
       
       // Handle nested result structure from natural language commands
       const actualResult = result.result || result;
+      console.log('actualResult structure:', JSON.stringify(actualResult, null, 2));
+
+      // --- NEW: Render phylogenetic tree if present in actualResult ---
+      if (actualResult && actualResult.tree_newick) {
+        return (
+          <div>
+            <PhylogeneticTree newick={actualResult.tree_newick} />
+            {actualResult.text && (
+              <pre className="bg-light p-3 border rounded mb-3">{actualResult.text}</pre>
+            )}
+            {actualResult.statistics && (
+              <div className="bg-light p-3 border rounded mb-3">
+                <h6>Tree Statistics</h6>
+                <div className="row">
+                  {Object.entries(actualResult.statistics).map(([key, value]) => (
+                    <div key={key} className="col-md-6 mb-2">
+                      <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      }
+      // --- END NEW ---
+      
+      // --- NEW: Handle alignment in ToolMessage for natural language commands ---
+      // Check if messages is in actualResult (nested) or directly in output
+      const messages = actualResult.messages || output.messages;
+      console.log('Looking for messages in:', { actualResultMessages: actualResult.messages, outputMessages: output.messages, finalMessages: messages });
+      
+      if (messages && Array.isArray(messages)) {
+        console.log('Found messages array with length:', messages.length);
+        console.log('Messages:', messages);
+        
+        // Find the last tool message (most recent tool result)
+        const toolMessages = messages.filter(
+          (msg: any) => msg.type === 'tool' && msg.content
+        );
+        console.log('Tool messages found:', toolMessages.length);
+        
+        if (toolMessages.length > 0) {
+          const lastToolMsg = toolMessages[toolMessages.length - 1];
+          console.log('Last tool message:', lastToolMsg);
+          
+          try {
+            const toolResult = JSON.parse(lastToolMsg.content);
+            console.log('Parsed last tool result:', toolResult);
+            
+            // Handle sequence selection results
+            if (lastToolMsg.name === 'sequence_selection' && toolResult.output && Array.isArray(toolResult.output)) {
+              console.log('Found selected sequences array:', toolResult.output);
+              return (
+                <div>
+                  {toolResult.text && (
+                    <pre className="bg-light p-3 border rounded mb-3">{toolResult.text}</pre>
+                  )}
+                  <div className="bg-light p-3 border rounded mb-3">
+                    <h5>Selected Sequences</h5>
+                    <div className="table-responsive">
+                      <table className="table table-sm">
+                        <thead>
+                          <tr>
+                            <th>Name</th>
+                            <th>Sequence</th>
+                            <th>Length</th>
+                            <th>GC Content</th>
+                            <th>Gaps</th>
+                            <th>Conservation Score</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {toolResult.output.map((seq: any, index: number) => (
+                            <tr key={index}>
+                              <td>{seq.name}</td>
+                              <td className="font-monospace">{seq.sequence}</td>
+                              <td>{seq.statistics?.length || 'N/A'} bp</td>
+                              <td>{seq.statistics?.gc_content || 'N/A'}%</td>
+                              <td>{seq.statistics?.gap_count || 0} ({seq.statistics?.gap_percentage || 0}%)</td>
+                              <td>{seq.statistics?.conservation_score || 'N/A'}%</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                  {toolResult.selection_criteria && (
+                    <div className="bg-light p-3 border rounded mb-3">
+                      <h6>Selection Criteria</h6>
+                      <div className="row">
+                        {Object.entries(toolResult.selection_criteria).map(([key, value]) => (
+                          <div key={key} className="col-md-6 mb-2">
+                            <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            }
+            
+            // Handle mutation results
+            if (lastToolMsg.name === 'mutate_sequence' && toolResult.output && toolResult.output.variants) {
+              console.log('Found mutation variants:', toolResult.output.variants);
+              return (
+                <div>
+                  {toolResult.text && (
+                    <pre className="bg-light p-3 border rounded mb-3">{toolResult.text}</pre>
+                  )}
+                  <div className="bg-light p-3 border rounded mb-3">
+                    <h5>Mutation Results</h5>
+                    <div className="row">
+                      <div className="col-md-6">
+                        <h6>Statistics</h6>
+                        <ul>
+                          <li><strong>Total Variants:</strong> {toolResult.output.total_variants}</li>
+                          <li><strong>Substitutions:</strong> {toolResult.output.substitution_count}</li>
+                          <li><strong>Insertions:</strong> {toolResult.output.insertion_count}</li>
+                          <li><strong>Deletions:</strong> {toolResult.output.deletion_count}</li>
+                          <li><strong>Mutation Rate:</strong> {(toolResult.output.mutation_rate * 100).toFixed(2)}%</li>
+                        </ul>
+                      </div>
+                      <div className="col-md-6">
+                        <h6>First 10 Variants</h6>
+                        <div className="table-responsive">
+                          <table className="table table-sm">
+                            <thead>
+                              <tr>
+                                <th>#</th>
+                                <th>Sequence</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {toolResult.output.variants.slice(0, 10).map((variant: string, index: number) => (
+                                <tr key={index}>
+                                  <td>{index + 1}</td>
+                                  <td className="font-monospace">{variant}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        {toolResult.output.variants.length > 10 && (
+                          <p className="text-muted">... and {toolResult.output.variants.length - 10} more variants</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+            
+            // Handle alignment results
+            if (lastToolMsg.name === 'sequence_alignment' && toolResult.output && Array.isArray(toolResult.output)) {
+              console.log('Found alignment array:', toolResult.output);
+              return (
+                <div>
+                  {toolResult.text && (
+                    <pre className="bg-light p-3 border rounded mb-3">{toolResult.text}</pre>
+                  )}
+                  <div className="bg-light p-3 border rounded mb-3">
+                    <h5>Alignment Result</h5>
+                    <div className="table-responsive">
+                      <table className="table table-sm">
+                        <thead>
+                          <tr>
+                            <th>Name</th>
+                            <th>Sequence</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {toolResult.output.map((seq: any, index: number) => (
+                            <tr key={index}>
+                              <td>{seq.name}</td>
+                              <td className="font-monospace">{seq.sequence}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                  {toolResult.statistics && (
+                    <div className="bg-light p-3 border rounded mb-3">
+                      <h6>Alignment Statistics</h6>
+                      <div className="row">
+                        {Object.entries(toolResult.statistics).map(([key, value]) => (
+                          <div key={key} className="col-md-6 mb-2">
+                            <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            }
+            
+            // Fallback: show any tool result as text
+            if (toolResult.text) {
+              return (
+                <div>
+                  <pre className="bg-light p-3 border rounded">{toolResult.text}</pre>
+                </div>
+              );
+            }
+            
+          } catch (e) {
+            console.log('Error parsing tool result:', e);
+            // Fallback to default rendering
+          }
+        } else {
+          console.log('No alignment tool message found');
+        }
+      } else {
+        console.log('No messages array found');
+      }
+      // --- END NEW ---
       
       return (
         <div>
@@ -450,11 +950,11 @@ function App() {
           )}
           
           {/* DNA Vendor Research Results */}
-          {actualResult.result && actualResult.result.vendors && (
+          {(actualResult.result && actualResult.result.vendors) || (actualResult.output && actualResult.output.result && actualResult.output.result.vendors) ? (
             <div className="bg-light p-3 border rounded mb-3">
               <h5>DNA Synthesis Vendors</h5>
               <div className="row">
-                {Object.entries(actualResult.result.vendors).map(([vendorId, vendor]: [string, any]) => (
+                {Object.entries((actualResult.result && actualResult.result.vendors) || (actualResult.output && actualResult.output.result && actualResult.output.result.vendors) || {}).map(([vendorId, vendor]: [string, any]) => (
                   <div key={vendorId} className="col-md-6 mb-3">
                     <div className="card h-100">
                       <div className="card-body">
@@ -483,7 +983,7 @@ function App() {
                 ))}
               </div>
             </div>
-          )}
+          ) : null}
           
           {/* Testing Options Results */}
           {actualResult.result && actualResult.result.testing_options && (
@@ -519,11 +1019,11 @@ function App() {
           )}
           
           {/* Recommendations */}
-          {actualResult.result && actualResult.result.recommendations && (
+          {(actualResult.result && actualResult.result.recommendations) || (actualResult.output && actualResult.output.result && actualResult.output.result.recommendations) ? (
             <div className="bg-light p-3 border rounded mb-3">
               <h5>Recommendations</h5>
               <ul className="list-unstyled">
-                {actualResult.result.recommendations.map((rec: string, index: number) => (
+                {((actualResult.result && actualResult.result.recommendations) || (actualResult.output && actualResult.output.result && actualResult.output.result.recommendations) || []).map((rec: string, index: number) => (
                   <li key={index} className="mb-2">
                     <i className="bi bi-lightbulb text-warning me-2"></i>
                     {rec}
@@ -531,7 +1031,7 @@ function App() {
                 ))}
               </ul>
             </div>
-          )}
+          ) : null}
         </div>
       );
     }
@@ -553,12 +1053,36 @@ function App() {
         />
       );
     }
+
+    if (output.tree_newick) {
+      console.log('🔍 Detected tree_newick in output:', output.tree_newick);
+      return (
+        <div>
+          {output.text && (
+            <pre className="bg-light p-3 border rounded mb-3">{output.text}</pre>
+          )}
+          <PhylogeneticTree newick={output.tree_newick} />
+          {output.statistics && (
+            <div className="bg-light p-3 border rounded mb-3">
+              <h6>Tree Statistics</h6>
+              <div className="row">
+                {Object.entries(output.statistics).map(([key, value]) => (
+                  <div key={key} className="col-md-6 mb-2">
+                    <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
     
     // Intelligent fallback for unknown response types
     const formatResponse = (data: any): React.ReactNode => {
       // If it's a simple string or has a message
       if (typeof data === 'string') {
-        return (
+    return (
           <div className="bg-light p-3 border rounded mb-3">
             <p className="mb-0">{data}</p>
           </div>
@@ -912,26 +1436,28 @@ function App() {
         onDrop={handleDrop}
         style={{ position: 'relative', background: dragActive ? '#e6f0ff' : undefined }}
       >
-        <input
-          type="text"
+        <textarea
           className="form-control"
           value={command}
           onChange={(e) => setCommand(e.target.value)}
+          rows={command.split('\n').length < 4 ? 4 : command.split('\n').length}
+          style={{ resize: 'vertical', minHeight: 80 }}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
               e.preventDefault();
               handleSubmit();
             }
           }}
-          placeholder={commandMode === 'natural' 
-            ? "Enter natural language command (e.g., 'from the sequence variants, pick 10 sequences randomly') or drop a file here"
-            : "Enter your bioinformatics command (e.g., 'align sequences', 'mutate ACTGTTGAC', 'analyze sequence data') or drop a file here"
+          placeholder={commandMode === 'natural'
+            ? `Enter natural language command (multi-line supported, Ctrl+Enter to submit)\nExample for FASTA:\n>seq1\nATCGATCGATCG\n>seq2\nATCGATCGATCG`
+            : `Enter your bioinformatics command (multi-line supported, Ctrl+Enter to submit)\nExample for FASTA:\n>seq1\nATCGATCGATCG\n>seq2\nATCGATCGATCG`
           }
         />
         <button 
           className="btn btn-primary" 
           onClick={handleSubmit}
           disabled={loading}
+          style={{ marginLeft: 8 }}
         >
           {loading ? (
             <>
@@ -990,32 +1516,8 @@ function App() {
 
         {/* Sidebar with Available Tools */}
         <div className="col-md-4">
-          <div className="card">
-            <div className="card-header">
-              <h5 className="mb-0">Available MCP Tools</h5>
-            </div>
-            <div className="card-body">
-              {availableTools.map((tool, index) => (
-                <div key={index} className="mb-3">
-                  <h6 className="text-primary">{tool.name}</h6>
-                  <p className="small text-muted mb-1">{tool.description}</p>
-                  {tool.parameters && (
-                    <div className="small">
-                      <strong>Parameters:</strong>
-                      <ul className="list-unstyled mt-1">
-                        {Object.entries(tool.parameters).map(([key, value]) => (
-                          <li key={key}><code>{key}</code>: {String(value)}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-          
           {/* Example Commands */}
-          <div className="card mt-3">
+          <div className="card">
             <div className="card-header">
               <h5 className="mb-0">Example Commands</h5>
             </div>
@@ -1029,30 +1531,30 @@ function App() {
                     </div>
                     <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("perform multiple sequence alignment on the uploaded sequences")} style={{cursor: 'pointer'}}>
                       "perform multiple sequence alignment on the uploaded sequences"
-                    </div>
+                </div>
                     <div className="small text-muted cursor-pointer" onClick={() => handleExampleClick("show me the alignment of these DNA sequences")} style={{cursor: 'pointer'}}>
                       "show me the alignment of these DNA sequences"
-                    </div>
-                  </div>
-                  
+            </div>
+          </div>
+          
                   <div className="mb-3">
                     <strong>🎯 Sequence Selection:</strong>
                     <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("from the sequence variants, pick 10 sequences randomly")} style={{cursor: 'pointer'}}>
                       "from the sequence variants, pick 10 sequences randomly"
-                    </div>
+            </div>
                     <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("select 5 sequences with the highest mutation rate")} style={{cursor: 'pointer'}}>
                       "select 5 sequences with the highest mutation rate"
-                    </div>
+                  </div>
                     <div className="small text-muted cursor-pointer" onClick={() => handleExampleClick("choose the most diverse sequences from the alignment")} style={{cursor: 'pointer'}}>
                       "choose the most diverse sequences from the alignment"
-                    </div>
+                  </div>
                   </div>
                   
                   <div className="mb-3">
                     <strong>🧪 Mutation Generation:</strong>
                     <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("mutate the sequence ATGCGATCG to create 96 variants")} style={{cursor: 'pointer'}}>
                       "mutate the sequence ATGCGATCG to create 96 variants"
-                    </div>
+                  </div>
                     <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("generate variants of this DNA sequence")} style={{cursor: 'pointer'}}>
                       "generate variants of this DNA sequence"
                     </div>
@@ -1109,13 +1611,13 @@ function App() {
                     <strong>🧬 Sequence Alignment:</strong>
                     <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("align sequences ACTGTTGAC ACTGCATCC")} style={{cursor: 'pointer'}}>
                       "align sequences ACTGTTGAC ACTGCATCC"
-                    </div>
+                  </div>
                     <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("align with clustal algorithm")} style={{cursor: 'pointer'}}>
                       "align with clustal algorithm"
-                    </div>
+                  </div>
                     <div className="small text-muted cursor-pointer" onClick={() => handleExampleClick("multiple sequence alignment")} style={{cursor: 'pointer'}}>
                       "multiple sequence alignment"
-                    </div>
+                  </div>
                   </div>
                   
                   <div className="mb-3">
@@ -1181,7 +1683,31 @@ function App() {
                   <li>Combine multiple steps in one command</li>
                   <li>Ask for vendor research and testing options</li>
                 </ul>
-              </div>
+            </div>
+          </div>
+        </div>
+          
+          <div className="card mt-3">
+            <div className="card-header">
+              <h5 className="mb-0">Available MCP Tools</h5>
+            </div>
+            <div className="card-body">
+              {availableTools.map((tool, index) => (
+                <div key={index} className="mb-3">
+                  <h6 className="text-primary">{tool.name}</h6>
+                  <p className="small text-muted mb-1">{tool.description}</p>
+                  {tool.parameters && (
+                    <div className="small">
+                      <strong>Parameters:</strong>
+                      <ul className="list-unstyled mt-1">
+                        {Object.entries(tool.parameters).map(([key, value]) => (
+                          <li key={key}><code>{key}</code>: {String(value)}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
           </div>
         </div>

@@ -5,33 +5,68 @@ from collections import Counter
 
 def parse_aligned_sequences(alignment_data: str) -> List[Dict[str, str]]:
     """Parse aligned sequences from string format."""
+    print(f"🔍 parse_aligned_sequences input: '{alignment_data}'")
     sequences = []
     current_name = ""
     current_sequence = ""
     
+    # Check if this is colon-separated format (name: sequence)
+    if ':' in alignment_data and not alignment_data.startswith('>'):
+        print(f"🔍 Detected colon-separated format")
+        # Parse colon-separated format
+        for line in alignment_data.strip().split('\n'):
+            line = line.strip()
+            print(f"🔍 Processing line: '{line}'")
+            if ':' in line:
+                parts = line.split(':', 1)
+                if len(parts) == 2:
+                    name = parts[0].strip()
+                    sequence = parts[1].strip()
+                    print(f"🔍 Parsed: name='{name}', sequence='{sequence}'")
+                    sequences.append({
+                        "name": name,
+                        "sequence": sequence
+                    })
+        print(f"🔍 Final parsed sequences: {sequences}")
+        return sequences
+    
+    print(f"🔍 Detected FASTA format")
+    # Parse FASTA format (with > headers)
     for line in alignment_data.strip().split('\n'):
         line = line.strip()
+        print(f"🔍 Processing line: '{line}'")
         if line.startswith('>'):
             # Save previous sequence if exists
             if current_name and current_sequence:
+                print(f"🔍 Adding sequence: name='{current_name}', sequence='{current_sequence}'")
                 sequences.append({
                     "name": current_name,
                     "sequence": current_sequence
                 })
-            # Start new sequence
-            current_name = line[1:].strip()
-            current_sequence = ""
+            # Start new sequence - check if sequence is on same line
+            parts = line[1:].split(' ', 1)  # Split on space, max 1 split
+            if len(parts) == 2:
+                # Sequence is on same line as header
+                current_name = parts[0].strip()
+                current_sequence = parts[1].strip()
+                print(f"🔍 Found sequence on same line: name='{current_name}', sequence='{current_sequence}'")
+            else:
+                # Sequence is on separate line
+                current_name = line[1:].strip()
+                current_sequence = ""
         else:
             # Add to current sequence
             current_sequence += line
     
     # Add the last sequence
     if current_name and current_sequence:
+        print(f"🔍 Adding final sequence: name='{current_name}', sequence='{current_sequence}'")
         sequences.append({
             "name": current_name,
             "sequence": current_sequence
         })
     
+    print(f"🔍 Final parsed sequences: {sequences}")
     return sequences
 
 def calculate_sequence_statistics(sequences: List[Dict[str, str]]) -> List[Dict[str, Any]]:

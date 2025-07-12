@@ -6,12 +6,24 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)](https://fastapi.tiangolo.com/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-An AI-powered web application for managing biotechnology workflows via natural language commands, featuring a Model Context Protocol (MCP) server for standardized bioinformatics operations with session management and history tracking.
+An AI-powered web application for managing biotechnology workflows via natural language commands, featuring interactive phylogenetic tree visualization, DNA synthesis vendor research, and comprehensive bioinformatics tools with session management and history tracking.
 
 ## 🚀 Features
 
+### 🌳 **Interactive Phylogenetic Tree Visualization**
+- **D3.js Tree Rendering**: Interactive phylogenetic trees with zoom and pan
+- **Newick Format Support**: Parse and display standard tree formats
+- **Tree Statistics**: Display comprehensive tree metrics and relationships
+- **Real-time Updates**: Trees update as you analyze new sequences
+
+### 🔬 **DNA Synthesis Vendor Research**
+- **Vendor Comparison**: Compare 7 major DNA synthesis vendors
+- **Pricing Analysis**: Real-time pricing ranges and service comparisons
+- **Service Matching**: Find vendors based on sequence length and quantity
+- **Recommendations**: AI-powered vendor selection advice
+
 ### 🤖 **Natural Language Commands**
-- **Intelligent Command Parsing**: Understand commands like "from the sequence variants, pick 10 sequences randomly and output them"
+- **Intelligent Command Parsing**: Understand commands like "visualize the variants in a phylogenetic tree"
 - **Multi-step Workflows**: Chain commands together for complex bioinformatics pipelines
 - **Context Awareness**: Maintains session history for continuous workflows
 
@@ -25,7 +37,6 @@ An AI-powered web application for managing biotechnology workflows via natural l
 - **Mutation Analysis**: Generate and analyze sequence variants
 - **Data Science Tools**: Statistical analysis and feature engineering
 - **Variant Selection**: Smart selection based on diversity, length, or custom criteria
-- **DNA Synthesis Research**: Vendor research and testing options
 - **Plasmid Visualization**: Interactive plasmid and vector visualization
 
 ### 🔄 **Session Management**
@@ -45,26 +56,27 @@ An AI-powered web application for managing biotechnology workflows via natural l
 DataBloom.AI/
 ├── frontend/                 # React frontend with natural language support
 │   ├── src/
-│   │   ├── components/      # React components including PlasmidVisualizer
+│   │   ├── components/      # React components including PhylogeneticTree
 │   │   ├── services/        # MCP API service with session management
 │   │   ├── utils/           # Command parser and utilities
 │   │   └── App.tsx         # Main application with drag-and-drop
 │   └── package.json
 ├── backend/                  # FastAPI + MCP server with session tracking
-│   ├── main_with_mcp.py    # FastAPI with natural language integration
+│   ├── main.py             # FastAPI with natural language integration
 │   ├── history_manager.py   # Session and history management
-│   ├── agent.py            # Command handling and routing
+│   ├── command_router.py   # Command handling and routing
 │   └── requirements.txt
 ├── tools/                    # Bioinformatics tool modules
 │   ├── mutations.py         # Sequence mutation and variant generation
 │   ├── alignment.py         # Sequence alignment tools
 │   ├── data_science.py      # Statistical analysis and visualization
 │   ├── variant_selection.py # Smart variant selection algorithms
+│   ├── phylogenetic_tree.py # Phylogenetic tree construction and analysis
+│   ├── dna_vendor_research.py # DNA synthesis vendor research
 │   ├── command_parser.py    # Natural language command parsing
 │   ├── command_executor.py  # Command execution engine
 │   ├── command_handler.py   # Combined parser and executor
-│   ├── plasmid_visualizer.py # Plasmid and vector visualization
-│   └── dna_vendor_research.py # DNA synthesis vendor research
+│   └── plasmid_visualizer.py # Plasmid and vector visualization
 ├── tests/                    # Test files and sample data
 │   └── sample_files/        # Example FASTA and CSV files
 ├── docs/                     # Documentation
@@ -72,7 +84,7 @@ DataBloom.AI/
 │   ├── ENHANCED_MCP_README.md
 │   ├── HISTORY_TRACKING.md
 │   └── NATURAL_LANGUAGE_GUIDE.md
-└── start-app.sh             # Complete startup script
+└── start-dev.sh             # Development startup script
 ```
 
 ## 📦 Installation & Setup
@@ -81,7 +93,6 @@ DataBloom.AI/
 
 - **Node.js** >= 16
 - **Python** >= 3.10
-- **Conda** (recommended for environment management)
 - **Git** (for cloning the repository)
 
 ### 1. Clone and Setup Repository
@@ -92,34 +103,45 @@ git clone https://github.com/yourusername/DataBloom.AI.git
 cd DataBloom.AI
 
 # Make startup script executable
-chmod +x start-app.sh
+chmod +x start-dev.sh
 ```
 
-### 2. Backend Setup
+### 2. Quick Start (Recommended)
+
+Use the provided startup script to run everything at once:
+
+```bash
+# From the project root
+./start-dev.sh
+```
+
+This script will:
+- ✅ Check prerequisites and dependencies
+- ✅ Install backend and frontend dependencies
+- ✅ Start the backend server with session management
+- ✅ Start the frontend development server
+- ✅ Wait for services to be ready
+- ✅ Open the application in your browser
+
+### 3. Manual Setup (Alternative)
+
+#### Backend Setup
 
 ```bash
 # Navigate to backend directory
 cd backend
 
-# Create conda environment (recommended)
-conda create -n databloom python=3.10
-conda activate databloom
-
-# Or use virtual environment
-python -m venv venv
-source venv/bin/activate  # macOS/Linux
-# venv\Scripts\activate   # Windows
-
 # Install Python dependencies
 pip install -r requirements.txt
 
-# Install additional bioinformatics tools
-conda install -c bioconda clustalo muscle mafft
-# Or on macOS:
-# brew install clustalo muscle mafft
+# Set up Python path for tools
+export PYTHONPATH="../tools:$PYTHONPATH"
+
+# Start the FastAPI server
+python main.py
 ```
 
-### 3. Frontend Setup
+#### Frontend Setup
 
 ```bash
 # Navigate to frontend directory
@@ -127,74 +149,6 @@ cd frontend
 
 # Install Node.js dependencies
 npm install
-```
-
-### 4. Environment Configuration
-
-Create a `.env` file in the backend directory:
-
-```bash
-cd backend
-touch .env
-```
-
-Add the following to `.env`:
-
-```env
-# API Keys (if using external services)
-OPENAI_API_KEY=your-openai-api-key
-DEEPSEEK_API_KEY=your-deepseek-api-key
-
-# Server Configuration
-MCP_LOG_LEVEL=INFO
-MCP_VALIDATION_STRICT=true
-
-# Session Management
-SESSION_TIMEOUT=3600
-MAX_SESSION_SIZE=1000
-
-# Database (if using)
-DATABASE_URL=sqlite:///./data.db
-```
-
-## 🚀 Running the Application
-
-### Option 1: Complete Startup (Recommended)
-
-Use the provided startup script to run everything at once:
-
-```bash
-# From the project root
-./start-app.sh
-```
-
-This script will:
-- ✅ Check prerequisites and dependencies
-- ✅ Start the backend MCP server with session management
-- ✅ Start the frontend development server
-- ✅ Wait for services to be ready
-- ✅ Open the application in your browser
-
-### Option 2: Manual Startup
-
-#### Start Backend with Session Management
-
-```bash
-# Navigate to backend
-cd backend
-
-# Activate conda environment
-conda activate databloom
-
-# Start the FastAPI server with MCP integration
-python main_with_mcp.py
-```
-
-#### Start Frontend
-
-```bash
-# Navigate to frontend
-cd frontend
 
 # Start development server
 npm run dev
@@ -492,37 +446,18 @@ curl -X POST http://localhost:8001/mcp/handle-natural-command \
 
 ## 🤝 Contributing
 
-1. **Fork the repository**
-2. **Create a feature branch**: `git checkout -b feature/natural-language`
-3. **Add your changes**: Follow the development guidelines above
-4. **Test thoroughly**: Run all tests and verify functionality
-5. **Submit a pull request**: Include detailed description of changes
-
-### Development Guidelines
-
-- **Follow existing patterns** for natural language command development
-- **Add comprehensive tests** for new features
-- **Update documentation** for new commands
-- **Validate inputs** using existing validation functions
-- **Include error handling** for all new commands
-- **Maintain session compatibility** for multi-step workflows
+Please read [CONTRIBUTING.md](CONTRIBUTING.md) for details on our code of conduct and the process for submitting pull requests.
 
 ## 📄 License
 
-MIT License - see [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## 🆘 Support
 
-- **Issues**: Create an issue on GitHub
-- **Documentation**: Check the README files in each directory
-- **API Docs**: Visit http://localhost:8001/docs when running
-- **Testing**: Use the provided test scripts to verify functionality
-- **Examples**: See `tests/sample_files/` for example data files
+- **Documentation**: Check the [docs/](docs/) directory for detailed guides
+- **Issues**: Report bugs and feature requests via GitHub Issues
+- **Discussions**: Join community discussions on GitHub Discussions
 
-## 🙏 Acknowledgments
+## 🔄 Changelog
 
-- **BioPython** for bioinformatics tools
-- **Plotly** for interactive visualizations
-- **FastAPI** for the backend framework
-- **React** for the frontend framework
-- **MCP** for the Model Context Protocol implementation
+See [CHANGELOG.md](CHANGELOG.md) for a complete list of changes and updates.

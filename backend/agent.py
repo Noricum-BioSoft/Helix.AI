@@ -132,6 +132,8 @@ def dna_vendor_research(command: str, sequence_length: int = None, quantity: str
 def phylogenetic_tree(aligned_sequences: str) -> Dict:
     """Create phylogenetic tree visualization from aligned sequences."""
     
+    print(f"🔧 Agent phylogenetic_tree called with aligned_sequences: '{aligned_sequences}'")
+    
     # Import the phylogenetic tree function
     import sys
     import os
@@ -139,6 +141,8 @@ def phylogenetic_tree(aligned_sequences: str) -> Dict:
     from phylogenetic_tree import run_phylogenetic_tree
     
     result = run_phylogenetic_tree(aligned_sequences)
+    
+    print(f"🔧 Agent phylogenetic_tree result: {result}")
     
     return {
         "text": result.get("text", "Phylogenetic tree created successfully."),
@@ -155,6 +159,11 @@ def phylogenetic_tree(aligned_sequences: str) -> Dict:
 def sequence_selection(aligned_sequences: str, selection_type: str = "random", num_sequences: int = 1) -> Dict:
     """Select sequences from aligned sequences based on various criteria (random, best_conservation, lowest_gaps, highest_gc, longest, shortest)."""
     
+    print(f"🔧 Agent sequence_selection called with:")
+    print(f"🔧 aligned_sequences: '{aligned_sequences}'")
+    print(f"🔧 selection_type: '{selection_type}'")
+    print(f"🔧 num_sequences: {num_sequences}")
+    
     # Import the sequence selection function
     import sys
     import os
@@ -162,6 +171,8 @@ def sequence_selection(aligned_sequences: str, selection_type: str = "random", n
     from sequence_selection import run_sequence_selection_raw
     
     result = run_sequence_selection_raw(aligned_sequences, selection_type, num_sequences)
+    
+    print(f"🔧 Agent sequence_selection result: {result}")
     
     return {
         "text": result.get("text", "Sequence selection completed successfully."),
@@ -237,7 +248,7 @@ llm = ChatDeepSeek(
 )
 
 memory = MemorySaver()
-model = init_chat_model("openai:gpt-4o")
+model = init_chat_model("openai:gpt-4o", max_tokens=4000)
 config = {"configurable": {"thread_id": "abc123"}}
 
 # Create a custom prompt that helps the agent choose the right tool
@@ -258,6 +269,11 @@ IMPORTANT:
 - When the user wants to select sequences from an alignment, use sequence_selection.
 - When the user wants to submit sequences for synthesis, use synthesis_submission.
 
+SEQUENCE SELECTION vs ALIGNMENT:
+- Use sequence_selection when the user says: "pick", "select", "choose", "from the", "randomly pick", "select from", "choose from"
+- Use sequence_alignment when the user says: "align", "alignment", "compare sequences", "multiple sequence alignment"
+- If the user says "pick 1 sequence" or "select 3 sequences" - this is sequence_selection, NOT alignment
+
 The user's request: {input}
 
 Think step by step about what tool to use, then respond accordingly."""
@@ -272,6 +288,14 @@ agent = create_react_agent(
 async def handle_command(command: str, session_id: str = "default"):
     print(f"[handle_command] command: {command}")
     print(f"[handle_command] session_id: {session_id}")
+
+    # Clear agent memory to prevent context accumulation
+    try:
+        # Clear the memory for this session to prevent token bloat
+        memory.clear()
+        print(f"[handle_command] Cleared agent memory for session {session_id}")
+    except Exception as e:
+        print(f"[handle_command] Could not clear memory: {e}")
 
     # Check if this is a vendor research command
     vendor_keywords = ['order', 'vendor', 'synthesis', 'test', 'assay', 'expression', 'function', 'binding']

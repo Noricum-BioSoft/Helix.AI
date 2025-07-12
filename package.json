@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "phylotree": "^2.1.0",
+    "react-phylotree": "^0.5.0"
+  }
+}
