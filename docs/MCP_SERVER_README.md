@@ -1,6 +1,6 @@
 # MCP Server Setup and Troubleshooting
 
-This document explains how the Model Context Protocol (MCP) server works in DataBloom.AI and how to troubleshoot common issues.
+This document explains how the Model Context Protocol (MCP) server works in Helix.AI and how to troubleshoot common issues.
 
 ## Overview
 

@@ -1,6 +1,6 @@
 # History Tracking System
 
-The DataBloom.AI backend now includes a comprehensive history tracking system that maintains context across user interactions. This allows the system to remember previous results and use them in subsequent operations.
+The Helix.AI backend now includes a comprehensive history tracking system that maintains context across user interactions. This allows the system to remember previous results and use them in subsequent operations.
 
 ## Overview
 
@@ -261,4 +261,4 @@ tools/
 4. **Session Management**: Organizes operations by user sessions
 5. **Analytics**: Provides insights into tool usage and operation patterns
 
-The history tracking system transforms DataBloom.AI from a simple tool executor into a comprehensive bioinformatics workflow platform that can handle complex, multi-step analyses while maintaining full context and history. 
+The history tracking system transforms Helix.AI from a simple tool executor into a comprehensive bioinformatics workflow platform that can handle complex, multi-step analyses while maintaining full context and history. 

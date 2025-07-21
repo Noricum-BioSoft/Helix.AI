@@ -212,6 +212,22 @@ def synthesis_submission(sequences: str, vendor_preference: str = None, quantity
 
 
 @tool
+def create_session() -> Dict:
+    """Create a new session for tracking user interactions. Use this when the user wants to start a new session or create a new experiment."""
+    
+    import uuid
+    
+    session_id = str(uuid.uuid4())
+    
+    return {
+        "text": f"Session created successfully with ID: {session_id}",
+        "input": {},
+        "output": {"session_id": session_id},
+        "plot": {}
+    }
+
+
+@tool
 def plasmid_visualization(vector_name: str, cloning_sites: str, insert_sequence: str) -> Dict:
     """Generate plasmid visualization data from vector name, cloning sites, and insert sequence."""
     
@@ -285,7 +301,7 @@ agent = create_react_agent(
 )
 
 
-async def handle_command(command: str, session_id: str = "default"):
+async def handle_command(command: str, session_id: str = "default", session_context: Dict = None):
     print(f"[handle_command] command: {command}")
     print(f"[handle_command] session_id: {session_id}")
 

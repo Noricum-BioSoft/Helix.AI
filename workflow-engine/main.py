@@ -84,7 +84,7 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down Workflow Engine")
 
 app = FastAPI(
-    title="DataBloom.AI Workflow Engine",
+    title="Helix.AI Workflow Engine",
     description="Workflow orchestration engine for bioinformatics pipelines",
     version="1.0.0",
     lifespan=lifespan

@@ -1,9 +1,9 @@
 #!/bin/bash
 
-# DataBloom.AI Development Startup Script
+# Helix.AI Development Startup Script
 # Simplified script for development and testing
 
-echo "🚀 Starting DataBloom.AI Development Environment..."
+echo "🚀 Starting Helix.AI Development Environment..."
 echo "=================================================="
 
 # Check if required directories exist
@@ -32,7 +32,7 @@ cd backend
 
 # Install essential packages
 echo "   Installing essential packages..."
-python -m pip install fastapi uvicorn langchain langgraph pydantic requests pandas
+python -m pip install fastapi uvicorn langchain langgraph pydantic requests pandas seaborn
 
 # Test plasmid visualizer import
 echo "   Testing plasmid visualizer..."
@@ -54,7 +54,7 @@ cd ..
 echo "🔧 Starting backend server..."
 cd backend
 export PYTHONPATH="../tools:$PYTHONPATH"
-python main.py &
+python main_with_mcp.py &
 BACKEND_PID=$!
 cd ..
 
@@ -89,7 +89,7 @@ else
 fi
 
 echo ""
-echo "🎉 DataBloom.AI Development Environment is ready!"
+echo "🎉 Helix.AI Development Environment is ready!"
 echo "================================================"
 echo "🌐 Frontend: http://localhost:5173"
 echo "🔧 Backend:  http://localhost:8001"

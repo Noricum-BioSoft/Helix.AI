@@ -121,7 +121,7 @@ def test_dependencies():
 
 async def main():
     """Main test function."""
-    print("DataBloom.AI MCP Server Integration Test")
+    print("Helix.AI MCP Server Integration Test")
     print("=" * 50)
     
     # Test dependencies first

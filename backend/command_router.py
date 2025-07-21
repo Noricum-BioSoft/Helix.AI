@@ -7,6 +7,9 @@ import os
 project_root = os.path.join(os.path.dirname(__file__), '..')
 sys.path.insert(0, project_root)
 
+# Import directed evolution handler
+from directed_evolution_handler import DirectedEvolutionHandler
+
 class CommandRouter:
     """Simple keyword-based command router to replace ChatGPT."""
     
@@ -39,8 +42,15 @@ class CommandRouter:
             'plasmid_visualization': {
                 'keywords': ['plasmid', 'vector', 'cloning'],
                 'description': 'Visualize plasmid constructs'
+            },
+            'directed_evolution': {
+                'keywords': ['directed evolution', 'evolution', 'protein engineering', 'dbtl', 'design build test learn'],
+                'description': 'Directed evolution for protein engineering'
             }
         }
+        
+        # Initialize directed evolution handler
+        self.de_handler = DirectedEvolutionHandler()
     
     def route_command(self, command: str, session_context: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
         """
@@ -57,20 +67,20 @@ class CommandRouter:
             print(f"🔧 Command router: Matched 'phylogenetic tree' -> phylogenetic_tree")
             return 'phylogenetic_tree', self._extract_parameters(command, 'phylogenetic_tree', session_context)
         
-        # Check for sequence alignment
-        if any(phrase in command_lower for phrase in ['align', 'alignment', 'compare sequences', 'multiple sequence alignment']):
-            print(f"🔧 Command router: Matched 'alignment' -> sequence_alignment")
-            return 'sequence_alignment', self._extract_parameters(command, 'sequence_alignment', session_context)
+        # Check for sequence selection (pick, select, choose) - HIGH PRIORITY
+        if any(phrase in command_lower for phrase in ['pick', 'select', 'choose']) and not any(phrase in command_lower for phrase in ['phylogenetic', 'evolutionary']):
+            print(f"🔧 Command router: Matched 'selection' -> select_variants")
+            return 'select_variants', self._extract_parameters(command, 'select_variants', session_context)
         
         # Check for mutation/variant generation
         if any(phrase in command_lower for phrase in ['mutate', 'mutation', 'variant', 'create variants', 'generate variants']):
             print(f"🔧 Command router: Matched 'mutation' -> mutate_sequence")
             return 'mutate_sequence', self._extract_parameters(command, 'mutate_sequence', session_context)
         
-        # Check for sequence selection (pick, select, choose)
-        if any(phrase in command_lower for phrase in ['pick', 'select', 'choose']) and not any(phrase in command_lower for phrase in ['phylogenetic', 'evolutionary']):
-            print(f"🔧 Command router: Matched 'selection' -> sequence_selection")
-            return 'sequence_selection', self._extract_parameters(command, 'sequence_selection', session_context)
+        # Check for sequence alignment (more specific to avoid false matches)
+        if any(phrase in command_lower for phrase in ['align sequences', 'sequence alignment', 'compare sequences', 'multiple sequence alignment', 'perform alignment']):
+            print(f"🔧 Command router: Matched 'alignment' -> sequence_alignment")
+            return 'sequence_alignment', self._extract_parameters(command, 'sequence_alignment', session_context)
         
         # Check for vendor research
         if any(phrase in command_lower for phrase in ['order', 'vendor', 'synthesis', 'test', 'assay', 'expression', 'function', 'binding']):
@@ -87,9 +97,24 @@ class CommandRouter:
             print(f"🔧 Command router: Matched 'synthesis' -> synthesis_submission")
             return 'synthesis_submission', self._extract_parameters(command, 'synthesis_submission', session_context)
         
-        # Default fallback
-        print(f"🔧 Command router: No specific match, using general command execution")
-        return "general_command", {"command": command}
+        # Check for session creation
+        if any(phrase in command_lower for phrase in ['create session', 'new session', 'start session', 'initialize session']):
+            print(f"🔧 Command router: Matched 'session creation' -> session_creation")
+            return 'session_creation', {"command": command}
+        
+        # Check for directed evolution
+        if any(phrase in command_lower for phrase in ['directed evolution', 'evolution', 'protein engineering', 'dbtl', 'design build test learn']):
+            print(f"🔧 Command router: Matched 'directed evolution' -> directed_evolution")
+            return 'directed_evolution', self._extract_parameters(command, 'directed_evolution', session_context)
+        
+        # Default fallback - try to route to sequence_alignment for alignment-like commands
+        if any(phrase in command_lower for phrase in ['align', 'alignment', 'sequences']):
+            print(f"🔧 Command router: Defaulting to sequence_alignment for alignment command")
+            return "sequence_alignment", self._extract_parameters(command, 'sequence_alignment', session_context)
+        
+        # For other commands, try to use the natural command handler
+        print(f"🔧 Command router: No specific match, using natural command handler")
+        return "handle_natural_command", {"command": command, "session_id": session_context.get("session_id", "")}
     
     def _extract_parameters(self, command: str, tool_name: str, session_context: Dict[str, Any]) -> Dict[str, Any]:
         """Extract parameters for the specific tool."""
@@ -110,7 +135,13 @@ class CommandRouter:
         elif tool_name == "sequence_alignment":
             # Use sequences from session context or extract from command
             if session_context.get("mutated_sequences"):
-                sequences = "\n".join([f">seq_{i+1}\n{seq}" for i, seq in enumerate(session_context["mutated_sequences"])])
+                # Format as proper FASTA with each sequence on its own line after header
+                fasta_sequences = []
+                for i, seq in enumerate(session_context["mutated_sequences"]):
+                    fasta_sequences.append(f">seq_{i+1}")
+                    fasta_sequences.append(seq)
+                sequences = "\n".join(fasta_sequences)
+                print(f"[DEBUG] FASTA string sent to alignment tool:\n{sequences}")
                 return {"sequences": sequences}
             else:
                 # Extract sequences from command
@@ -120,26 +151,27 @@ class CommandRouter:
                 else:
                     return {"sequences": ">seq1\nATGCGATCG\n>seq2\nATGCGATC"}
         
-        elif tool_name == "sequence_selection":
+        elif tool_name == "select_variants":
             # Extract selection parameters
-            selection_type = "random"
+            selection_criteria = "diversity"
             if "best" in command.lower() or "conservation" in command.lower():
-                selection_type = "best_conservation"
-            elif "gap" in command.lower():
-                selection_type = "lowest_gaps"
-            elif "gc" in command.lower():
-                selection_type = "highest_gc"
+                selection_criteria = "conservation"
+            elif "random" in command.lower():
+                selection_criteria = "random"
+            elif "length" in command.lower():
+                selection_criteria = "length"
             
-            num_match = re.search(r'(\d+)\s+sequences?', command)
-            num_sequences = int(num_match.group(1)) if num_match else 1
+            num_match = re.search(r'(\d+)\s+(variants?|sequences?)', command)
+            num_variants = int(num_match.group(1)) if num_match else 5
             
-            # Use aligned sequences from session context
-            aligned_sequences = session_context.get("aligned_sequences", "")
+            # Get session ID from session context
+            session_id = session_context.get("session_id", "default")
             
             return {
-                "aligned_sequences": aligned_sequences,
-                "selection_type": selection_type,
-                "num_sequences": num_sequences
+                "session_id": session_id,
+                "selection_criteria": selection_criteria,
+                "num_variants": num_variants,
+                "custom_filters": None
             }
         
         elif tool_name == "phylogenetic_tree":
@@ -188,6 +220,37 @@ class CommandRouter:
                 "vector_name": "pUC19",
                 "cloning_sites": "EcoRI, BamHI, HindIII",
                 "insert_sequence": session_context.get("selected_sequences", ["ATGCGATCG"])[0] if session_context.get("selected_sequences") else "ATGCGATCG"
+            }
+        
+        elif tool_name == "directed_evolution":
+            # Extract directed evolution parameters
+            command_lower = command.lower()
+            target_property = "thermal_stability"
+            if "activity" in command_lower:
+                target_property = "activity"
+            elif "expression" in command_lower:
+                target_property = "expression"
+            
+            library_size = 50
+            size_match = re.search(r'(\d+)\s+(mutants?|variants?)', command)
+            if size_match:
+                library_size = int(size_match.group(1))
+            
+            strategy = "rational"
+            if "random" in command_lower:
+                strategy = "random"
+            
+            num_cycles = 1
+            cycles_match = re.search(r'(\d+)\s+cycles?', command)
+            if cycles_match:
+                num_cycles = int(cycles_match.group(1))
+            
+            return {
+                "target_property": target_property,
+                "library_size": library_size,
+                "strategy": strategy,
+                "num_cycles": num_cycles,
+                "command": command
             }
         
         else:

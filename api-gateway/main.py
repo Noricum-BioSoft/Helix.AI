@@ -43,8 +43,8 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down API Gateway")
 
 app = FastAPI(
-    title="DataBloom.AI API Gateway",
-    description="API Gateway for DataBloom.AI microservices",
+    title="Helix.AI API Gateway",
+    description="API Gateway for Helix.AI microservices",
     version="1.0.0",
     lifespan=lifespan
 )

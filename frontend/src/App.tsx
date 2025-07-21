@@ -3,7 +3,7 @@ import { MSAView } from 'react-msaview';
 import Plot from 'react-plotly.js';
 import { mcpApi } from './services/mcpApi';
 import { CommandParser, ParsedCommand } from './utils/commandParser';
-import { PlasmidVisualizer } from './components/PlasmidVisualizer';
+import { PlasmidDataVisualizer } from './components/PlasmidVisualizer';
 import { PhylogeneticTree } from './components/PhylogeneticTree';
 
 import 'bootstrap/dist/css/bootstrap.min.css';
@@ -140,7 +140,7 @@ function App() {
   };
 
   const handleSubmit = async () => {
-    if (!command.trim() || !sessionId) return;
+    if (!command.trim()) return;
     
     setLoading(true);
     
@@ -168,7 +168,7 @@ function App() {
       if (commandMode === 'natural') {
         // Use natural language command handling
         console.log('Calling handleNaturalCommand...');
-        response = await mcpApi.executeCommand(finalCommand, sessionId);
+        response = await mcpApi.executeCommand(finalCommand, sessionId || undefined);
         console.log('Natural command response:', response);
       } else {
         // Use structured command parsing
@@ -176,30 +176,36 @@ function App() {
         
         switch (parsedCommand.type) {
           case 'sequence_alignment':
-            response = await mcpApi.sequenceAlignment(parsedCommand.parameters as any, sessionId);
+            response = await mcpApi.sequenceAlignment(parsedCommand.parameters as any, sessionId || undefined);
             break;
             
           case 'mutate_sequence':
-            response = await mcpApi.mutateSequence(parsedCommand.parameters as any, sessionId);
+            response = await mcpApi.mutateSequence(parsedCommand.parameters as any, sessionId || undefined);
             break;
             
           case 'analyze_sequence_data':
-            response = await mcpApi.analyzeSequenceData(parsedCommand.parameters as any, sessionId);
+            response = await mcpApi.analyzeSequenceData(parsedCommand.parameters as any, sessionId || undefined);
             break;
             
           case 'visualize_alignment':
-            response = await mcpApi.visualizeAlignment(parsedCommand.parameters as any, sessionId);
+            response = await mcpApi.visualizeAlignment(parsedCommand.parameters as any, sessionId || undefined);
             break;
             
           case 'dna_vendor_research':
-            response = await mcpApi.executeCommand(command, sessionId);
+            response = await mcpApi.executeCommand(command, sessionId || undefined);
             break;
             
           default:
             // Fallback to general command execution
-            response = await mcpApi.executeCommand(command, sessionId);
+            response = await mcpApi.executeCommand(command, sessionId || undefined);
             break;
         }
+      }
+      
+      // Update session ID if the backend created one automatically
+      if ((response as any).session_id && !sessionId) {
+        setSessionId((response as any).session_id);
+        console.log('Session created automatically by backend:', (response as any).session_id);
       }
       
       // Update workflow context based on the response
@@ -603,6 +609,61 @@ function App() {
             );
           }
           
+          // Handle plasmid visualization results
+          if (lastToolMsg.name === 'plasmid_visualization' && toolResult.plasmid_data) {
+            return (
+              <div>
+                {toolResult.text && (
+                  <pre className="bg-light p-3 border rounded mb-3">{toolResult.text}</pre>
+                )}
+                <div className="bg-light p-3 border rounded mb-3">
+                  <h5>Plasmid Visualization</h5>
+                  <div className="row">
+                    <div className="col-md-6">
+                      <h6>Plasmid Details</h6>
+                      <ul className="list-unstyled">
+                        <li><strong>Name:</strong> {toolResult.plasmid_data.name}</li>
+                        <li><strong>Size:</strong> {toolResult.plasmid_data.size} bp</li>
+                        <li><strong>Description:</strong> {toolResult.plasmid_data.description}</li>
+                        <li><strong>Visualization Type:</strong> {toolResult.visualization_type}</li>
+                      </ul>
+                    </div>
+                    <div className="col-md-6">
+                      <h6>Features</h6>
+                      {toolResult.plasmid_data.features && toolResult.plasmid_data.features.length > 0 ? (
+                        <ul className="list-unstyled">
+                          {toolResult.plasmid_data.features.map((feature: any, index: number) => (
+                            <li key={index}>
+                              <strong>{feature.name}:</strong> {feature.description} 
+                              (position {feature.start}-{feature.end})
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="text-muted">No features defined</p>
+                      )}
+                    </div>
+                  </div>
+                  {toolResult.metadata && (
+                    <div className="mt-3">
+                      <h6>Input Parameters</h6>
+                      <div className="row">
+                        {Object.entries(toolResult.metadata).map(([key, value]) => (
+                          <div key={key} className="col-md-6 mb-2">
+                            <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <div className="my-3">
+                  <PlasmidDataVisualizer data={toolResult.plasmid_data} />
+                </div>
+              </div>
+            );
+          }
+          
           // Fallback: show any tool result as text
           if (toolResult.text) {
             return (
@@ -660,6 +721,62 @@ function App() {
       }
       // --- END NEW ---
       
+      // --- NEW: Handle plasmid visualization results directly in actualResult ---
+      if (actualResult && actualResult.plasmid_data) {
+        return (
+          <div>
+            {actualResult.text && (
+              <pre className="bg-light p-3 border rounded mb-3">{actualResult.text}</pre>
+            )}
+            <div className="bg-light p-3 border rounded mb-3">
+              <h5>Plasmid Visualization</h5>
+              <div className="row">
+                <div className="col-md-6">
+                  <h6>Plasmid Details</h6>
+                  <ul className="list-unstyled">
+                    <li><strong>Name:</strong> {actualResult.plasmid_data.name}</li>
+                    <li><strong>Size:</strong> {actualResult.plasmid_data.size} bp</li>
+                    <li><strong>Description:</strong> {actualResult.plasmid_data.description}</li>
+                    <li><strong>Visualization Type:</strong> {actualResult.visualization_type}</li>
+                  </ul>
+                </div>
+                <div className="col-md-6">
+                  <h6>Features</h6>
+                  {actualResult.plasmid_data.features && actualResult.plasmid_data.features.length > 0 ? (
+                    <ul className="list-unstyled">
+                      {actualResult.plasmid_data.features.map((feature: any, index: number) => (
+                        <li key={index}>
+                          <strong>{feature.name}:</strong> {feature.description} 
+                          (position {feature.start}-{feature.end})
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-muted">No features defined</p>
+                  )}
+                </div>
+              </div>
+              {actualResult.metadata && (
+                <div className="mt-3">
+                  <h6>Input Parameters</h6>
+                  <div className="row">
+                    {Object.entries(actualResult.metadata).map(([key, value]) => (
+                      <div key={key} className="col-md-6 mb-2">
+                        <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="my-3">
+              <PlasmidDataVisualizer data={actualResult.plasmid_data} />
+            </div>
+          </div>
+        );
+      }
+      // --- END NEW ---
+
       // --- NEW: Handle alignment in ToolMessage for natural language commands ---
       // Check if messages is in actualResult (nested) or directly in output
       const messages = actualResult.messages || output.messages;
@@ -828,6 +945,61 @@ function App() {
                       </div>
                     </div>
                   )}
+                </div>
+              );
+            }
+            
+            // Handle plasmid visualization results
+            if (lastToolMsg.name === 'plasmid_visualization' && toolResult.plasmid_data) {
+              return (
+                <div>
+                  {toolResult.text && (
+                    <pre className="bg-light p-3 border rounded mb-3">{toolResult.text}</pre>
+                  )}
+                  <div className="bg-light p-3 border rounded mb-3">
+                    <h5>Plasmid Visualization</h5>
+                    <div className="row">
+                      <div className="col-md-6">
+                        <h6>Plasmid Details</h6>
+                        <ul className="list-unstyled">
+                          <li><strong>Name:</strong> {toolResult.plasmid_data.name}</li>
+                          <li><strong>Size:</strong> {toolResult.plasmid_data.size} bp</li>
+                          <li><strong>Description:</strong> {toolResult.plasmid_data.description}</li>
+                          <li><strong>Visualization Type:</strong> {toolResult.visualization_type}</li>
+                        </ul>
+                      </div>
+                      <div className="col-md-6">
+                        <h6>Features</h6>
+                        {toolResult.plasmid_data.features && toolResult.plasmid_data.features.length > 0 ? (
+                          <ul className="list-unstyled">
+                            {toolResult.plasmid_data.features.map((feature: any, index: number) => (
+                              <li key={index}>
+                                <strong>{feature.name}:</strong> {feature.description} 
+                                (position {feature.start}-{feature.end})
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="text-muted">No features defined</p>
+                        )}
+                      </div>
+                    </div>
+                    {toolResult.metadata && (
+                      <div className="mt-3">
+                        <h6>Input Parameters</h6>
+                        <div className="row">
+                          {Object.entries(toolResult.metadata).map(([key, value]) => (
+                            <div key={key} className="col-md-6 mb-2">
+                              <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <div className="my-3">
+                    <PlasmidDataVisualizer data={toolResult.plasmid_data} />
+                  </div>
                 </div>
               );
             }
@@ -1032,6 +1204,69 @@ function App() {
               </ul>
             </div>
           ) : null}
+          
+          {/* --- NEW: Handle plasmid visualization results directly in actualResult --- */}
+          {(() => {
+            console.log('Checking for plasmid data in actualResult:', actualResult);
+            if (actualResult && actualResult.plasmid_data) {
+              console.log('Found plasmid visualization data directly in actualResult:', actualResult.plasmid_data);
+              console.log('About to render PlasmidDataVisualizer component');
+              console.log('DEBUG: ActualResult structure:', JSON.stringify(actualResult, null, 2));
+              return true;
+            }
+            return false;
+          })() && (
+            <div>
+              {actualResult.text && (
+                <pre className="bg-light p-3 border rounded mb-3">{actualResult.text}</pre>
+              )}
+              <div className="bg-light p-3 border rounded mb-3">
+                <h5>Plasmid Visualization</h5>
+                <div className="row">
+                  <div className="col-md-6">
+                    <h6>Plasmid Details</h6>
+                    <ul className="list-unstyled">
+                      <li><strong>Name:</strong> {actualResult.plasmid_data.name}</li>
+                      <li><strong>Size:</strong> {actualResult.plasmid_data.size} bp</li>
+                      <li><strong>Description:</strong> {actualResult.plasmid_data.description}</li>
+                      <li><strong>Visualization Type:</strong> {actualResult.visualization_type}</li>
+                    </ul>
+                  </div>
+                  <div className="col-md-6">
+                    <h6>Features</h6>
+                    {actualResult.plasmid_data.features && actualResult.plasmid_data.features.length > 0 ? (
+                      <ul className="list-unstyled">
+                        {actualResult.plasmid_data.features.map((feature: any, index: number) => (
+                          <li key={index}>
+                            <strong>{feature.name}:</strong> {feature.description} 
+                            (position {feature.start}-{feature.end})
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-muted">No features defined</p>
+                    )}
+                  </div>
+                </div>
+                {actualResult.metadata && (
+                  <div className="mt-3">
+                    <h6>Input Parameters</h6>
+                    <div className="row">
+                      {Object.entries(actualResult.metadata).map(([key, value]) => (
+                        <div key={key} className="col-md-6 mb-2">
+                          <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div className="my-3">
+                <PlasmidDataVisualizer data={actualResult.plasmid_data} />
+              </div>
+            </div>
+          )}
+          {/* --- END NEW --- */}
         </div>
       );
     }
@@ -1289,15 +1524,12 @@ function App() {
     <div className="container py-5">
       <div className="row">
         <div className="col-md-8">
-          <h1 className="mb-4">DataBloom.AI Bioinformatics Interface</h1>
+          <h1 className="mb-4">Helix.AI Bioinformatics Interface</h1>
           
           {/* Navigation Tabs */}
           <Nav variant="tabs" activeKey={activeTab} onSelect={(k) => setActiveTab(k || 'command')} className="mb-4">
             <Nav.Item>
               <Nav.Link eventKey="command">Command Interface</Nav.Link>
-            </Nav.Item>
-            <Nav.Item>
-              <Nav.Link eventKey="plasmid">Plasmid Visualizer</Nav.Link>
             </Nav.Item>
           </Nav>
           
@@ -1448,7 +1680,7 @@ function App() {
               handleSubmit();
             }
           }}
-          placeholder={commandMode === 'natural'
+          placeholder={commandMode === 'natural' 
             ? `Enter natural language command (multi-line supported, Ctrl+Enter to submit)\nExample for FASTA:\n>seq1\nATCGATCGATCG\n>seq2\nATCGATCGATCG`
             : `Enter your bioinformatics command (multi-line supported, Ctrl+Enter to submit)\nExample for FASTA:\n>seq1\nATCGATCGATCG\n>seq2\nATCGATCGATCG`
           }
@@ -1508,9 +1740,7 @@ function App() {
           ))}
             </Tab.Pane>
             
-            <Tab.Pane eventKey="plasmid" active={activeTab === 'plasmid'}>
-              <PlasmidVisualizer sessionId={sessionId || undefined} />
-            </Tab.Pane>
+
           </Tab.Content>
           </div>
 
@@ -1604,6 +1834,32 @@ function App() {
                       "align sequences and find synthesis vendors with testing options"
                     </div>
                   </div>
+                  
+                  <div className="mb-3">
+                    <strong>🔬 Plasmid Visualization:</strong>
+                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("Visualize plasmid pUC19 with EcoRI site and insert ATGCGATCG")} style={{cursor: 'pointer'}}>
+                      "Visualize plasmid pUC19 with EcoRI site and insert ATGCGATCG"
+                    </div>
+                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("Create plasmid visualization for pBR322 with BamHI site")} style={{cursor: 'pointer'}}>
+                      "Create plasmid visualization for pBR322 with BamHI site"
+                    </div>
+                    <div className="small text-muted cursor-pointer" onClick={() => handleExampleClick("Show plasmid map with cloning sites and insert sequence")} style={{cursor: 'pointer'}}>
+                      "Show plasmid map with cloning sites and insert sequence"
+                    </div>
+                  </div>
+                  
+                  <div className="mb-3">
+                    <strong>🔬 Plasmid Visualization:</strong>
+                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("Visualize plasmid pUC19 with EcoRI site and insert ATGCGATCG")} style={{cursor: 'pointer'}}>
+                      "Visualize plasmid pUC19 with EcoRI site and insert ATGCGATCG"
+                    </div>
+                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("Create plasmid visualization for pBR322 with BamHI site")} style={{cursor: 'pointer'}}>
+                      "Create plasmid visualization for pBR322 with BamHI site"
+                    </div>
+                    <div className="small text-muted cursor-pointer" onClick={() => handleExampleClick("Show plasmid map with cloning sites and insert sequence")} style={{cursor: 'pointer'}}>
+                      "Show plasmid map with cloning sites and insert sequence"
+                    </div>
+                  </div>
                 </>
               ) : (
                 <>
@@ -1669,6 +1925,9 @@ function App() {
                     </div>
                     <div className="small text-muted cursor-pointer" onClick={() => handleExampleClick("show cloning sites in pUC19 vector")} style={{cursor: 'pointer'}}>
                       "show cloning sites in pUC19 vector"
+                    </div>
+                    <div className="small text-muted cursor-pointer" onClick={() => handleExampleClick("Visualize plasmid pUC19 with EcoRI site and insert ATGCGATCG")} style={{cursor: 'pointer'}}>
+                      "Visualize plasmid pUC19 with EcoRI site and insert ATGCGATCG"
                     </div>
                   </div>
                 </>

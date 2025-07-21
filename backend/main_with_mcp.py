@@ -14,7 +14,7 @@ sys.path.append(str(Path(__file__).parent))
 from agent import handle_command
 from history_manager import history_manager
 
-app = FastAPI(title="DataBloom.AI Bioinformatics API", version="1.0.0")
+app = FastAPI(title="Helix.AI Bioinformatics API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -94,6 +94,17 @@ async def create_session(req: SessionRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/create_session")
+async def create_session_alias():
+    """Alias for /session/create to support frontend compatibility."""
+    try:
+        session_id = history_manager.create_session()
+        return {
+            "session_id": session_id
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/session/{session_id}")
 async def get_session_info(session_id: str):
     """Get session information and history."""
@@ -119,22 +130,58 @@ async def execute(req: CommandRequest):
         if not req.session_id:
             req.session_id = history_manager.create_session()
         
-        # Execute command
-        result = await handle_command(req.command)
+        # Get session context from history manager
+        session_context = {}
+        if hasattr(history_manager, 'sessions') and req.session_id in history_manager.sessions:
+            session_context = history_manager.sessions[req.session_id]
         
-        # Track in history
-        history_manager.add_history_entry(
-            req.session_id,
-            req.command,
-            "general_command",
-            result
-        )
+        # Use command router with session context
+        from command_router import CommandRouter
+        command_router = CommandRouter()
         
-        return {
-            "success": True,
-            "result": result,
-            "session_id": req.session_id
-        }
+        # Route the command to the appropriate tool
+        tool_name, parameters = command_router.route_command(req.command, session_context)
+        print(f"🔧 Routed command '{req.command}' to tool '{tool_name}' with parameters: {parameters}")
+        
+        # DEBUG: Print session context before tool call
+        print(f"🔧 [DEBUG] Session context before {tool_name} call:")
+        print(f"  Session ID: {req.session_id}")
+        print(f"  Session context keys: {list(session_context.keys()) if session_context else 'None'}")
+        if session_context and "mutated_sequences" in session_context:
+            print(f"  mutated_sequences count: {len(session_context['mutated_sequences'])}")
+        if session_context and "mutation_results" in session_context:
+            print(f"  mutation_results count: {len(session_context['mutation_results'])}")
+        
+        # Call the appropriate MCP tool
+        try:
+            result = await call_mcp_tool(tool_name, parameters)
+            
+            # Track in history with the correct tool name
+            history_manager.add_history_entry(
+                req.session_id,
+                req.command,
+                tool_name,  # Use the actual tool name instead of "general_command"
+                result
+            )
+            
+            return {
+                "success": True,
+                "result": result,
+                "session_id": req.session_id
+            }
+        except ValueError as e:
+            # Handle unknown tool errors gracefully
+            error_result = {
+                "status": "error",
+                "message": str(e),
+                "tool": tool_name,
+                "suggestion": "Try a different command or check available tools"
+            }
+            return {
+                "success": False,
+                "result": error_result,
+                "session_id": req.session_id
+            }
     except Exception as e:
         return {
             "success": False,
@@ -193,6 +240,31 @@ async def mutate_sequence_mcp(req: MutationRequest):
                 "mutation_rate": req.mutation_rate
             }
         )
+        # Store mutated sequences in session context for downstream steps
+        # Try to extract variants from result
+        variants = None
+        if isinstance(result, dict):
+            if "variants" in result:
+                variants = result["variants"]
+            elif "output" in result and isinstance(result["output"], dict) and "variants" in result["output"]:
+                variants = result["output"]["variants"]
+        if variants:
+            # Store in the in-memory session context
+            if hasattr(history_manager, 'sessions') and req.session_id in history_manager.sessions:
+                history_manager.sessions[req.session_id]["mutated_sequences"] = variants
+                # Also store as mutation_results for select_variants
+                history_manager.sessions[req.session_id]["mutation_results"] = variants
+                
+                # DEBUG: Print session contents after mutation
+                print(f"🔧 [DEBUG] After mutation - Session {req.session_id} contents:")
+                session_data = history_manager.sessions[req.session_id]
+                for key, value in session_data.items():
+                    if key in ["mutated_sequences", "mutation_results"]:
+                        print(f"  {key}: {len(value) if isinstance(value, list) else type(value)} items")
+                        if isinstance(value, list) and len(value) > 0:
+                            print(f"    First item: {value[0]}")
+                    else:
+                        print(f"  {key}: {type(value)}")
         
         return MCPResponse(success=True, result=result, session_id=req.session_id)
     except Exception as e:
@@ -228,6 +300,20 @@ async def analyze_sequence_data_mcp(req: AnalysisRequest):
 async def select_variants_mcp(req: VariantSelectionRequest):
     """Select variants from previous mutation results."""
     try:
+        # DEBUG: Print session contents before selection
+        print(f"🔧 [DEBUG] Before selection - Session {req.session_id} contents:")
+        if hasattr(history_manager, 'sessions') and req.session_id in history_manager.sessions:
+            session_data = history_manager.sessions[req.session_id]
+            for key, value in session_data.items():
+                if key in ["mutated_sequences", "mutation_results"]:
+                    print(f"  {key}: {len(value) if isinstance(value, list) else type(value)} items")
+                    if isinstance(value, list) and len(value) > 0:
+                        print(f"    First item: {value[0]}")
+                else:
+                    print(f"  {key}: {type(value)}")
+        else:
+            print(f"  Session {req.session_id} not found in history_manager.sessions")
+        
         # Add tools directory to path
         tools_path = str((Path(__file__).resolve().parent.parent / "tools").resolve())
         sys.path.insert(0, tools_path)
@@ -454,6 +540,15 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
         import bio
         return {"result": str(bio.align_and_visualize_fasta(None))}
     
+    elif tool_name == "select_variants":
+        import variant_selection
+        return variant_selection.run_variant_selection_raw(
+            arguments.get("session_id", ""),
+            arguments.get("selection_criteria", "diversity"),
+            arguments.get("num_variants", 10),
+            arguments.get("custom_filters", None)
+        )
+    
     elif tool_name == "plasmid_visualization":
         import plasmid_visualizer
         return plasmid_visualizer.run_plasmid_visualization_raw(
@@ -461,6 +556,19 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
             arguments.get("cloning_sites", ""),
             arguments.get("insert_sequence", "")
         )
+    
+    elif tool_name == "handle_natural_command":
+        # Use the natural command handler
+        import command_handler
+        command = arguments.get("command", "")
+        session_id = arguments.get("session_id", "")
+        return command_handler.handle_command_raw(command, session_id)
+    
+    elif tool_name == "phylogenetic_tree":
+        # Handle phylogenetic tree analysis
+        import phylogenetic_tree
+        aligned_sequences = arguments.get("aligned_sequences", "")
+        return phylogenetic_tree.run_phylogenetic_tree_raw(aligned_sequences)
     
     else:
         raise ValueError(f"Unknown tool: {tool_name}")
@@ -496,7 +604,7 @@ def parse_fasta_to_dataframe(fasta_content: str):
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
-    return {"status": "healthy", "service": "DataBloom.AI Bioinformatics API"}
+    return {"status": "healthy", "service": "Helix.AI Bioinformatics API"}
 
 if __name__ == "__main__":
     import uvicorn

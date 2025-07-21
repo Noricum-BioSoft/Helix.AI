@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Create a report to help us improve DataBloom.AI
+about: Create a report to help us improve Helix.AI
 title: '[BUG] '
 labels: ['bug']
 assignees: ''

@@ -1,6 +1,6 @@
 # Bioinformatics MCP Server
 
-This directory contains the Model Context Protocol (MCP) server implementation for bioinformatics tasks, integrated with your existing DataBloom.AI backend.
+This directory contains the Model Context Protocol (MCP) server implementation for bioinformatics tasks, integrated with your existing Helix.AI backend.
 
 ## Overview
 
@@ -253,4 +253,4 @@ When adding new bioinformatics tools:
 
 ## License
 
-This MCP server implementation is part of the DataBloom.AI project and follows the same license terms. 
+This MCP server implementation is part of the Helix.AI project and follows the same license terms. 

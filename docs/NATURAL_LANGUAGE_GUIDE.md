@@ -1,6 +1,6 @@
-# Natural Language Commands for DataBloom.AI
+# Natural Language Commands for Helix.AI
 
-This guide shows you how to interact with DataBloom.AI using natural language commands. The system understands various ways to express bioinformatics tasks and will automatically select the appropriate tools.
+This guide shows you how to interact with Helix.AI using natural language commands. The system understands various ways to express bioinformatics tasks and will automatically select the appropriate tools.
 
 ## Sequence Analysis Commands
 

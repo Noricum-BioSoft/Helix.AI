@@ -1,4 +1,4 @@
-# 🧬 DataBloom.AI - Bioinformatics AI Platform
+# 🧬 Helix.AI - Bioinformatics AI Platform
 
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Node.js](https://img.shields.io/badge/Node.js-16+-green.svg)](https://nodejs.org/)
@@ -99,8 +99,8 @@ DataBloom.AI/
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/DataBloom.AI.git
-cd DataBloom.AI
+git clone https://github.com/yourusername/Helix.AI.git
+cd Helix.AI
 
 # Make startup script executable
 chmod +x start-dev.sh
@@ -375,7 +375,7 @@ curl -X POST http://localhost:8001/mcp/handle-natural-command \
 1. **Import Errors**:
    ```bash
    # Ensure conda environment is activated
-   conda activate databloom
+   conda activate helix
    
    # Reinstall dependencies
    pip install -r requirements.txt

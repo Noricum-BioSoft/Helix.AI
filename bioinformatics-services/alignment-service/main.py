@@ -44,7 +44,7 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down Alignment Service")
 
 app = FastAPI(
-    title="DataBloom.AI Alignment Service",
+    title="Helix.AI Alignment Service",
     description="Sequence alignment service for bioinformatics workflows",
     version="1.0.0",
     lifespan=lifespan

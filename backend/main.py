@@ -105,6 +105,23 @@ async def handle_command_direct(command: str, session_id: str = "default"):
                 "plot": result.get("plot", {})
             }
         
+        elif tool_name == "directed_evolution":
+            # Handle directed evolution commands
+            if parameters.get("num_cycles", 1) > 1:
+                # Multi-cycle evolution
+                result = command_router.de_handler.handle_multi_cycle_evolution(parameters)
+            else:
+                # Single cycle evolution
+                result = command_router.de_handler.handle_start_evolution(parameters)
+            
+            return {
+                "text": result.get("message", "Directed evolution completed"),
+                "input": parameters,
+                "output": result,
+                "workflow_id": result.get("workflow_id"),
+                "results": result.get("results", {})
+            }
+        
         else:
             # Fallback to general command
             return {
