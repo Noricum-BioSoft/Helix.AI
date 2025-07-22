@@ -96,15 +96,15 @@ class CommandRouter:
             print(f"🔧 Command router: Matched 'vendor' -> dna_vendor_research")
             return 'dna_vendor_research', self._extract_parameters(command, 'dna_vendor_research', session_context)
         
-        # Check for plasmid visualization
-        if any(phrase in command_lower for phrase in ['plasmid', 'vector', 'cloning']):
-            print(f"🔧 Command router: Matched 'plasmid' -> plasmid_visualization")
-            return 'plasmid_visualization', self._extract_parameters(command, 'plasmid_visualization', session_context)
-        
         # Check for plasmid for representatives (HIGH PRIORITY - before general plasmid)
         if any(phrase in command_lower for phrase in ['insert representatives', 'express representatives', 'clone representatives', 'vector representatives', 'plasmid representatives']):
             print(f"🔧 Command router: Matched 'plasmid representatives' -> plasmid_for_representatives")
             return 'plasmid_for_representatives', self._extract_parameters(command, 'plasmid_for_representatives', session_context)
+        
+        # Check for plasmid visualization (HIGH PRIORITY - before alignment fallback)
+        if any(phrase in command_lower for phrase in ['plasmid', 'vector', 'cloning', 'insert', 'express', 'into vector', 'into plasmid']):
+            print(f"🔧 Command router: Matched 'plasmid' -> plasmid_visualization")
+            return 'plasmid_visualization', self._extract_parameters(command, 'plasmid_visualization', session_context)
         
         # Check for synthesis submission
         if any(phrase in command_lower for phrase in ['submit', 'synthesis', 'order sequences']):

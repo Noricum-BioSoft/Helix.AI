@@ -5,7 +5,6 @@ import { mcpApi } from './services/mcpApi';
 import { CommandParser, ParsedCommand } from './utils/commandParser';
 import { PlasmidDataVisualizer, PlasmidRepresentativesVisualizer } from './components/PlasmidVisualizer';
 import { PhylogeneticTree } from './components/PhylogeneticTree';
-import PlasmidViewerDemo from './components/PlasmidViewerDemo';
 
 import 'bootstrap/dist/css/bootstrap.min.css';
 import Modal from 'react-bootstrap/Modal';
@@ -40,7 +39,6 @@ function App() {
   const [uploadedFile, setUploadedFile] = useState<{ name: string; content: string } | null>(null);
   const [workflowContext, setWorkflowContext] = useState<WorkflowContext>({});
   const [isInitialized, setIsInitialized] = useState(false);
-  const [showPlasmidDemo, setShowPlasmidDemo] = useState(false);
 
   const handleExampleClick = (exampleCommand: string) => {
     setCommand(exampleCommand);
@@ -338,8 +336,7 @@ function App() {
       reader.onload = (event) => {
         const content = event.target?.result as string;
         setUploadedFile({ name: file.name, content });
-        // Update command placeholder to suggest what to do with the file
-        setCommand(`analyze the uploaded file ${file.name}`);
+        // Removed auto-population of command - let user decide what to do
       };
       reader.readAsText(file);
     }
@@ -773,7 +770,6 @@ function App() {
                       // Store plasmid data in workflow context and show plasmid viewer
                       console.log('Opening plasmid viewer with data:', toolResult.plasmid_data);
                       updateWorkflowContext('plasmid_visualization', toolResult.plasmid_data);
-                      setShowPlasmidDemo(true);
                     }}
                     style={{
                       fontSize: '1.1rem',
@@ -1654,26 +1650,41 @@ function App() {
   };
 
   return (
-    <div className="container py-5">
+    <div className="container-fluid py-4 px-5">
       <div className="row">
-        <div className="col-md-8">
-          <h1 className="mb-4">Helix.AI Bioinformatics Interface</h1>
-          
-
-          
-          {/* Server Status */}
-          <div className="mb-3">
-            <span className={`badge ${serverStatus === 'healthy' ? 'bg-success' : 'bg-danger'}`}>
-              Server: {serverStatus}
-            </span>
-            {sessionId && (
-              <span className="badge bg-info ms-2">
-                Session: {sessionId.substring(0, 8)}...
-              </span>
-            )}
+        <div className="col-md-9 pe-5">
+          {/* Header Row with Tips */}
+          <div className="row mb-4">
+            <div className="col-md-8">
+              <div className="row">
+                <div className="col-12">
+                  <h1 className="mb-0">Helix.AI</h1>
+                </div>
+                <div className="col-12 mt-2">
+                  <span className={`badge ${serverStatus === 'healthy' ? 'bg-success' : 'bg-danger'}`}>
+                    Server: {serverStatus}
+                  </span>
+                  {sessionId && (
+                    <span className="badge bg-info ms-2">
+                      Session: {sessionId.substring(0, 8)}...
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+            <div className="col-md-4">
+              {/* Tips Section - Spans both rows */}
+              <div className="small text-muted p-3 bg-light rounded border h-100">
+                <strong className="text-primary">💡 Tips:</strong>
+                <ul className="mb-0 mt-1">
+                  <li>Upload FASTA files by dragging and dropping</li>
+                  <li>Use natural language for complex workflows</li>
+                  <li>Combine multiple steps in one command</li>
+                  <li>Ask for vendor research and testing options</li>
+                </ul>
+              </div>
+            </div>
           </div>
-          
-
           
           {/* Workflow Context Display */}
           {(workflowContext.alignedSequences || workflowContext.selectedSequences || workflowContext.mutatedSequences || workflowContext.plasmidData) && (
@@ -1723,16 +1734,6 @@ function App() {
               >
                 🗑️ Clear Context
               </button>
-              <button 
-                className="btn btn-sm btn-outline-primary mt-2 ms-2"
-                onClick={() => {
-                  const testSequences = ">sequence1\nATGCGATCGATGCGATCG\n>sequence2\nATGCGATCGATGCGATC-\n>sequence3\nATGCGATCGATGCGATC-";
-                  setWorkflowContext(prev => ({ ...prev, alignedSequences: testSequences }));
-                  console.log('Test: Set aligned sequences in workflow context');
-                }}
-              >
-                🧪 Test Context
-              </button>
             </div>
           )}
 
@@ -1769,22 +1770,34 @@ function App() {
           className="form-control mb-3"
           value={command}
           onChange={(e) => setCommand(e.target.value)}
-          rows={command.split('\n').length < 4 ? 4 : command.split('\n').length}
-          style={{ resize: 'vertical', minHeight: 80 }}
+          rows={command.split('\n').length < 6 ? 6 : command.split('\n').length}
+          style={{ 
+            resize: 'vertical', 
+            minHeight: 120,
+            fontSize: '1rem',
+            fontFamily: 'monospace',
+            lineHeight: '1.4'
+          }}
           onKeyDown={(e) => {
             if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
               e.preventDefault();
               handleSubmit();
             }
           }}
-          placeholder="Enter your bioinformatics command (multi-line supported, Ctrl+Enter to submit)"
+          placeholder="visualize the phylogenetic tree"
         />
         <div className="text-center">
           <button 
             className="btn btn-primary btn-lg" 
             onClick={handleSubmit}
             disabled={loading}
-            style={{ padding: '12px 30px', fontSize: '1.1rem' }}
+            style={{ 
+              padding: '15px 40px', 
+              fontSize: '1.2rem',
+              fontWeight: '600',
+              borderRadius: '8px',
+              boxShadow: '0 4px 8px rgba(0,123,255,0.3)'
+            }}
           >
             {loading ? (
               <>
@@ -1820,9 +1833,7 @@ function App() {
         )}
       </div>
 
-
-
-          {/* History */}
+      {/* History */}
           {history.map((item, index) => (
         <div className="mt-4" key={index}>
           <div className="mb-2">
@@ -1838,118 +1849,105 @@ function App() {
           </div>
 
         {/* Sidebar with Available Tools */}
-        <div className="col-md-4">
+        <div className="col-md-3 ps-4">
           {/* Example Commands */}
-          <div className="card">
-            <div className="card-header">
-              <h5 className="mb-0">Example Commands</h5>
+          <div className="card mb-3">
+            <div className="card-header bg-primary text-white">
+              <h6 className="mb-0">💡 Example Commands</h6>
             </div>
-            <div className="card-body">
+            <div className="card-body p-3" style={{ maxHeight: '400px', overflowY: 'auto' }}>
               {commandMode === 'natural' ? (
                 <>
-                  <div className="mb-3">
-                    <strong>🧬 Sequence Analysis:</strong>
-                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("align these sequences: >seq1 ATGCGATCG >seq2 ATGCGATC")} style={{cursor: 'pointer'}}>
+                  <div className="mb-2">
+                    <strong className="text-primary">🧬 Sequence Analysis:</strong>
+                    <div className="small text-muted mb-1 cursor-pointer p-1 rounded" onClick={() => handleExampleClick("align these sequences: >seq1 ATGCGATCG >seq2 ATGCGATC")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "align these sequences: {'>'}seq1 ATGCGATCG {'>'}seq2 ATGCGATC"
                     </div>
-                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("perform multiple sequence alignment on the uploaded sequences")} style={{cursor: 'pointer'}}>
+                    <div className="small text-muted mb-1 cursor-pointer p-1 rounded" onClick={() => handleExampleClick("perform multiple sequence alignment on the uploaded sequences")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "perform multiple sequence alignment on the uploaded sequences"
                 </div>
-                    <div className="small text-muted cursor-pointer" onClick={() => handleExampleClick("show me the alignment of these DNA sequences")} style={{cursor: 'pointer'}}>
+                    <div className="small text-muted cursor-pointer p-1 rounded" onClick={() => handleExampleClick("show me the alignment of these DNA sequences")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "show me the alignment of these DNA sequences"
             </div>
           </div>
           
-                  <div className="mb-3">
-                    <strong>🎯 Sequence Selection:</strong>
-                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("from the sequence variants, pick 10 sequences randomly")} style={{cursor: 'pointer'}}>
+                  <div className="mb-2">
+                    <strong className="text-primary">🎯 Sequence Selection:</strong>
+                    <div className="small text-muted mb-1 cursor-pointer p-1 rounded" onClick={() => handleExampleClick("from the sequence variants, pick 10 sequences randomly")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "from the sequence variants, pick 10 sequences randomly"
             </div>
-                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("select 5 sequences with the highest mutation rate")} style={{cursor: 'pointer'}}>
+                    <div className="small text-muted mb-1 cursor-pointer p-1 rounded" onClick={() => handleExampleClick("select 5 sequences with the highest mutation rate")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "select 5 sequences with the highest mutation rate"
                   </div>
-                    <div className="small text-muted cursor-pointer" onClick={() => handleExampleClick("choose the most diverse sequences from the alignment")} style={{cursor: 'pointer'}}>
+                    <div className="small text-muted cursor-pointer p-1 rounded" onClick={() => handleExampleClick("choose the most diverse sequences from the alignment")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "choose the most diverse sequences from the alignment"
                   </div>
                   </div>
                   
-                  <div className="mb-3">
-                    <strong>🧪 Mutation Generation:</strong>
-                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("mutate the sequence ATGCGATCG to create 96 variants")} style={{cursor: 'pointer'}}>
+                  <div className="mb-2">
+                    <strong className="text-primary">🧪 Mutation Generation:</strong>
+                    <div className="small text-muted mb-1 cursor-pointer p-1 rounded" onClick={() => handleExampleClick("mutate the sequence ATGCGATCG to create 96 variants")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "mutate the sequence ATGCGATCG to create 96 variants"
                   </div>
-                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("generate variants of this DNA sequence")} style={{cursor: 'pointer'}}>
+                    <div className="small text-muted mb-1 cursor-pointer p-1 rounded" onClick={() => handleExampleClick("generate variants of this DNA sequence")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "generate variants of this DNA sequence"
                     </div>
-                    <div className="small text-muted cursor-pointer" onClick={() => handleExampleClick("create mutations with 0.2 mutation rate")} style={{cursor: 'pointer'}}>
+                    <div className="small text-muted cursor-pointer p-1 rounded" onClick={() => handleExampleClick("create mutations with 0.2 mutation rate")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "create mutations with 0.2 mutation rate"
                     </div>
                   </div>
                   
-                  <div className="mb-3">
-                    <strong>🔬 Data Analysis:</strong>
-                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("analyze the alignment and show me the most conserved regions")} style={{cursor: 'pointer'}}>
+                  <div className="mb-2">
+                    <strong className="text-primary">🔬 Data Analysis:</strong>
+                    <div className="small text-muted mb-1 cursor-pointer p-1 rounded" onClick={() => handleExampleClick("analyze the alignment and show me the most conserved regions")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "analyze the alignment and show me the most conserved regions"
                     </div>
-                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("create visualizations of the sequence data")} style={{cursor: 'pointer'}}>
+                    <div className="small text-muted mb-1 cursor-pointer p-1 rounded" onClick={() => handleExampleClick("create visualizations of the sequence data")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "create visualizations of the sequence data"
                     </div>
-                    <div className="small text-muted cursor-pointer" onClick={() => handleExampleClick("show me statistics for these sequences")} style={{cursor: 'pointer'}}>
+                    <div className="small text-muted cursor-pointer p-1 rounded" onClick={() => handleExampleClick("show me statistics for these sequences")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "show me statistics for these sequences"
                     </div>
                   </div>
                   
-                  <div className="mb-3">
-                    <strong>🧬 DNA Synthesis & Testing:</strong>
-                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("I want to order these sequences from a DNA synthesis vendor")} style={{cursor: 'pointer'}}>
+                  <div className="mb-2">
+                    <strong className="text-primary">🧬 DNA Synthesis & Testing:</strong>
+                    <div className="small text-muted mb-1 cursor-pointer p-1 rounded" onClick={() => handleExampleClick("I want to order these sequences from a DNA synthesis vendor")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "I want to order these sequences from a DNA synthesis vendor"
                     </div>
-                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("find DNA synthesis companies for my sequences")} style={{cursor: 'pointer'}}>
+                    <div className="small text-muted mb-1 cursor-pointer p-1 rounded" onClick={() => handleExampleClick("find DNA synthesis companies for my sequences")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "find DNA synthesis companies for my sequences"
                     </div>
-                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("what testing options are available for my sequences?")} style={{cursor: 'pointer'}}>
+                    <div className="small text-muted mb-1 cursor-pointer p-1 rounded" onClick={() => handleExampleClick("what testing options are available for my sequences?")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "what testing options are available for my sequences?"
                     </div>
-                    <div className="small text-muted cursor-pointer" onClick={() => handleExampleClick("research vendors for gene synthesis and validation")} style={{cursor: 'pointer'}}>
+                    <div className="small text-muted cursor-pointer p-1 rounded" onClick={() => handleExampleClick("research vendors for gene synthesis and validation")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "research vendors for gene synthesis and validation"
                     </div>
                   </div>
                   
-                  <div className="mb-3">
-                    <strong>🔄 Multi-step Workflows:</strong>
-                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("mutate this sequence, then align the variants and pick the best ones")} style={{cursor: 'pointer'}}>
+                  <div className="mb-2">
+                    <strong className="text-primary">🔄 Multi-step Workflows:</strong>
+                    <div className="small text-muted mb-1 cursor-pointer p-1 rounded" onClick={() => handleExampleClick("mutate this sequence, then align the variants and pick the best ones")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "mutate this sequence, then align the variants and pick the best ones"
                     </div>
-                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("analyze these sequences and then find vendors to synthesize them")} style={{cursor: 'pointer'}}>
+                    <div className="small text-muted mb-1 cursor-pointer p-1 rounded" onClick={() => handleExampleClick("analyze these sequences and then find vendors to synthesize them")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "analyze these sequences and then find vendors to synthesize them"
                     </div>
-                    <div className="small text-muted cursor-pointer" onClick={() => handleExampleClick("align sequences and find synthesis vendors with testing options")} style={{cursor: 'pointer'}}>
+                    <div className="small text-muted cursor-pointer p-1 rounded" onClick={() => handleExampleClick("align sequences and find synthesis vendors with testing options")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "align sequences and find synthesis vendors with testing options"
                     </div>
                   </div>
                   
-                  <div className="mb-3">
-                    <strong>🔬 Plasmid Visualization:</strong>
-                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("Visualize plasmid pUC19 with EcoRI site and insert ATGCGATCG")} style={{cursor: 'pointer'}}>
+                  <div className="mb-2">
+                    <strong className="text-primary">🔬 Plasmid Visualization:</strong>
+                    <div className="small text-muted mb-1 cursor-pointer p-1 rounded" onClick={() => handleExampleClick("Visualize plasmid pUC19 with EcoRI site and insert ATGCGATCG")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "Visualize plasmid pUC19 with EcoRI site and insert ATGCGATCG"
                     </div>
-                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("Create plasmid visualization for pBR322 with BamHI site")} style={{cursor: 'pointer'}}>
+                    <div className="small text-muted mb-1 cursor-pointer p-1 rounded" onClick={() => handleExampleClick("Create plasmid visualization for pBR322 with BamHI site")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "Create plasmid visualization for pBR322 with BamHI site"
                     </div>
-                    <div className="small text-muted cursor-pointer" onClick={() => handleExampleClick("Show plasmid map with cloning sites and insert sequence")} style={{cursor: 'pointer'}}>
-                      "Show plasmid map with cloning sites and insert sequence"
-                    </div>
-                  </div>
-                  
-                  <div className="mb-3">
-                    <strong>🔬 Plasmid Visualization:</strong>
-                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("Visualize plasmid pUC19 with EcoRI site and insert ATGCGATCG")} style={{cursor: 'pointer'}}>
-                      "Visualize plasmid pUC19 with EcoRI site and insert ATGCGATCG"
-                    </div>
-                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("Create plasmid visualization for pBR322 with BamHI site")} style={{cursor: 'pointer'}}>
-                      "Create plasmid visualization for pBR322 with BamHI site"
-                    </div>
-                    <div className="small text-muted cursor-pointer" onClick={() => handleExampleClick("Show plasmid map with cloning sites and insert sequence")} style={{cursor: 'pointer'}}>
+                    <div className="small text-muted cursor-pointer p-1 rounded" onClick={() => handleExampleClick("Show plasmid map with cloning sites and insert sequence")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "Show plasmid map with cloning sites and insert sequence"
                     </div>
                   </div>
@@ -2022,33 +2020,22 @@ function App() {
                   </div>
                 </>
               )}
-              
-              <hr className="my-3" />
-              <div className="small text-muted">
-                <strong>💡 Tips:</strong>
-                <ul className="mb-0 mt-1">
-                  <li>Upload FASTA files by dragging and dropping</li>
-                  <li>Use natural language for complex workflows</li>
-                  <li>Combine multiple steps in one command</li>
-                  <li>Ask for vendor research and testing options</li>
-                </ul>
-            </div>
           </div>
         </div>
           
           <div className="card mt-3">
-            <div className="card-header">
-              <h5 className="mb-0">Available MCP Tools</h5>
+            <div className="card-header bg-success text-white">
+              <h6 className="mb-0">🛠️ Available MCP Tools</h6>
             </div>
-            <div className="card-body">
+            <div className="card-body p-3" style={{ maxHeight: '300px', overflowY: 'auto' }}>
               {availableTools.map((tool, index) => (
-                <div key={index} className="mb-3">
-                  <h6 className="text-primary">{tool.name}</h6>
-                  <p className="small text-muted mb-1">{tool.description}</p>
+                <div key={index} className="mb-2 p-2 border rounded">
+                  <h6 className="text-success mb-1" style={{ fontSize: '0.9rem' }}>{tool.name}</h6>
+                  <p className="small text-muted mb-1" style={{ fontSize: '0.75rem' }}>{tool.description}</p>
                   {tool.parameters && (
                     <div className="small">
-                      <strong>Parameters:</strong>
-                      <ul className="list-unstyled mt-1">
+                      <strong style={{ fontSize: '0.75rem' }}>Parameters:</strong>
+                      <ul className="list-unstyled mt-1" style={{ fontSize: '0.7rem' }}>
                         {Object.entries(tool.parameters).map(([key, value]) => (
                           <li key={key}><code>{key}</code>: {String(value)}</li>
                         ))}
@@ -2062,26 +2049,7 @@ function App() {
         </div>
       </div>
       
-      {/* Plasmid Viewer Demo Modal */}
-      {showPlasmidDemo && (
-        <div className="modal fade show d-block" style={{backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 1050}}>
-          <div className="modal-dialog modal-xl">
-            <div className="modal-content">
-              <div className="modal-header">
-                <h5 className="modal-title">🧬 Plasmid Viewer Demo</h5>
-                <button 
-                  type="button" 
-                  className="btn-close" 
-                  onClick={() => setShowPlasmidDemo(false)}
-                ></button>
-              </div>
-              <div className="modal-body p-0">
-                <PlasmidViewerDemo plasmidData={workflowContext.plasmidData} />
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+
     </div>
   );
 }
