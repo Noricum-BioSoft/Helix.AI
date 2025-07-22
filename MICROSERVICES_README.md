@@ -1,8 +1,8 @@
-# DataBloom.AI Microservices Architecture
+# Helix.AI Microservices Architecture
 
 ## Overview
 
-This is a refactored version of DataBloom.AI using a modern microservices architecture. The system is designed for scalability, maintainability, and high performance.
+This is a refactored version of Helix.AI using a modern microservices architecture. The system is designed for scalability, maintainability, and high performance.
 
 ## Architecture Components
 
@@ -321,7 +321,7 @@ docker-compose ps postgres
 
 3. **Redis connection issues**: Check Redis health
 ```bash
-docker exec -it databloom-ai-redis-1 redis-cli ping
+docker exec -it helix-ai-redis-1 redis-cli ping
 ```
 
 ### Debug Mode

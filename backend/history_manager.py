@@ -7,6 +7,59 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+def serialize_langchain_messages(result: Any) -> Any:
+    """Convert LangChain message objects to serializable format."""
+    if isinstance(result, dict):
+        if "messages" in result:
+            # Convert LangChain messages to simple dict format
+            serialized_messages = []
+            for msg in result["messages"]:
+                if hasattr(msg, 'content'):
+                    serialized_msg = {
+                        "type": getattr(msg, 'type', 'unknown'),
+                        "content": getattr(msg, 'content', str(msg)),
+                        "name": getattr(msg, 'name', None),
+                        "id": getattr(msg, 'id', None)
+                    }
+                    # Add additional kwargs if they exist
+                    if hasattr(msg, 'additional_kwargs'):
+                        serialized_msg["additional_kwargs"] = msg.additional_kwargs
+                    if hasattr(msg, 'response_metadata'):
+                        serialized_msg["response_metadata"] = msg.response_metadata
+                    serialized_messages.append(serialized_msg)
+                else:
+                    # Fallback for non-message objects
+                    serialized_messages.append(str(msg))
+            result["messages"] = serialized_messages
+        return result
+    elif hasattr(result, 'content'):
+        # Single message object
+        return {
+            "type": getattr(result, 'type', 'unknown'),
+            "content": getattr(result, 'content', str(result)),
+            "name": getattr(result, 'name', None),
+            "id": getattr(result, 'id', None)
+        }
+    else:
+        return result
+
+def serialize_for_json(obj: Any) -> Any:
+    """Convert objects to JSON-serializable format, handling numpy types."""
+    import numpy as np
+    
+    if isinstance(obj, dict):
+        return {key: serialize_for_json(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [serialize_for_json(item) for item in obj]
+    elif isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    else:
+        return obj
+
 class HistoryManager:
     """Manages user session history and results for bioinformatics operations."""
     
@@ -54,11 +107,14 @@ class HistoryManager:
         if session_id not in self.sessions:
             raise ValueError(f"Session {session_id} not found")
         
+        # Serialize the result to handle LangChain message objects
+        serialized_result = serialize_langchain_messages(result)
+        
         entry = {
             "timestamp": datetime.now().isoformat(),
             "command": command,
             "tool": tool,
-            "result": result,
+            "result": serialized_result,
             "metadata": metadata or {}
         }
         
@@ -67,7 +123,7 @@ class HistoryManager:
         
         # Store result with a unique key for later reference
         result_key = f"{tool}_{len(self.sessions[session_id]['history'])}"
-        self.sessions[session_id]["results"][result_key] = result
+        self.sessions[session_id]["results"][result_key] = serialized_result
         
         self._save_session(session_id)
         logger.info(f"Added history entry to session {session_id}: {tool}")
@@ -117,12 +173,20 @@ class HistoryManager:
     
     def _save_session(self, session_id: str):
         """Save session data to disk."""
+        if session_id not in self.sessions:
+            raise ValueError(f"Session {session_id} not found")
+        session_file = self.storage_dir / f"{session_id}.json"
         try:
-            session_file = self.storage_dir / f"{session_id}.json"
-            with open(session_file, 'w') as f:
-                json.dump(self.sessions[session_id], f, indent=2)
+            # Serialize the session data to handle numpy types and other non-JSON-serializable objects
+            serialized_session = serialize_for_json(self.sessions[session_id])
+            with open(session_file, "w") as f:
+                json.dump(serialized_session, f, indent=2)
         except Exception as e:
-            logger.error(f"Failed to save session {session_id}: {e}")
+            print(f"[ERROR] Failed to save session {session_id}: {e}")
+            # Optionally, remove the corrupted file
+            # import os
+            # if os.path.exists(session_file):
+            #     os.remove(session_file)
     
     def cleanup_old_sessions(self, max_age_days: int = 30):
         """Clean up old sessions."""

@@ -2,7 +2,7 @@
 
 ## Overview
 
-The DataBloom.AI platform includes a comprehensive DNA synthesis vendor research system that helps you find and compare DNA synthesis vendors based on your sequence requirements. The system provides detailed vendor information, pricing analysis, and AI-powered recommendations.
+The Helix.AI platform includes a comprehensive DNA synthesis vendor research system that helps you find and compare DNA synthesis vendors based on your sequence requirements. The system provides detailed vendor information, pricing analysis, and AI-powered recommendations.
 
 ## Features
 

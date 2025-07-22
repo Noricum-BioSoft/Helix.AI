@@ -109,6 +109,20 @@ export const mcpApi = {
     return response.data;
   },
 
+  // Plasmid for representatives
+  plasmidForRepresentatives: async (params: { 
+    representatives: string[]; 
+    aligned_sequences: string; 
+    vector_name?: string; 
+    cloning_sites?: string 
+  }, sessionId?: string) => {
+    const response = await axios.post(`${API_BASE_URL}/mcp/plasmid-for-representatives`, {
+      ...params,
+      session_id: sessionId
+    });
+    return response.data;
+  },
+
   // Phylogenetic tree
   phylogeneticTree: async (params: { aligned_sequences: string }) => {
     const response = await axios.post(`${API_BASE_URL}/mcp/phylogenetic-tree`, params);

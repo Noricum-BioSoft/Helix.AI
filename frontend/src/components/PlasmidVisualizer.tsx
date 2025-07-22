@@ -1,181 +1,198 @@
-import React, { useState } from 'react';
+import React from 'react';
+import { Card } from 'react-bootstrap';
 import { SeqViz } from 'seqviz';
-import { mcpApi } from '../services/mcpApi';
-import Button from 'react-bootstrap/Button';
-import Form from 'react-bootstrap/Form';
-import Card from 'react-bootstrap/Card';
-import Alert from 'react-bootstrap/Alert';
 
-interface PlasmidVisualizerProps {
-  sessionId?: string;
+// Types for plasmid data
+export interface PlasmidFeature {
+  name: string;
+  start: number;
+  end: number;
+  type: string;
+  color?: string;
+  description?: string;
 }
 
-interface PlasmidData {
+export interface PlasmidData {
   name: string;
   sequence: string;
-  features: Array<{
-    name: string;
-    start: number;
-    end: number;
-    type: string;
-    color: string;
-    description: string;
-  }>;
+  features: PlasmidFeature[];
   size: number;
-  description: string;
+  description?: string;
 }
 
-export const PlasmidVisualizer: React.FC<PlasmidVisualizerProps> = ({ sessionId }) => {
-  const [vectorName, setVectorName] = useState('pTet');
-  const [cloningSites, setCloningSites] = useState('BsaI:1-100');
-  const [insertSequence, setInsertSequence] = useState('ACGT');
-  const [plasmidData, setPlasmidData] = useState<PlasmidData | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+export interface PlasmidDataVisualizerProps {
+  data: PlasmidData;
+}
 
-  const handleSubmit = async () => {
-    setLoading(true);
-    setError(null);
-    
-    try {
-      const response = await mcpApi.plasmidVisualization({
-        vector_name: vectorName,
-        cloning_sites: cloningSites,
-        insert_sequence: insertSequence
-      }, sessionId);
-      
-      if (response.success && response.result.plasmid_data) {
-        setPlasmidData(response.result.plasmid_data);
-      } else {
-        setError(response.result.text || 'Failed to generate plasmid visualization');
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred');
-    } finally {
-      setLoading(false);
-    }
-  };
+// Convert our plasmid data format to SeqViz annotations format
+function convertFeaturesToAnnotations(features: PlasmidFeature[]) {
+  return features.map(feature => ({
+    start: feature.start,
+    end: feature.end,
+    name: feature.name,
+    direction: 1, // Default direction
+    color: feature.color || "#ff0000"
+  }));
+}
 
-  const convertToSeqVizFormat = (data: PlasmidData) => {
-    // Convert our plasmid data format to SeqViz format
-    const features = data.features.map(feature => ({
-      name: feature.name,
-      start: feature.start,
-      end: feature.end,
-      color: feature.color,
-      type: feature.type === 'restriction_site' ? 'enzyme' : 'feature'
-    }));
+// Component for displaying plasmid data directly (used in command results)
+export const PlasmidDataVisualizer: React.FC<PlasmidDataVisualizerProps> = ({ data }) => {
+  const features = data.features || [];
+  const annotations = convertFeaturesToAnnotations(features);
+  const [viewerType, setViewerType] = React.useState<'circular' | 'linear' | 'both'>('circular');
+  
+  return (
+    <Card>
+      <Card.Header>
+        <h6>{data.name} - {data.description}</h6>
+      </Card.Header>
+      <Card.Body>
+        <div style={{ marginBottom: 20 }}>
+          <strong>Name:</strong> {data.name}<br />
+          <strong>Size:</strong> {data.size} bp<br />
+          <strong>Sequence:</strong> {data.sequence}<br />
+          <strong>Features:</strong> {features.length}
+          <ul>
+            {features.map((feature, idx) => (
+              <li key={idx}>
+                <strong>{feature.name}</strong> ({feature.type}): {feature.description || ''} [<span>start: {feature.start}, end: {feature.end}</span>]
+              </li>
+            ))}
+          </ul>
+        </div>
+        
+        {/* Viewer Type Selector */}
+        <div className="mb-3">
+          <div className="d-flex align-items-center">
+            <label htmlFor="viewer-select" className="me-2">View:</label>
+            <select 
+              id="viewer-select"
+              className="form-select form-select-sm" 
+              style={{width: 'auto'}}
+              value={viewerType}
+              onChange={(e) => setViewerType(e.target.value as 'linear' | 'circular' | 'both')}
+            >
+              <option value="circular">Circular</option>
+              <option value="linear">Linear</option>
+              <option value="both">Both</option>
+            </select>
+          </div>
+        </div>
+        
+        <div style={{ height: '500px', border: '1px solid #ccc', borderRadius: '8px', overflow: 'hidden' }}>
+          <SeqViz
+            name={data.name}
+            seq={data.sequence}
+            annotations={annotations}
+            viewer={viewerType}
+            style={{ width: '100%', height: '100%' }}
+          />
+        </div>
+      </Card.Body>
+    </Card>
+  );
+};
 
-    return {
-      name: data.name,
-      sequence: data.sequence,
-      features: features,
-      size: data.size
-    };
-  };
+// Component for displaying multiple plasmid visualizations for representatives
+export const PlasmidRepresentativesVisualizer: React.FC<{ 
+  plasmidResults: any[]; 
+  vectorName: string; 
+  cloningSites: string;
+}> = ({ plasmidResults, vectorName, cloningSites }) => {
+  const [selectedPlasmid, setSelectedPlasmid] = React.useState<number>(0);
+  const [viewerType, setViewerType] = React.useState<'circular' | 'linear' | 'both'>('circular');
+
+  if (!plasmidResults || plasmidResults.length === 0) {
+    return <div className="alert alert-warning">No plasmid results available.</div>;
+  }
 
   return (
-    <div className="plasmid-visualizer">
-      <Card className="mb-3">
-        <Card.Header>
-          <h5>Plasmid Visualization</h5>
-        </Card.Header>
-        <Card.Body>
-          <Form>
-            <Form.Group className="mb-3">
-              <Form.Label>Vector Name</Form.Label>
-              <Form.Control
-                type="text"
-                value={vectorName}
-                onChange={(e) => setVectorName(e.target.value)}
-                placeholder="e.g., pTet"
-              />
-              <Form.Text className="text-muted">
-                Enter the name of your plasmid vector
-              </Form.Text>
-            </Form.Group>
-
-            <Form.Group className="mb-3">
-              <Form.Label>Cloning Sites</Form.Label>
-              <Form.Control
-                type="text"
-                value={cloningSites}
-                onChange={(e) => setCloningSites(e.target.value)}
-                placeholder="e.g., BsaI:123-456, EcoRI:789-1012"
-              />
-              <Form.Text className="text-muted">
-                Enter restriction sites in format: Enzyme:start-end
-              </Form.Text>
-            </Form.Group>
-
-            <Form.Group className="mb-3">
-              <Form.Label>Insert Sequence</Form.Label>
-              <Form.Control
-                as="textarea"
-                rows={3}
-                value={insertSequence}
-                onChange={(e) => setInsertSequence(e.target.value)}
-                placeholder="e.g., ACGT"
-              />
-              <Form.Text className="text-muted">
-                Enter the DNA sequence to insert (A, T, C, G only)
-              </Form.Text>
-            </Form.Group>
-
-            <Button 
-              variant="primary" 
-              onClick={handleSubmit}
-              disabled={loading}
-            >
-              {loading ? 'Generating...' : 'Generate Plasmid Visualization'}
-            </Button>
-          </Form>
-        </Card.Body>
-      </Card>
-
-      {error && (
-        <Alert variant="danger" className="mb-3">
-          {error}
-        </Alert>
+    <div className="bg-light p-3 border rounded mb-3">
+      <h5>🧬 Plasmid Visualizations for Representative Sequences</h5>
+      <div className="mb-3">
+        <p><strong>Vector:</strong> {vectorName}</p>
+        <p><strong>Cloning Sites:</strong> {cloningSites}</p>
+        <p><strong>Total Representatives:</strong> {plasmidResults.length}</p>
+      </div>
+      
+      {/* Plasmid Selector */}
+      <div className="mb-3">
+        <label htmlFor="plasmid-select" className="form-label">Select Representative:</label>
+        <select 
+          id="plasmid-select"
+          className="form-select"
+          value={selectedPlasmid}
+          onChange={(e) => setSelectedPlasmid(parseInt(e.target.value))}
+        >
+          {plasmidResults.map((result, index) => (
+            <option key={index} value={index}>
+              {result.representative_name} ({result.sequence_length} bp)
+            </option>
+          ))}
+        </select>
+      </div>
+      
+      {/* Viewer Type Selector */}
+      <div className="mb-3">
+        <div className="d-flex align-items-center">
+          <label htmlFor="viewer-type-select" className="me-2">View:</label>
+          <select 
+            id="viewer-type-select"
+            className="form-select form-select-sm" 
+            style={{width: 'auto'}}
+            value={viewerType}
+            onChange={(e) => setViewerType(e.target.value as 'linear' | 'circular' | 'both')}
+          >
+            <option value="circular">Circular</option>
+            <option value="linear">Linear</option>
+            <option value="both">Both</option>
+          </select>
+        </div>
+      </div>
+      
+      {/* Selected Plasmid Visualization */}
+      {plasmidResults[selectedPlasmid] && (
+        <div>
+          <h6>Plasmid: {plasmidResults[selectedPlasmid].representative_name}</h6>
+          <div style={{ height: '500px', border: '1px solid #ccc', borderRadius: '8px', overflow: 'hidden' }}>
+            <SeqViz
+              name={plasmidResults[selectedPlasmid].plasmid_data.name}
+              seq={plasmidResults[selectedPlasmid].plasmid_data.sequence}
+              annotations={convertFeaturesToAnnotations(plasmidResults[selectedPlasmid].plasmid_data.features)}
+              viewer={viewerType}
+              style={{ width: '100%', height: '100%' }}
+            />
+          </div>
+        </div>
       )}
-
-      {plasmidData && (
-        <Card>
-          <Card.Header>
-            <h6>{plasmidData.name} - {plasmidData.description}</h6>
-          </Card.Header>
-          <Card.Body>
-            <div style={{ height: '400px', width: '100%' }}>
-              <SeqViz
-                {...convertToSeqVizFormat(plasmidData)}
-                viewer="circular"
-                showFeatures={true}
-                showPrimers={false}
-                showAnnotations={true}
-                showGC={false}
-                showORFs={false}
-                showRestrictionSites={true}
-                showAxis={true}
-                showSequence={false}
-                showComplement={false}
-                showReverse={false}
-                zoom={{ linear: 50, circular: 50 }}
-                colors={{
-                  features: plasmidData.features.map(f => f.color),
-                  primers: "#ff0000",
-                  orfs: "#00ff00",
-                  restrictionSites: "#0000ff",
-                  gc: "#ff00ff",
-                  axis: "#000000",
-                  sequence: "#000000",
-                  complement: "#666666",
-                  reverse: "#999999"
-                }}
-              />
-            </div>
-          </Card.Body>
-        </Card>
-      )}
+      
+      {/* Summary Table */}
+      <div className="mt-3">
+        <h6>All Representatives Summary</h6>
+        <div className="table-responsive">
+          <table className="table table-sm">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Sequence Length</th>
+                <th>Insert Sequence (first 50 bp)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {plasmidResults.map((result, index) => (
+                <tr key={index} className={index === selectedPlasmid ? 'table-primary' : ''}>
+                  <td>{result.representative_name}</td>
+                  <td>{result.sequence_length} bp</td>
+                  <td className="font-monospace">
+                    {result.insert_sequence.substring(0, 50)}
+                    {result.insert_sequence.length > 50 ? '...' : ''}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 }; 

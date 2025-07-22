@@ -1,9 +1,9 @@
 #!/bin/bash
 
-# DataBloom.AI Application Startup Script
+# Helix.AI Application Startup Script
 # This script starts both the MCP server and the FastAPI server, along with the frontend
 
-echo "🚀 Starting DataBloom.AI Application..."
+echo "🚀 Starting Helix.AI Application..."
 echo "========================================"
 
 # Function to check if a port is in use
@@ -160,7 +160,7 @@ else
 fi
 
 echo ""
-echo "🎉 DataBloom.AI Application is now running!"
+echo "🎉 Helix.AI Application is now running!"
 echo "=========================================="
 echo "🌐 Frontend: http://localhost:5173"
 echo "🔧 FastAPI:  http://localhost:8001"

@@ -1,6 +1,6 @@
-# Sample Files for DataBloom.AI Testing
+# Sample Files for Helix.AI Testing
 
-This directory contains sample files for testing the drag-and-drop upload functionality in the DataBloom.AI frontend.
+This directory contains sample files for testing the drag-and-drop upload functionality in the Helix.AI frontend.
 
 ## Files
 
@@ -30,7 +30,7 @@ This directory contains sample files for testing the drag-and-drop upload functi
 
 ## Testing Instructions
 
-1. Start the DataBloom.AI application using `./start-app.sh`
+1. Start the Helix.AI application using `./start-app.sh`
 2. Open the frontend at `http://localhost:5173`
 3. Drag and drop any of these files into the input area
 4. Select the appropriate action from the modal that appears:

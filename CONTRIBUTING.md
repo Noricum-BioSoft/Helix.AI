@@ -1,6 +1,6 @@
-# Contributing to DataBloom.AI
+# Contributing to Helix.AI
 
-Thank you for your interest in contributing to DataBloom.AI! This document provides guidelines for contributing to the project.
+Thank you for your interest in contributing to Helix.AI! This document provides guidelines for contributing to the project.
 
 ## 🚀 Getting Started
 
@@ -15,15 +15,15 @@ Thank you for your interest in contributing to DataBloom.AI! This document provi
 
 1. **Fork and Clone**
    ```bash
-   git clone https://github.com/yourusername/DataBloom.AI.git
-   cd DataBloom.AI
+   git clone https://github.com/yourusername/Helix.AI.git
+cd Helix.AI
    ```
 
 2. **Setup Backend**
    ```bash
    cd backend
-   conda create -n databloom-dev python=3.10
-   conda activate databloom-dev
+   conda create -n helix-dev python=3.10
+conda activate helix-dev
    pip install -r requirements.txt
    ```
 
@@ -239,6 +239,6 @@ When reporting bugs:
 
 ## 📄 License
 
-By contributing to DataBloom.AI, you agree that your contributions will be licensed under the MIT License.
+By contributing to Helix.AI, you agree that your contributions will be licensed under the MIT License.
 
-Thank you for contributing to DataBloom.AI! 🧬 
+Thank you for contributing to Helix.AI! 🧬 

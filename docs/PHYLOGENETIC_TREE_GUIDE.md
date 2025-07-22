@@ -2,7 +2,7 @@
 
 ## Overview
 
-The DataBloom.AI platform includes an interactive phylogenetic tree visualization system that allows you to construct and visualize evolutionary relationships between DNA sequences using D3.js.
+The Helix.AI platform includes an interactive phylogenetic tree visualization system that allows you to construct and visualize evolutionary relationships between DNA sequences using D3.js.
 
 ## Features
 

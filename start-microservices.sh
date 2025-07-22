@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# DataBloom.AI Microservices Startup Script
+# Helix.AI Microservices Startup Script
 
-echo "🚀 Starting DataBloom.AI Microservices Architecture..."
+echo "🚀 Starting Helix.AI Microservices Architecture..."
 
 # Check if Docker and Docker Compose are installed
 if ! command -v docker &> /dev/null; then
@@ -80,7 +80,7 @@ if [ -d "frontend" ]; then
 fi
 
 echo ""
-echo "🎉 DataBloom.AI Microservices Architecture is running!"
+echo "🎉 Helix.AI Microservices Architecture is running!"
 echo ""
 echo "📊 Service URLs:"
 echo "   API Gateway:     http://localhost:8000"

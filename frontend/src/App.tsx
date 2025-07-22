@@ -3,7 +3,7 @@ import { MSAView } from 'react-msaview';
 import Plot from 'react-plotly.js';
 import { mcpApi } from './services/mcpApi';
 import { CommandParser, ParsedCommand } from './utils/commandParser';
-import { PlasmidVisualizer } from './components/PlasmidVisualizer';
+import { PlasmidDataVisualizer, PlasmidRepresentativesVisualizer } from './components/PlasmidVisualizer';
 import { PhylogeneticTree } from './components/PhylogeneticTree';
 
 import 'bootstrap/dist/css/bootstrap.min.css';
@@ -140,7 +140,7 @@ function App() {
   };
 
   const handleSubmit = async () => {
-    if (!command.trim() || !sessionId) return;
+    if (!command.trim()) return;
     
     setLoading(true);
     
@@ -168,7 +168,7 @@ function App() {
       if (commandMode === 'natural') {
         // Use natural language command handling
         console.log('Calling handleNaturalCommand...');
-        response = await mcpApi.executeCommand(finalCommand, sessionId);
+        response = await mcpApi.executeCommand(finalCommand, sessionId || undefined);
         console.log('Natural command response:', response);
       } else {
         // Use structured command parsing
@@ -176,30 +176,36 @@ function App() {
         
         switch (parsedCommand.type) {
           case 'sequence_alignment':
-            response = await mcpApi.sequenceAlignment(parsedCommand.parameters as any, sessionId);
+            response = await mcpApi.sequenceAlignment(parsedCommand.parameters as any, sessionId || undefined);
             break;
             
           case 'mutate_sequence':
-            response = await mcpApi.mutateSequence(parsedCommand.parameters as any, sessionId);
+            response = await mcpApi.mutateSequence(parsedCommand.parameters as any, sessionId || undefined);
             break;
             
           case 'analyze_sequence_data':
-            response = await mcpApi.analyzeSequenceData(parsedCommand.parameters as any, sessionId);
+            response = await mcpApi.analyzeSequenceData(parsedCommand.parameters as any, sessionId || undefined);
             break;
             
           case 'visualize_alignment':
-            response = await mcpApi.visualizeAlignment(parsedCommand.parameters as any, sessionId);
+            response = await mcpApi.visualizeAlignment(parsedCommand.parameters as any, sessionId || undefined);
             break;
             
           case 'dna_vendor_research':
-            response = await mcpApi.executeCommand(command, sessionId);
+            response = await mcpApi.executeCommand(command, sessionId || undefined);
             break;
             
           default:
             // Fallback to general command execution
-            response = await mcpApi.executeCommand(command, sessionId);
+            response = await mcpApi.executeCommand(command, sessionId || undefined);
             break;
         }
+      }
+      
+      // Update session ID if the backend created one automatically
+      if ((response as any).session_id && !sessionId) {
+        setSessionId((response as any).session_id);
+        console.log('Session created automatically by backend:', (response as any).session_id);
       }
       
       // Update workflow context based on the response
@@ -283,6 +289,11 @@ function App() {
         timestamp: new Date()
       };
       
+      console.log('🔍 Adding to history:', historyItem);
+      console.log('🔍 Response structure:', JSON.stringify(response, null, 2));
+      console.log('🔍 Response success:', (response as any).success);
+      console.log('🔍 Response result keys:', (response as any).result ? Object.keys((response as any).result) : 'No result');
+      
       setHistory(prev => [historyItem, ...prev]);
       
     } catch (error) {
@@ -325,8 +336,7 @@ function App() {
       reader.onload = (event) => {
         const content = event.target?.result as string;
         setUploadedFile({ name: file.name, content });
-        // Update command placeholder to suggest what to do with the file
-        setCommand(`analyze the uploaded file ${file.name}`);
+        // Removed auto-population of command - let user decide what to do
       };
       reader.readAsText(file);
     }
@@ -338,23 +348,125 @@ function App() {
     const { output, type } = item;
     
     // Add debugging
-    console.log('renderOutput called with:', { output, type });
-    console.log('output structure:', JSON.stringify(output, null, 2));
-    console.log('output keys:', Object.keys(output));
+    console.log('🔍 renderOutput called with:', { type, input: item.input });
+    console.log('🔍 output structure:', JSON.stringify(output, null, 2));
+    console.log('🔍 output keys:', Object.keys(output));
+    console.log('🔍 Checking for tree_newick in output:', output.tree_newick ? 'FOUND' : 'NOT FOUND');
+    console.log('🔍 Checking for ete_visualization in output:', output.ete_visualization ? 'FOUND' : 'NOT FOUND');
+    console.log('🔍 ETE3 SVG content:', output.ete_visualization?.svg ? 'PRESENT' : 'MISSING');
+    
+    // Check in result field if not found in output directly
+    const actualResult = output.result || output;
+    console.log('🔍 Checking for tree_newick in actualResult:', actualResult.tree_newick ? 'FOUND' : 'NOT FOUND');
+    console.log('🔍 Checking for ete_visualization in actualResult:', actualResult.ete_visualization ? 'FOUND' : 'NOT FOUND');
+    console.log('🔍 Checking for clustering_result in actualResult:', actualResult.clustering_result ? 'FOUND' : 'NOT FOUND');
+    
+          // Add visible debug info
+      if (actualResult.tree_newick) {
+        console.log('🔍 ETE3 Debug - Full actualResult:', actualResult);
+        // Show alert with debug info
+        // alert(`ETE3 Debug: ${actualResult.ete_visualization ? 'FOUND' : 'NOT FOUND'} | SVG: ${actualResult.ete_visualization?.svg ? 'FOUND' : 'NOT FOUND'}`);
+        
+        // Also show the ETE3 visualization if available
+        if (actualResult.ete_visualization?.svg) {
+          const eteDiv = document.createElement('div');
+          eteDiv.innerHTML = actualResult.ete_visualization.svg;
+          eteDiv.style.border = '2px solid red';
+          eteDiv.style.padding = '10px';
+          eteDiv.style.margin = '10px';
+          document.body.appendChild(eteDiv);
+        }
+      }
     
     // --- NEW: Render phylogenetic tree if present ---
-    if (output && output.tree_newick) {
+    if (actualResult && actualResult.tree_newick) {
+      console.log('🔍 Phylogenetic tree section 1 - tree_newick detected:', actualResult.tree_newick);
+      console.log('🔍 Full actualResult structure:', actualResult);
       return (
         <div>
-          <PhylogeneticTree newick={output.tree_newick} />
           {output.text && (
             <pre className="bg-light p-3 border rounded mb-3">{output.text}</pre>
           )}
-          {output.statistics && (
+          
+          {/* Debug Section - Hidden by default, expandable */}
+          <details className="bg-light p-2 border rounded mb-3">
+            <summary className="text-muted" style={{cursor: 'pointer'}}>
+              🔍 Debug Info (click to expand)
+            </summary>
+            <div className="mt-2">
+              <p>Output keys: {Object.keys(output).join(', ')}</p>
+              <p>Result keys: {output.result ? Object.keys(output.result).join(', ') : 'No result'}</p>
+              <p>Tree in output: {output.tree_newick ? 'YES' : 'NO'}</p>
+              <p>Tree in result: {output.result?.tree_newick ? 'YES' : 'NO'}</p>
+              <p>ETE3 in output: {output.ete_visualization ? 'YES' : 'NO'}</p>
+              <p>ETE3 in result: {output.result?.ete_visualization ? 'YES' : 'NO'}</p>
+            </div>
+          </details>
+          
+          {actualResult.text && (
+            <pre className="bg-light p-3 border rounded mb-3">{actualResult.text}</pre>
+          )}
+
+          {/* Clustering Results */}
+          {actualResult.clustering_result && (
+            <div className="bg-light p-3 border rounded mb-3">
+              <h5>🧬 Clustering Analysis Results</h5>
+              <div className="row">
+                <div className="col-md-6">
+                  <h6>Summary</h6>
+                  <ul className="list-unstyled">
+                    <li><strong>Total Sequences:</strong> {actualResult.clustering_result.total_sequences}</li>
+                    <li><strong>Number of Clusters:</strong> {actualResult.clustering_result.num_clusters}</li>
+                    <li><strong>Representatives:</strong> {actualResult.clustering_result.representatives?.join(', ')}</li>
+                  </ul>
+                </div>
+                <div className="col-md-6">
+                  <h6>Cluster Details</h6>
+                  {actualResult.clustering_result.clusters && (
+                    <div>
+                      {actualResult.clustering_result.clusters.map((cluster: any, index: number) => (
+                        <div key={index} className="mb-2">
+                          <strong>Cluster {cluster.cluster_id}:</strong>
+                          <ul className="list-unstyled ml-3">
+                            <li>Size: {cluster.size} sequences</li>
+                            <li>Representative: {cluster.representative}</li>
+                            <li>Average Distance: {cluster.average_distance?.toFixed(4)}</li>
+                          </ul>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Clustered Visualization */}
+          {actualResult.clustered_visualization && actualResult.clustered_visualization.svg && (
+            <div className="bg-light p-3 border rounded mb-3">
+              <h5>🧬 Clustered Phylogenetic Tree Visualization</h5>
+              <div dangerouslySetInnerHTML={{ __html: actualResult.clustered_visualization.svg }} />
+            </div>
+          )}
+
+          {/* ETE3 Visualization */}
+          {actualResult.ete_visualization && actualResult.ete_visualization.svg && (
+            <div className="bg-light p-3 border rounded mb-3">
+              <h5>🧬 ETE3 Phylogenetic Tree Visualization</h5>
+              <div dangerouslySetInnerHTML={{ __html: actualResult.ete_visualization.svg }} />
+            </div>
+          )}
+          
+          {/* D3.js Visualization as fallback */}
+          <div className="bg-light p-3 border rounded mb-3">
+            <h5>🧬 Interactive Phylogenetic Tree (D3.js)</h5>
+            <PhylogeneticTree newick={actualResult.tree_newick} />
+          </div>
+          {actualResult.statistics && (
             <div className="bg-light p-3 border rounded mb-3">
               <h6>Tree Statistics</h6>
               <div className="row">
-                {Object.entries(output.statistics).map(([key, value]) => (
+                {Object.entries(actualResult.statistics).map(([key, value]) => (
                   <div key={key} className="col-md-6 mb-2">
                     <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
                   </div>
@@ -603,6 +715,79 @@ function App() {
             );
           }
           
+          // Handle plasmid visualization results
+          if (lastToolMsg.name === 'plasmid_visualization' && toolResult.plasmid_data) {
+            return (
+              <div>
+                {toolResult.text && (
+                  <pre className="bg-light p-3 border rounded mb-3">{toolResult.text}</pre>
+                )}
+                <div className="bg-light p-3 border rounded mb-3">
+                  <h5>Plasmid Visualization</h5>
+                  <div className="row">
+                    <div className="col-md-6">
+                      <h6>Plasmid Details</h6>
+                      <ul className="list-unstyled">
+                        <li><strong>Name:</strong> {toolResult.plasmid_data.name}</li>
+                        <li><strong>Size:</strong> {toolResult.plasmid_data.size} bp</li>
+                        <li><strong>Description:</strong> {toolResult.plasmid_data.description}</li>
+                        <li><strong>Visualization Type:</strong> {toolResult.visualization_type}</li>
+                      </ul>
+                    </div>
+                    <div className="col-md-6">
+                      <h6>Features</h6>
+                      {toolResult.plasmid_data.features && toolResult.plasmid_data.features.length > 0 ? (
+                        <ul className="list-unstyled">
+                          {toolResult.plasmid_data.features.map((feature: any, index: number) => (
+                            <li key={index}>
+                              <strong>{feature.name}:</strong> {feature.description} 
+                              (position {feature.start}-{feature.end})
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="text-muted">No features defined</p>
+                      )}
+                    </div>
+                  </div>
+                  {toolResult.metadata && (
+                    <div className="mt-3">
+                      <h6>Input Parameters</h6>
+                      <div className="row">
+                        {Object.entries(toolResult.metadata).map(([key, value]) => (
+                          <div key={key} className="col-md-6 mb-2">
+                            <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <div className="text-center mb-3">
+                  <button 
+                    className="btn btn-success btn-lg"
+                    onClick={() => {
+                      // Store plasmid data in workflow context and show plasmid viewer
+                      console.log('Opening plasmid viewer with data:', toolResult.plasmid_data);
+                      updateWorkflowContext('plasmid_visualization', toolResult.plasmid_data);
+                    }}
+                    style={{
+                      fontSize: '1.1rem',
+                      padding: '12px 24px',
+                      boxShadow: '0 4px 8px rgba(0,0,0,0.2)',
+                      borderRadius: '25px'
+                    }}
+                  >
+                    🧬 View Plasmid Visualization
+                  </button>
+                  <p className="text-muted mt-2">
+                    Click the button above to open the interactive plasmid viewer
+                  </p>
+                </div>
+              </div>
+            );
+          }
+          
           // Fallback: show any tool result as text
           if (toolResult.text) {
             return (
@@ -632,17 +817,71 @@ function App() {
       console.log('result structure:', JSON.stringify(result, null, 2));
       
       // Handle nested result structure from natural language commands
-      const actualResult = result.result || result;
       console.log('actualResult structure:', JSON.stringify(actualResult, null, 2));
 
       // --- NEW: Render phylogenetic tree if present in actualResult ---
       if (actualResult && actualResult.tree_newick) {
         return (
           <div>
-            <PhylogeneticTree newick={actualResult.tree_newick} />
             {actualResult.text && (
               <pre className="bg-light p-3 border rounded mb-3">{actualResult.text}</pre>
             )}
+
+            {/* Clustering Results */}
+            {actualResult.clustering_result && (
+              <div className="bg-light p-3 border rounded mb-3">
+                <h5>🧬 Clustering Analysis Results</h5>
+                <div className="row">
+                  <div className="col-md-6">
+                    <h6>Summary</h6>
+                    <ul className="list-unstyled">
+                      <li><strong>Total Sequences:</strong> {actualResult.clustering_result.total_sequences}</li>
+                      <li><strong>Number of Clusters:</strong> {actualResult.clustering_result.num_clusters}</li>
+                      <li><strong>Representatives:</strong> {actualResult.clustering_result.representatives?.join(', ')}</li>
+                    </ul>
+                  </div>
+                  <div className="col-md-6">
+                    <h6>Cluster Details</h6>
+                    {actualResult.clustering_result.clusters && (
+                      <div>
+                        {actualResult.clustering_result.clusters.map((cluster: any, index: number) => (
+                          <div key={index} className="mb-2">
+                            <strong>Cluster {cluster.cluster_id}:</strong>
+                            <ul className="list-unstyled ml-3">
+                              <li>Size: {cluster.size} sequences</li>
+                              <li>Representative: {cluster.representative}</li>
+                              <li>Average Distance: {cluster.average_distance?.toFixed(4)}</li>
+                            </ul>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Clustered Visualization */}
+            {actualResult.clustered_visualization && actualResult.clustered_visualization.svg && (
+              <div className="bg-light p-3 border rounded mb-3">
+                <h5>🧬 Clustered Phylogenetic Tree Visualization</h5>
+                <div dangerouslySetInnerHTML={{ __html: actualResult.clustered_visualization.svg }} />
+              </div>
+            )}
+
+            {/* ETE3 Visualization */}
+            {actualResult.ete_visualization && actualResult.ete_visualization.svg && (
+              <div className="bg-light p-3 border rounded mb-3">
+                <h5>🧬 ETE3 Phylogenetic Tree Visualization</h5>
+                <div dangerouslySetInnerHTML={{ __html: actualResult.ete_visualization.svg }} />
+              </div>
+            )}
+            
+                         {/* D3.js Visualization as fallback */}
+             <div className="bg-light p-3 border rounded mb-3">
+               <h5>🧬 Interactive Phylogenetic Tree (D3.js)</h5>
+               <PhylogeneticTree newick={actualResult.tree_newick} />
+             </div>
             {actualResult.statistics && (
               <div className="bg-light p-3 border rounded mb-3">
                 <h6>Tree Statistics</h6>
@@ -660,6 +899,38 @@ function App() {
       }
       // --- END NEW ---
       
+      // --- NEW: Handle plasmid visualization results directly in actualResult ---
+      if (actualResult && actualResult.plasmid_data) {
+        return (
+          <div>
+            {actualResult.text && (
+              <pre className="bg-light p-3 border rounded mb-3">{actualResult.text}</pre>
+            )}
+            <div className="bg-light p-3 border rounded mb-3">
+              <h5>🧬 Plasmid Visualization</h5>
+              <PlasmidDataVisualizer data={actualResult.plasmid_data} />
+            </div>
+          </div>
+        );
+      }
+
+      // Handle plasmid for representatives results
+      if (actualResult.plasmid_results) {
+        return (
+          <div>
+            {actualResult.text && (
+              <pre className="bg-light p-3 border rounded mb-3">{actualResult.text}</pre>
+            )}
+            <PlasmidRepresentativesVisualizer 
+              plasmidResults={actualResult.plasmid_results}
+              vectorName={actualResult.vector_name || "pUC19"}
+              cloningSites={actualResult.cloning_sites || "EcoRI, BamHI, HindIII"}
+            />
+          </div>
+        );
+      }
+      // --- END NEW ---
+
       // --- NEW: Handle alignment in ToolMessage for natural language commands ---
       // Check if messages is in actualResult (nested) or directly in output
       const messages = actualResult.messages || output.messages;
@@ -828,6 +1099,61 @@ function App() {
                       </div>
                     </div>
                   )}
+                </div>
+              );
+            }
+            
+            // Handle plasmid visualization results
+            if (lastToolMsg.name === 'plasmid_visualization' && toolResult.plasmid_data) {
+              return (
+                <div>
+                  {toolResult.text && (
+                    <pre className="bg-light p-3 border rounded mb-3">{toolResult.text}</pre>
+                  )}
+                  <div className="bg-light p-3 border rounded mb-3">
+                    <h5>Plasmid Visualization</h5>
+                    <div className="row">
+                      <div className="col-md-6">
+                        <h6>Plasmid Details</h6>
+                        <ul className="list-unstyled">
+                          <li><strong>Name:</strong> {toolResult.plasmid_data.name}</li>
+                          <li><strong>Size:</strong> {toolResult.plasmid_data.size} bp</li>
+                          <li><strong>Description:</strong> {toolResult.plasmid_data.description}</li>
+                          <li><strong>Visualization Type:</strong> {toolResult.visualization_type}</li>
+                        </ul>
+                      </div>
+                      <div className="col-md-6">
+                        <h6>Features</h6>
+                        {toolResult.plasmid_data.features && toolResult.plasmid_data.features.length > 0 ? (
+                          <ul className="list-unstyled">
+                            {toolResult.plasmid_data.features.map((feature: any, index: number) => (
+                              <li key={index}>
+                                <strong>{feature.name}:</strong> {feature.description} 
+                                (position {feature.start}-{feature.end})
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="text-muted">No features defined</p>
+                        )}
+                      </div>
+                    </div>
+                    {toolResult.metadata && (
+                      <div className="mt-3">
+                        <h6>Input Parameters</h6>
+                        <div className="row">
+                          {Object.entries(toolResult.metadata).map(([key, value]) => (
+                            <div key={key} className="col-md-6 mb-2">
+                              <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <div className="my-3">
+                    <PlasmidDataVisualizer data={toolResult.plasmid_data} />
+                  </div>
                 </div>
               );
             }
@@ -1032,6 +1358,29 @@ function App() {
               </ul>
             </div>
           ) : null}
+          
+          {/* --- NEW: Handle plasmid visualization results directly in actualResult --- */}
+          {(() => {
+            console.log('Checking for plasmid data in actualResult:', actualResult);
+            if (actualResult && actualResult.plasmid_data) {
+              console.log('Found plasmid visualization data directly in actualResult:', actualResult.plasmid_data);
+              console.log('About to render PlasmidDataVisualizer component');
+              console.log('DEBUG: ActualResult structure:', JSON.stringify(actualResult, null, 2));
+              return true;
+            }
+            return false;
+          })() && (
+            <div>
+              {actualResult.text && (
+                <pre className="bg-light p-3 border rounded mb-3">{actualResult.text}</pre>
+              )}
+              <div className="bg-light p-3 border rounded mb-3">
+                <h5>🧬 Plasmid Visualization</h5>
+                <PlasmidDataVisualizer data={actualResult.plasmid_data} />
+              </div>
+            </div>
+          )}
+          {/* --- END NEW --- */}
         </div>
       );
     }
@@ -1056,12 +1405,27 @@ function App() {
 
     if (output.tree_newick) {
       console.log('🔍 Detected tree_newick in output:', output.tree_newick);
+      console.log('🔍 Full output structure:', output);
       return (
         <div>
           {output.text && (
             <pre className="bg-light p-3 border rounded mb-3">{output.text}</pre>
           )}
-          <PhylogeneticTree newick={output.tree_newick} />
+          
+          {/* ETE3 Visualization */}
+          {output.ete_visualization && output.ete_visualization.svg && (
+            <div className="bg-light p-3 border rounded mb-3">
+              <h5>🧬 ETE3 Phylogenetic Tree Visualization</h5>
+              <div dangerouslySetInnerHTML={{ __html: output.ete_visualization.svg }} />
+            </div>
+          )}
+          
+          {/* D3.js Visualization as fallback */}
+          <div className="bg-light p-3 border rounded mb-3">
+            <h5>🧬 Interactive Phylogenetic Tree (D3.js)</h5>
+            <PhylogeneticTree newick={output.tree_newick} />
+          </div>
+          
           {output.statistics && (
             <div className="bg-light p-3 border rounded mb-3">
               <h6>Tree Statistics</h6>
@@ -1286,63 +1650,39 @@ function App() {
   };
 
   return (
-    <div className="container py-5">
+    <div className="container-fluid py-4 px-5">
       <div className="row">
-        <div className="col-md-8">
-          <h1 className="mb-4">DataBloom.AI Bioinformatics Interface</h1>
-          
-          {/* Navigation Tabs */}
-          <Nav variant="tabs" activeKey={activeTab} onSelect={(k) => setActiveTab(k || 'command')} className="mb-4">
-            <Nav.Item>
-              <Nav.Link eventKey="command">Command Interface</Nav.Link>
-            </Nav.Item>
-            <Nav.Item>
-              <Nav.Link eventKey="plasmid">Plasmid Visualizer</Nav.Link>
-            </Nav.Item>
-          </Nav>
-          
-          {/* Tab Content */}
-          <Tab.Content>
-            <Tab.Pane eventKey="command" active={activeTab === 'command'}>
-          
-          {/* Server Status */}
-          <div className="mb-3">
-            <span className={`badge ${serverStatus === 'healthy' ? 'bg-success' : 'bg-danger'}`}>
-              Server: {serverStatus}
-            </span>
-            {sessionId && (
-              <span className="badge bg-info ms-2">
-                Session: {sessionId.substring(0, 8)}...
-              </span>
-            )}
-          </div>
-          
-          {/* Command Mode Toggle */}
-          <div className="mb-3">
-            <div className="btn-group" role="group">
-              <input
-                type="radio"
-                className="btn-check"
-                name="commandMode"
-                id="naturalMode"
-                checked={commandMode === 'natural'}
-                onChange={() => setCommandMode('natural')}
-              />
-              <label className="btn btn-outline-primary" htmlFor="naturalMode">
-                Natural Language
-              </label>
-              
-              <input
-                type="radio"
-                className="btn-check"
-                name="commandMode"
-                id="structuredMode"
-                checked={commandMode === 'structured'}
-                onChange={() => setCommandMode('structured')}
-              />
-              <label className="btn btn-outline-primary" htmlFor="structuredMode">
-                Structured Commands
-              </label>
+        <div className="col-md-9 pe-5">
+          {/* Header Row with Tips */}
+          <div className="row mb-4">
+            <div className="col-md-8">
+              <div className="row">
+                <div className="col-12">
+                  <h1 className="mb-0">Helix.AI</h1>
+                </div>
+                <div className="col-12 mt-2">
+                  <span className={`badge ${serverStatus === 'healthy' ? 'bg-success' : 'bg-danger'}`}>
+                    Server: {serverStatus}
+                  </span>
+                  {sessionId && (
+                    <span className="badge bg-info ms-2">
+                      Session: {sessionId.substring(0, 8)}...
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+            <div className="col-md-4">
+              {/* Tips Section - Spans both rows */}
+              <div className="small text-muted p-3 bg-light rounded border h-100">
+                <strong className="text-primary">💡 Tips:</strong>
+                <ul className="mb-0 mt-1">
+                  <li>Upload FASTA files by dragging and dropping</li>
+                  <li>Use natural language for complex workflows</li>
+                  <li>Combine multiple steps in one command</li>
+                  <li>Ask for vendor research and testing options</li>
+                </ul>
+              </div>
             </div>
           </div>
           
@@ -1394,16 +1734,6 @@ function App() {
               >
                 🗑️ Clear Context
               </button>
-              <button 
-                className="btn btn-sm btn-outline-primary mt-2 ms-2"
-                onClick={() => {
-                  const testSequences = ">sequence1\nATGCGATCGATGCGATCG\n>sequence2\nATGCGATCGATGCGATC-\n>sequence3\nATGCGATCGATGCGATC-";
-                  setWorkflowContext(prev => ({ ...prev, alignedSequences: testSequences }));
-                  console.log('Test: Set aligned sequences in workflow context');
-                }}
-              >
-                🧪 Test Context
-              </button>
             </div>
           )}
 
@@ -1430,44 +1760,55 @@ function App() {
           
           {/* Command Input with Drag-and-Drop */}
       <div
-        className={`input-group mb-4${dragActive ? ' border border-primary border-3' : ''}`}
+        className={`mb-4${dragActive ? ' border border-primary border-3' : ''}`}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
         style={{ position: 'relative', background: dragActive ? '#e6f0ff' : undefined }}
       >
         <textarea
-          className="form-control"
+          className="form-control mb-3"
           value={command}
           onChange={(e) => setCommand(e.target.value)}
-          rows={command.split('\n').length < 4 ? 4 : command.split('\n').length}
-          style={{ resize: 'vertical', minHeight: 80 }}
+          rows={command.split('\n').length < 6 ? 6 : command.split('\n').length}
+          style={{ 
+            resize: 'vertical', 
+            minHeight: 120,
+            fontSize: '1rem',
+            fontFamily: 'monospace',
+            lineHeight: '1.4'
+          }}
           onKeyDown={(e) => {
             if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
               e.preventDefault();
               handleSubmit();
             }
           }}
-          placeholder={commandMode === 'natural'
-            ? `Enter natural language command (multi-line supported, Ctrl+Enter to submit)\nExample for FASTA:\n>seq1\nATCGATCGATCG\n>seq2\nATCGATCGATCG`
-            : `Enter your bioinformatics command (multi-line supported, Ctrl+Enter to submit)\nExample for FASTA:\n>seq1\nATCGATCGATCG\n>seq2\nATCGATCGATCG`
-          }
+          placeholder="visualize the phylogenetic tree"
         />
-        <button 
-          className="btn btn-primary" 
-          onClick={handleSubmit}
-          disabled={loading}
-          style={{ marginLeft: 8 }}
-        >
-          {loading ? (
-            <>
-              <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
-              Processing...
-            </>
-          ) : (
-            'Submit'
-          )}
-        </button>
+        <div className="text-center">
+          <button 
+            className="btn btn-primary btn-lg" 
+            onClick={handleSubmit}
+            disabled={loading}
+            style={{ 
+              padding: '15px 40px', 
+              fontSize: '1.2rem',
+              fontWeight: '600',
+              borderRadius: '8px',
+              boxShadow: '0 4px 8px rgba(0,123,255,0.3)'
+            }}
+          >
+            {loading ? (
+              <>
+                <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                Processing...
+              </>
+            ) : (
+              'Submit'
+            )}
+          </button>
+        </div>
         {dragActive && (
           <div
             style={{
@@ -1492,9 +1833,7 @@ function App() {
         )}
       </div>
 
-
-
-          {/* History */}
+      {/* History */}
           {history.map((item, index) => (
         <div className="mt-4" key={index}>
           <div className="mb-2">
@@ -1506,102 +1845,110 @@ function App() {
               {renderOutput(item)}
             </div>
           ))}
-            </Tab.Pane>
-            
-            <Tab.Pane eventKey="plasmid" active={activeTab === 'plasmid'}>
-              <PlasmidVisualizer sessionId={sessionId || undefined} />
-            </Tab.Pane>
-          </Tab.Content>
+
           </div>
 
         {/* Sidebar with Available Tools */}
-        <div className="col-md-4">
+        <div className="col-md-3 ps-4">
           {/* Example Commands */}
-          <div className="card">
-            <div className="card-header">
-              <h5 className="mb-0">Example Commands</h5>
+          <div className="card mb-3">
+            <div className="card-header bg-primary text-white">
+              <h6 className="mb-0">💡 Example Commands</h6>
             </div>
-            <div className="card-body">
+            <div className="card-body p-3" style={{ maxHeight: '400px', overflowY: 'auto' }}>
               {commandMode === 'natural' ? (
                 <>
-                  <div className="mb-3">
-                    <strong>🧬 Sequence Analysis:</strong>
-                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("align these sequences: >seq1 ATGCGATCG >seq2 ATGCGATC")} style={{cursor: 'pointer'}}>
+                  <div className="mb-2">
+                    <strong className="text-primary">🧬 Sequence Analysis:</strong>
+                    <div className="small text-muted mb-1 cursor-pointer p-1 rounded" onClick={() => handleExampleClick("align these sequences: >seq1 ATGCGATCG >seq2 ATGCGATC")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "align these sequences: {'>'}seq1 ATGCGATCG {'>'}seq2 ATGCGATC"
                     </div>
-                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("perform multiple sequence alignment on the uploaded sequences")} style={{cursor: 'pointer'}}>
+                    <div className="small text-muted mb-1 cursor-pointer p-1 rounded" onClick={() => handleExampleClick("perform multiple sequence alignment on the uploaded sequences")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "perform multiple sequence alignment on the uploaded sequences"
                 </div>
-                    <div className="small text-muted cursor-pointer" onClick={() => handleExampleClick("show me the alignment of these DNA sequences")} style={{cursor: 'pointer'}}>
+                    <div className="small text-muted cursor-pointer p-1 rounded" onClick={() => handleExampleClick("show me the alignment of these DNA sequences")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "show me the alignment of these DNA sequences"
             </div>
           </div>
           
-                  <div className="mb-3">
-                    <strong>🎯 Sequence Selection:</strong>
-                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("from the sequence variants, pick 10 sequences randomly")} style={{cursor: 'pointer'}}>
+                  <div className="mb-2">
+                    <strong className="text-primary">🎯 Sequence Selection:</strong>
+                    <div className="small text-muted mb-1 cursor-pointer p-1 rounded" onClick={() => handleExampleClick("from the sequence variants, pick 10 sequences randomly")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "from the sequence variants, pick 10 sequences randomly"
             </div>
-                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("select 5 sequences with the highest mutation rate")} style={{cursor: 'pointer'}}>
+                    <div className="small text-muted mb-1 cursor-pointer p-1 rounded" onClick={() => handleExampleClick("select 5 sequences with the highest mutation rate")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "select 5 sequences with the highest mutation rate"
                   </div>
-                    <div className="small text-muted cursor-pointer" onClick={() => handleExampleClick("choose the most diverse sequences from the alignment")} style={{cursor: 'pointer'}}>
+                    <div className="small text-muted cursor-pointer p-1 rounded" onClick={() => handleExampleClick("choose the most diverse sequences from the alignment")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "choose the most diverse sequences from the alignment"
                   </div>
                   </div>
                   
-                  <div className="mb-3">
-                    <strong>🧪 Mutation Generation:</strong>
-                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("mutate the sequence ATGCGATCG to create 96 variants")} style={{cursor: 'pointer'}}>
+                  <div className="mb-2">
+                    <strong className="text-primary">🧪 Mutation Generation:</strong>
+                    <div className="small text-muted mb-1 cursor-pointer p-1 rounded" onClick={() => handleExampleClick("mutate the sequence ATGCGATCG to create 96 variants")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "mutate the sequence ATGCGATCG to create 96 variants"
                   </div>
-                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("generate variants of this DNA sequence")} style={{cursor: 'pointer'}}>
+                    <div className="small text-muted mb-1 cursor-pointer p-1 rounded" onClick={() => handleExampleClick("generate variants of this DNA sequence")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "generate variants of this DNA sequence"
                     </div>
-                    <div className="small text-muted cursor-pointer" onClick={() => handleExampleClick("create mutations with 0.2 mutation rate")} style={{cursor: 'pointer'}}>
+                    <div className="small text-muted cursor-pointer p-1 rounded" onClick={() => handleExampleClick("create mutations with 0.2 mutation rate")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "create mutations with 0.2 mutation rate"
                     </div>
                   </div>
                   
-                  <div className="mb-3">
-                    <strong>🔬 Data Analysis:</strong>
-                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("analyze the alignment and show me the most conserved regions")} style={{cursor: 'pointer'}}>
+                  <div className="mb-2">
+                    <strong className="text-primary">🔬 Data Analysis:</strong>
+                    <div className="small text-muted mb-1 cursor-pointer p-1 rounded" onClick={() => handleExampleClick("analyze the alignment and show me the most conserved regions")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "analyze the alignment and show me the most conserved regions"
                     </div>
-                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("create visualizations of the sequence data")} style={{cursor: 'pointer'}}>
+                    <div className="small text-muted mb-1 cursor-pointer p-1 rounded" onClick={() => handleExampleClick("create visualizations of the sequence data")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "create visualizations of the sequence data"
                     </div>
-                    <div className="small text-muted cursor-pointer" onClick={() => handleExampleClick("show me statistics for these sequences")} style={{cursor: 'pointer'}}>
+                    <div className="small text-muted cursor-pointer p-1 rounded" onClick={() => handleExampleClick("show me statistics for these sequences")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "show me statistics for these sequences"
                     </div>
                   </div>
                   
-                  <div className="mb-3">
-                    <strong>🧬 DNA Synthesis & Testing:</strong>
-                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("I want to order these sequences from a DNA synthesis vendor")} style={{cursor: 'pointer'}}>
+                  <div className="mb-2">
+                    <strong className="text-primary">🧬 DNA Synthesis & Testing:</strong>
+                    <div className="small text-muted mb-1 cursor-pointer p-1 rounded" onClick={() => handleExampleClick("I want to order these sequences from a DNA synthesis vendor")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "I want to order these sequences from a DNA synthesis vendor"
                     </div>
-                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("find DNA synthesis companies for my sequences")} style={{cursor: 'pointer'}}>
+                    <div className="small text-muted mb-1 cursor-pointer p-1 rounded" onClick={() => handleExampleClick("find DNA synthesis companies for my sequences")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "find DNA synthesis companies for my sequences"
                     </div>
-                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("what testing options are available for my sequences?")} style={{cursor: 'pointer'}}>
+                    <div className="small text-muted mb-1 cursor-pointer p-1 rounded" onClick={() => handleExampleClick("what testing options are available for my sequences?")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "what testing options are available for my sequences?"
                     </div>
-                    <div className="small text-muted cursor-pointer" onClick={() => handleExampleClick("research vendors for gene synthesis and validation")} style={{cursor: 'pointer'}}>
+                    <div className="small text-muted cursor-pointer p-1 rounded" onClick={() => handleExampleClick("research vendors for gene synthesis and validation")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "research vendors for gene synthesis and validation"
                     </div>
                   </div>
                   
-                  <div className="mb-3">
-                    <strong>🔄 Multi-step Workflows:</strong>
-                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("mutate this sequence, then align the variants and pick the best ones")} style={{cursor: 'pointer'}}>
+                  <div className="mb-2">
+                    <strong className="text-primary">🔄 Multi-step Workflows:</strong>
+                    <div className="small text-muted mb-1 cursor-pointer p-1 rounded" onClick={() => handleExampleClick("mutate this sequence, then align the variants and pick the best ones")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "mutate this sequence, then align the variants and pick the best ones"
                     </div>
-                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("analyze these sequences and then find vendors to synthesize them")} style={{cursor: 'pointer'}}>
+                    <div className="small text-muted mb-1 cursor-pointer p-1 rounded" onClick={() => handleExampleClick("analyze these sequences and then find vendors to synthesize them")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "analyze these sequences and then find vendors to synthesize them"
                     </div>
-                    <div className="small text-muted cursor-pointer" onClick={() => handleExampleClick("align sequences and find synthesis vendors with testing options")} style={{cursor: 'pointer'}}>
+                    <div className="small text-muted cursor-pointer p-1 rounded" onClick={() => handleExampleClick("align sequences and find synthesis vendors with testing options")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
                       "align sequences and find synthesis vendors with testing options"
+                    </div>
+                  </div>
+                  
+                  <div className="mb-2">
+                    <strong className="text-primary">🔬 Plasmid Visualization:</strong>
+                    <div className="small text-muted mb-1 cursor-pointer p-1 rounded" onClick={() => handleExampleClick("Visualize plasmid pUC19 with EcoRI site and insert ATGCGATCG")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
+                      "Visualize plasmid pUC19 with EcoRI site and insert ATGCGATCG"
+                    </div>
+                    <div className="small text-muted mb-1 cursor-pointer p-1 rounded" onClick={() => handleExampleClick("Create plasmid visualization for pBR322 with BamHI site")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
+                      "Create plasmid visualization for pBR322 with BamHI site"
+                    </div>
+                    <div className="small text-muted cursor-pointer p-1 rounded" onClick={() => handleExampleClick("Show plasmid map with cloning sites and insert sequence")} style={{cursor: 'pointer', fontSize: '0.8rem'}}>
+                      "Show plasmid map with cloning sites and insert sequence"
                     </div>
                   </div>
                 </>
@@ -1661,45 +2008,34 @@ function App() {
                   
                   <div className="mb-3">
                     <strong>🔬 Plasmid Visualization:</strong>
-                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("express ATGCGATCG in pTet vector")} style={{cursor: 'pointer'}}>
-                      "express ATGCGATCG in pTet vector"
+                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("insert sequence ATGGTGCACCTGACTGATGCTGAGAAGTCTGCGGTACTGCCTGCTGGGGGGTCTACCCTTGGACCCAGAGGTTCTTTGAGTCCTTTGGGGATCTGTCCACTCCTGATGCTGTTATGGGCAACCCTAAGGTGAAGGCTCATGGCAAGAAAGTGCTCGGTGCCTTTAGTGATGGCCTGGCTCACCTGGACAACCTCAAGGGCACCTTTGCCACACTGAGTGAGCTGCACTGTGACAAGCTGCACGTGGATCCTGAGAACTTCAGGCTCCTGGGCAACGTGCTGGTCTGTGTGCTGGCCCATCACTTTGGCAAAGAATTCACCCCACCAGTGCAGGCTGCCTATCAGAAAGTGGTGGCTGGTGTGGCTAATGCCCTGGCCCACAAGTATCACTAA into pUC19 vector")} style={{cursor: 'pointer'}}>
+                      "Insert GFP gene into pUC19 vector"
                     </div>
-                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("create plasmid visualization for the variants")} style={{cursor: 'pointer'}}>
-                      "create plasmid visualization for the variants"
+                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("express sequence ATGGTGCACCTGACTGATGCTGAGAAGTCTGCGGTACTGCCTGCTGGGGGGTCTACCCTTGGACCCAGAGGTTCTTTGAGTCCTTTGGGGATCTGTCCACTCCTGATGCTGTTATGGGCAACCCTAAGGTGAAGGCTCATGGCAAGAAAGTGCTCGGTGCCTTTAGTGATGGCCTGGCTCACCTGGACAACCTCAAGGGCACCTTTGCCACACTGAGTGAGCTGCACTGTGACAAGCTGCACGTGGATCCTGAGAACTTCAGGCTCCTGGGCAACGTGCTGGTCTGTGTGCTGGCCCATCACTTTGGCAAAGAATTCACCCCACCAGTGCAGGCTGCCTATCAGAAAGTGGTGGCTGGTGTGGCTAATGCCCTGGCCCACAAGTATCACTAA in pUC19 vector")} style={{cursor: 'pointer'}}>
+                      "Express beta-globin gene in pUC19"
                     </div>
-                    <div className="small text-muted cursor-pointer" onClick={() => handleExampleClick("show cloning sites in pUC19 vector")} style={{cursor: 'pointer'}}>
-                      "show cloning sites in pUC19 vector"
+                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("insert representatives into pUC19 vector")} style={{cursor: 'pointer'}}>
+                      "Insert representative sequences into pUC19 vector"
                     </div>
                   </div>
                 </>
               )}
-              
-              <hr className="my-3" />
-              <div className="small text-muted">
-                <strong>💡 Tips:</strong>
-                <ul className="mb-0 mt-1">
-                  <li>Upload FASTA files by dragging and dropping</li>
-                  <li>Use natural language for complex workflows</li>
-                  <li>Combine multiple steps in one command</li>
-                  <li>Ask for vendor research and testing options</li>
-                </ul>
-            </div>
           </div>
         </div>
           
           <div className="card mt-3">
-            <div className="card-header">
-              <h5 className="mb-0">Available MCP Tools</h5>
+            <div className="card-header bg-success text-white">
+              <h6 className="mb-0">🛠️ Available MCP Tools</h6>
             </div>
-            <div className="card-body">
+            <div className="card-body p-3" style={{ maxHeight: '300px', overflowY: 'auto' }}>
               {availableTools.map((tool, index) => (
-                <div key={index} className="mb-3">
-                  <h6 className="text-primary">{tool.name}</h6>
-                  <p className="small text-muted mb-1">{tool.description}</p>
+                <div key={index} className="mb-2 p-2 border rounded">
+                  <h6 className="text-success mb-1" style={{ fontSize: '0.9rem' }}>{tool.name}</h6>
+                  <p className="small text-muted mb-1" style={{ fontSize: '0.75rem' }}>{tool.description}</p>
                   {tool.parameters && (
                     <div className="small">
-                      <strong>Parameters:</strong>
-                      <ul className="list-unstyled mt-1">
+                      <strong style={{ fontSize: '0.75rem' }}>Parameters:</strong>
+                      <ul className="list-unstyled mt-1" style={{ fontSize: '0.7rem' }}>
                         {Object.entries(tool.parameters).map(([key, value]) => (
                           <li key={key}><code>{key}</code>: {String(value)}</li>
                         ))}
@@ -1712,6 +2048,8 @@ function App() {
           </div>
         </div>
       </div>
+      
+
     </div>
   );
 }

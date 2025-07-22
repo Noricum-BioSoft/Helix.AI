@@ -1,4 +1,4 @@
-# DataBloom.AI Frontend
+# Helix.AI Frontend
 
 This frontend application provides a user-friendly interface for interacting with the Bioinformatics MCP Server.
 

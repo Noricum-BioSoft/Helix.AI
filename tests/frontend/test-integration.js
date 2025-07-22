@@ -27,7 +27,7 @@ async function testEndpoint(endpoint, method = 'GET', data = null) {
 }
 
 async function runTests() {
-  console.log('🧪 Testing DataBloom.AI Frontend-Backend Integration');
+  console.log('🧪 Testing Helix.AI Frontend-Backend Integration');
   console.log('=' .repeat(60));
 
   // Test 1: Health Check

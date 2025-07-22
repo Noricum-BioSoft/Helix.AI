@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test script for DataBloom.AI Microservices Architecture
+Test script for Helix.AI Microservices Architecture
 """
 
 import asyncio
@@ -161,7 +161,7 @@ class MicroservicesTester:
     
     async def run_all_tests(self):
         """Run all tests"""
-        print("🚀 Starting DataBloom.AI Microservices Tests")
+        print("🚀 Starting Helix.AI Microservices Tests")
         print("=" * 50)
         
         tests = [

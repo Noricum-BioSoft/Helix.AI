@@ -1,1 +1,1 @@
-# Tools package for DataBloom.AI bioinformatics tools 
+# Tools package for Helix.AI bioinformatics tools 

@@ -31,3 +31,5 @@ uvicorn
 
 # Bioinformatics dependencies
 biopython
+plotly
+ete3

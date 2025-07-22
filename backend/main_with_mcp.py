@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Dict, Any, Optional, List
 import asyncio
@@ -7,6 +8,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+import numpy as np
 
 # Add the current directory to Python path for imports
 sys.path.append(str(Path(__file__).parent))
@@ -14,7 +16,27 @@ sys.path.append(str(Path(__file__).parent))
 from agent import handle_command
 from history_manager import history_manager
 
-app = FastAPI(title="DataBloom.AI Bioinformatics API", version="1.0.0")
+def serialize_for_json(obj):
+    """Convert objects to JSON-serializable format, handling numpy types."""
+    if isinstance(obj, dict):
+        return {key: serialize_for_json(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [serialize_for_json(item) for item in obj]
+    elif isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    else:
+        return obj
+
+class CustomJSONResponse(JSONResponse):
+    def render(self, content):
+        serialized_content = serialize_for_json(content)
+        return json.dumps(serialized_content, default=str).encode("utf-8")
+
+app = FastAPI(title="Helix.AI Bioinformatics API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -78,6 +100,13 @@ class PlasmidVisualizationRequest(BaseModel):
     insert_sequence: str
     session_id: Optional[str] = None
 
+class PlasmidForRepresentativesRequest(BaseModel):
+    representatives: List[str]
+    aligned_sequences: str
+    vector_name: str = "pUC19"
+    cloning_sites: str = "EcoRI, BamHI, HindIII"
+    session_id: Optional[str] = None
+
 class SessionRequest(BaseModel):
     user_id: Optional[str] = None
 
@@ -90,6 +119,17 @@ async def create_session(req: SessionRequest):
             "success": True,
             "session_id": session_id,
             "message": "Session created successfully"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/create_session")
+async def create_session_alias():
+    """Alias for /session/create to support frontend compatibility."""
+    try:
+        session_id = history_manager.create_session()
+        return {
+            "session_id": session_id
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -119,28 +159,64 @@ async def execute(req: CommandRequest):
         if not req.session_id:
             req.session_id = history_manager.create_session()
         
-        # Execute command
-        result = await handle_command(req.command)
+        # Get session context from history manager
+        session_context = {}
+        if hasattr(history_manager, 'sessions') and req.session_id in history_manager.sessions:
+            session_context = history_manager.sessions[req.session_id]
         
-        # Track in history
-        history_manager.add_history_entry(
-            req.session_id,
-            req.command,
-            "general_command",
-            result
-        )
+        # Use command router with session context
+        from command_router import CommandRouter
+        command_router = CommandRouter()
         
-        return {
-            "success": True,
-            "result": result,
-            "session_id": req.session_id
-        }
+        # Route the command to the appropriate tool
+        tool_name, parameters = command_router.route_command(req.command, session_context)
+        print(f"🔧 Routed command '{req.command}' to tool '{tool_name}' with parameters: {parameters}")
+        
+        # DEBUG: Print session context before tool call
+        print(f"🔧 [DEBUG] Session context before {tool_name} call:")
+        print(f"  Session ID: {req.session_id}")
+        print(f"  Session context keys: {list(session_context.keys()) if session_context else 'None'}")
+        if session_context and "mutated_sequences" in session_context:
+            print(f"  mutated_sequences count: {len(session_context['mutated_sequences'])}")
+        if session_context and "mutation_results" in session_context:
+            print(f"  mutation_results count: {len(session_context['mutation_results'])}")
+        
+        # Call the appropriate MCP tool
+        try:
+            result = await call_mcp_tool(tool_name, parameters)
+            
+            # Track in history with the correct tool name
+            history_manager.add_history_entry(
+                req.session_id,
+                req.command,
+                tool_name,  # Use the actual tool name instead of "general_command"
+                result
+            )
+            
+            return CustomJSONResponse({
+                "success": True,
+                "result": result,
+                "session_id": req.session_id
+            })
+        except ValueError as e:
+            # Handle unknown tool errors gracefully
+            error_result = {
+                "status": "error",
+                "message": str(e),
+                "tool": tool_name,
+                "suggestion": "Try a different command or check available tools"
+            }
+            return CustomJSONResponse({
+                "success": False,
+                "result": error_result,
+                "session_id": req.session_id
+            })
     except Exception as e:
-        return {
+        return CustomJSONResponse({
             "success": False,
             "error": str(e),
             "session_id": req.session_id
-        }
+        })
 
 @app.post("/mcp/sequence-alignment")
 async def sequence_alignment_mcp(req: SequenceAlignmentRequest):
@@ -164,9 +240,18 @@ async def sequence_alignment_mcp(req: SequenceAlignmentRequest):
             {"algorithm": req.algorithm}
         )
         
-        return MCPResponse(success=True, result=result, session_id=req.session_id)
+        return CustomJSONResponse({
+            "success": True,
+            "result": result,
+            "session_id": req.session_id
+        })
     except Exception as e:
-        return MCPResponse(success=False, result={}, error=str(e), session_id=req.session_id)
+        return CustomJSONResponse({
+            "success": False,
+            "result": {},
+            "error": str(e),
+            "session_id": req.session_id
+        })
 
 @app.post("/mcp/mutate-sequence")
 async def mutate_sequence_mcp(req: MutationRequest):
@@ -193,10 +278,44 @@ async def mutate_sequence_mcp(req: MutationRequest):
                 "mutation_rate": req.mutation_rate
             }
         )
+        # Store mutated sequences in session context for downstream steps
+        # Try to extract variants from result
+        variants = None
+        if isinstance(result, dict):
+            if "variants" in result:
+                variants = result["variants"]
+            elif "output" in result and isinstance(result["output"], dict) and "variants" in result["output"]:
+                variants = result["output"]["variants"]
+        if variants:
+            # Store in the in-memory session context
+            if hasattr(history_manager, 'sessions') and req.session_id in history_manager.sessions:
+                history_manager.sessions[req.session_id]["mutated_sequences"] = variants
+                # Also store as mutation_results for select_variants
+                history_manager.sessions[req.session_id]["mutation_results"] = variants
+                
+                # DEBUG: Print session contents after mutation
+                print(f"🔧 [DEBUG] After mutation - Session {req.session_id} contents:")
+                session_data = history_manager.sessions[req.session_id]
+                for key, value in session_data.items():
+                    if key in ["mutated_sequences", "mutation_results"]:
+                        print(f"  {key}: {len(value) if isinstance(value, list) else type(value)} items")
+                        if isinstance(value, list) and len(value) > 0:
+                            print(f"    First item: {value[0]}")
+                    else:
+                        print(f"  {key}: {type(value)}")
         
-        return MCPResponse(success=True, result=result, session_id=req.session_id)
+        return CustomJSONResponse({
+            "success": True,
+            "result": result,
+            "session_id": req.session_id
+        })
     except Exception as e:
-        return MCPResponse(success=False, result={}, error=str(e), session_id=req.session_id)
+        return CustomJSONResponse({
+            "success": False,
+            "result": {},
+            "error": str(e),
+            "session_id": req.session_id
+        })
 
 @app.post("/mcp/analyze-sequence-data")
 async def analyze_sequence_data_mcp(req: AnalysisRequest):
@@ -220,14 +339,37 @@ async def analyze_sequence_data_mcp(req: AnalysisRequest):
             {"analysis_type": req.analysis_type}
         )
         
-        return MCPResponse(success=True, result=result, session_id=req.session_id)
+        return CustomJSONResponse({
+            "success": True,
+            "result": result,
+            "session_id": req.session_id
+        })
     except Exception as e:
-        return MCPResponse(success=False, result={}, error=str(e), session_id=req.session_id)
+        return CustomJSONResponse({
+            "success": False,
+            "result": {},
+            "error": str(e),
+            "session_id": req.session_id
+        })
 
 @app.post("/mcp/select-variants")
 async def select_variants_mcp(req: VariantSelectionRequest):
     """Select variants from previous mutation results."""
     try:
+        # DEBUG: Print session contents before selection
+        print(f"🔧 [DEBUG] Before selection - Session {req.session_id} contents:")
+        if hasattr(history_manager, 'sessions') and req.session_id in history_manager.sessions:
+            session_data = history_manager.sessions[req.session_id]
+            for key, value in session_data.items():
+                if key in ["mutated_sequences", "mutation_results"]:
+                    print(f"  {key}: {len(value) if isinstance(value, list) else type(value)} items")
+                    if isinstance(value, list) and len(value) > 0:
+                        print(f"    First item: {value[0]}")
+                else:
+                    print(f"  {key}: {type(value)}")
+        else:
+            print(f"  Session {req.session_id} not found in history_manager.sessions")
+        
         # Add tools directory to path
         tools_path = str((Path(__file__).resolve().parent.parent / "tools").resolve())
         sys.path.insert(0, tools_path)
@@ -254,9 +396,18 @@ async def select_variants_mcp(req: VariantSelectionRequest):
             }
         )
         
-        return MCPResponse(success=True, result=result, session_id=req.session_id)
+        return CustomJSONResponse({
+            "success": True,
+            "result": result,
+            "session_id": req.session_id
+        })
     except Exception as e:
-        return MCPResponse(success=False, result={}, error=str(e), session_id=req.session_id)
+        return CustomJSONResponse({
+            "success": False,
+            "result": {},
+            "error": str(e),
+            "session_id": req.session_id
+        })
 
 @app.post("/mcp/parse-command")
 async def parse_command_mcp(req: CommandParseRequest):
@@ -270,9 +421,18 @@ async def parse_command_mcp(req: CommandParseRequest):
         
         result = command_parser.parse_command_raw(req.command, req.session_id)
         
-        return MCPResponse(success=True, result=result, session_id=req.session_id)
+        return CustomJSONResponse({
+            "success": True,
+            "result": result,
+            "session_id": req.session_id
+        })
     except Exception as e:
-        return MCPResponse(success=False, result={}, error=str(e), session_id=req.session_id)
+        return CustomJSONResponse({
+            "success": False,
+            "result": {},
+            "error": str(e),
+            "session_id": req.session_id
+        })
 
 @app.post("/mcp/execute-command")
 async def execute_command_mcp(req: CommandExecuteRequest):
@@ -286,9 +446,17 @@ async def execute_command_mcp(req: CommandExecuteRequest):
         
         result = command_executor.execute_command_raw(req.parsed_command)
         
-        return MCPResponse(success=True, result=result, session_id=req.parsed_command.get("session_id"))
+        return CustomJSONResponse({
+            "success": True,
+            "result": result,
+            "session_id": req.parsed_command.get("session_id")
+        })
     except Exception as e:
-        return MCPResponse(success=False, result={}, error=str(e))
+        return CustomJSONResponse({
+            "success": False,
+            "result": {},
+            "error": str(e)
+        })
 
 @app.post("/mcp/handle-natural-command")
 async def handle_natural_command_mcp(req: NaturalCommandRequest):
@@ -302,9 +470,18 @@ async def handle_natural_command_mcp(req: NaturalCommandRequest):
         
         result = command_handler.handle_command_raw(req.command, req.session_id)
         
-        return MCPResponse(success=True, result=result, session_id=req.session_id)
+        return CustomJSONResponse({
+            "success": True,
+            "result": result,
+            "session_id": req.session_id
+        })
     except Exception as e:
-        return MCPResponse(success=False, result={}, error=str(e), session_id=req.session_id)
+        return CustomJSONResponse({
+            "success": False,
+            "result": {},
+            "error": str(e),
+            "session_id": req.session_id
+        })
 
 @app.post("/mcp/visualize-alignment")
 async def visualize_alignment_mcp(alignment_file: str, output_format: str = "png"):
@@ -314,9 +491,16 @@ async def visualize_alignment_mcp(alignment_file: str, output_format: str = "png
             "alignment_file": alignment_file,
             "output_format": output_format
         })
-        return MCPResponse(success=True, result=result)
+        return CustomJSONResponse({
+            "success": True,
+            "result": result
+        })
     except Exception as e:
-        return MCPResponse(success=False, result={}, error=str(e))
+        return CustomJSONResponse({
+            "success": False,
+            "result": {},
+            "error": str(e)
+        })
 
 @app.post("/mcp/plasmid-visualization")
 async def plasmid_visualization_mcp(req: PlasmidVisualizationRequest):
@@ -351,9 +535,65 @@ async def plasmid_visualization_mcp(req: PlasmidVisualizationRequest):
             }
         )
         
-        return MCPResponse(success=True, result=result, session_id=req.session_id)
+        return CustomJSONResponse({
+            "success": True,
+            "result": result,
+            "session_id": req.session_id
+        })
     except Exception as e:
-        return MCPResponse(success=False, result={}, error=str(e), session_id=req.session_id)
+        return CustomJSONResponse({
+            "success": False,
+            "result": {},
+            "error": str(e),
+            "session_id": req.session_id
+        })
+
+@app.post("/mcp/plasmid-for-representatives")
+async def plasmid_for_representatives_mcp(req: PlasmidForRepresentativesRequest):
+    """Generate plasmid visualizations for representative sequences from clustering."""
+    try:
+        # Create session if not provided
+        if not req.session_id:
+            req.session_id = history_manager.create_session()
+        
+        # Add tools directory to path
+        tools_path = str((Path(__file__).resolve().parent.parent / "tools").resolve())
+        sys.path.insert(0, tools_path)
+        
+        import plasmid_visualizer
+        
+        result = plasmid_visualizer.create_plasmid_for_representatives(
+            req.representatives,
+            req.aligned_sequences,
+            req.vector_name,
+            req.cloning_sites
+        )
+        
+        # Track in history
+        history_manager.add_history_entry(
+            req.session_id,
+            f"Create plasmid visualizations for {len(req.representatives)} representatives in {req.vector_name}",
+            "plasmid_for_representatives",
+            result,
+            {
+                "representatives": req.representatives,
+                "vector_name": req.vector_name,
+                "cloning_sites": req.cloning_sites
+            }
+        )
+        
+        return CustomJSONResponse({
+            "success": True,
+            "result": result,
+            "session_id": req.session_id
+        })
+    except Exception as e:
+        return CustomJSONResponse({
+            "success": False,
+            "result": {},
+            "error": str(e),
+            "session_id": req.session_id
+        })
 
 @app.get("/mcp/tools")
 async def list_mcp_tools():
@@ -412,6 +652,16 @@ async def list_mcp_tools():
                     "cloning_sites": "string (e.g., BsaI:123-456, EcoRI:789-1012)",
                     "insert_sequence": "string (DNA sequence to insert)"
                 }
+            },
+            {
+                "name": "plasmid_for_representatives",
+                "description": "Create plasmid visualizations for representative sequences from clustering analysis",
+                "parameters": {
+                    "representatives": "list of strings (representative sequence names)",
+                    "aligned_sequences": "string (FASTA format sequences)",
+                    "vector_name": "string (e.g., pUC19)",
+                    "cloning_sites": "string (e.g., EcoRI, BamHI, HindIII)"
+                }
             }
         ]
         return {"tools": tools}
@@ -454,6 +704,15 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
         import bio
         return {"result": str(bio.align_and_visualize_fasta(None))}
     
+    elif tool_name == "select_variants":
+        import variant_selection
+        return variant_selection.run_variant_selection_raw(
+            arguments.get("session_id", ""),
+            arguments.get("selection_criteria", "diversity"),
+            arguments.get("num_variants", 10),
+            arguments.get("custom_filters", None)
+        )
+    
     elif tool_name == "plasmid_visualization":
         import plasmid_visualizer
         return plasmid_visualizer.run_plasmid_visualization_raw(
@@ -461,6 +720,42 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
             arguments.get("cloning_sites", ""),
             arguments.get("insert_sequence", "")
         )
+    
+    elif tool_name == "plasmid_for_representatives":
+        import plasmid_visualizer
+        return plasmid_visualizer.create_plasmid_for_representatives(
+            arguments.get("representatives", []),
+            arguments.get("aligned_sequences", ""),
+            arguments.get("vector_name", "pUC19"),
+            arguments.get("cloning_sites", "EcoRI, BamHI, HindIII")
+        )
+    
+    elif tool_name == "handle_natural_command":
+        # Use the natural command handler
+        import command_handler
+        command = arguments.get("command", "")
+        session_id = arguments.get("session_id", "")
+        return command_handler.handle_command_raw(command, session_id)
+    
+    elif tool_name == "phylogenetic_tree":
+        # Handle phylogenetic tree analysis
+        import phylogenetic_tree
+        aligned_sequences = arguments.get("aligned_sequences", "")
+        return phylogenetic_tree.run_phylogenetic_tree_raw(aligned_sequences)
+    
+    elif tool_name == "clustering_analysis":
+        # Handle clustering analysis
+        import phylogenetic_tree
+        aligned_sequences = arguments.get("aligned_sequences", "")
+        num_clusters = arguments.get("num_clusters", 5)
+        return phylogenetic_tree.run_clustering_from_tree(aligned_sequences, num_clusters)
+    
+    elif tool_name == "variant_selection":
+        # Handle variant selection
+        import phylogenetic_tree
+        aligned_sequences = arguments.get("aligned_sequences", "")
+        num_variants = arguments.get("num_variants", 10)
+        return phylogenetic_tree.run_variant_selection_from_tree(aligned_sequences, num_variants)
     
     else:
         raise ValueError(f"Unknown tool: {tool_name}")
@@ -496,7 +791,7 @@ def parse_fasta_to_dataframe(fasta_content: str):
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
-    return {"status": "healthy", "service": "DataBloom.AI Bioinformatics API"}
+    return {"status": "healthy", "service": "Helix.AI Bioinformatics API"}
 
 if __name__ == "__main__":
     import uvicorn

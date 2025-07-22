@@ -377,4 +377,4 @@ When contributing to the enhanced MCP server:
 
 ## 📄 License
 
-This enhanced MCP server implementation is part of the DataBloom.AI project and follows the same license terms. 
+This enhanced MCP server implementation is part of the Helix.AI project and follows the same license terms. 
