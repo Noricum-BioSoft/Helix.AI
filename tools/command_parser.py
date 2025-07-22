@@ -69,6 +69,16 @@ class CommandParser:
                 r'create\s+plasmid\s+visualization',
                 r'plasmid\s+viewer',
                 r'circular\s+plasmid',
+                r'insert\s+.*sequence.*into\s+.*vector',
+                r'express\s+.*sequence.*in\s+.*vector',
+                r'clone\s+.*sequence.*into\s+.*vector',
+                r'insert\s+.*into\s+.*vector',
+                r'express\s+.*in\s+.*vector',
+                r'clone\s+.*into\s+.*vector',
+                r'put\s+.*sequence.*in\s+.*vector',
+                r'place\s+.*sequence.*in\s+.*vector',
+                r'insert\s+.*gene.*into\s+.*vector',
+                r'express\s+.*gene.*in\s+.*vector',
             ],
             'phylogenetic_tree': [
                 r'create\s+phylogenetic\s+tree',
@@ -271,7 +281,7 @@ class CommandParser:
             # Extract plasmid parameters from command
             vector_name = self._extract_vector_name(original_command)
             cloning_sites = self._extract_cloning_sites(original_command)
-            insert_sequence = self._extract_sequence(original_command)
+            insert_sequence = self._extract_sequence_from_command(original_command)
             
             return ParsedCommand(
                 action="plasmid_visualization",
@@ -434,44 +444,50 @@ class CommandParser:
             return fasta
         return ""
     
+    def _extract_cloning_sites(self, command: str) -> str:
+        """Extract cloning sites from command."""
+        # Look for patterns like "BsaI:123-456, EcoRI:789-1012"
+        sites_pattern = r'([A-Za-z]+:\d+-\d+(?:\s*,\s*[A-Za-z]+:\d+-\d+)*)'
+        match = re.search(sites_pattern, command)
+        if match:
+            return match.group(1)
+        return "BsaI:100-200, EcoRI:300-400"  # Default sites
+    
+    def _extract_sequence_from_command(self, command: str) -> str:
+        """Extract sequence from plasmid visualization command."""
+        # Look for sequence patterns
+        sequence_patterns = [
+            r'sequence\s+([ATCG]+)',
+            r'gene\s+([ATCG]+)',
+            r'([ATCG]{10,})',  # Any DNA sequence of 10+ bases
+            r'insert\s+([ATCG]+)',
+            r'express\s+([ATCG]+)',
+        ]
+        
+        for pattern in sequence_patterns:
+            match = re.search(pattern, command, re.IGNORECASE)
+            if match:
+                return match.group(1).upper()
+        
+        # If no sequence found, return a default GFP sequence
+        return "ATGGTGCACCTGACTGATGCTGAGAAGTCTGCGGTACTGCCTGCTGGGGGGTCTACCCTTGGACCCAGAGGTTCTTTGAGTCCTTTGGGGATCTGTCCACTCCTGATGCTGTTATGGGCAACCCTAAGGTGAAGGCTCATGGCAAGAAAGTGCTCGGTGCCTTTAGTGATGGCCTGGCTCACCTGGACAACCTCAAGGGCACCTTTGCCACACTGAGTGAGCTGCACTGTGACAAGCTGCACGTGGATCCTGAGAACTTCAGGCTCCTGGGCAACGTGCTGGTCTGTGTGCTGGCCCATCACTTTGGCAAAGAATTCACCCCACCAGTGCAGGCTGCCTATCAGAAAGTGGTGGCTGGTGTGGCTAATGCCCTGGCCCACAAGTATCACTAA"
+    
     def _extract_vector_name(self, command: str) -> str:
-        """Extract vector name from command."""
-        # Look for common vector patterns like pTet, pUC, etc.
+        """Extract vector name from plasmid visualization command."""
+        # Look for vector patterns
         vector_patterns = [
-            r'p[A-Z][a-zA-Z0-9]*',  # pTet, pUC, etc.
-            r'vector\s+([a-zA-Z0-9]+)',
-            r'plasmid\s+([a-zA-Z0-9]+)'
+            r'into\s+(\w+)\s+vector',
+            r'in\s+(\w+)\s+vector',
+            r'vector\s+(\w+)',
+            r'(\w+)\s+vector',
         ]
         
         for pattern in vector_patterns:
             match = re.search(pattern, command, re.IGNORECASE)
             if match:
-                return match.group(0) if 'vector' not in pattern and 'plasmid' not in pattern else match.group(1)
+                return match.group(1)
         
-        return "pTet"  # Default vector name
-    
-    def _extract_cloning_sites(self, command: str) -> str:
-        """Extract cloning sites from command."""
-        # Look for restriction enzyme patterns
-        enzyme_patterns = [
-            r'([A-Za-z]+I):(\d+)-(\d+)',  # BsaI:123-456
-            r'([A-Za-z]+I)\s+(\d+)-(\d+)',  # BsaI 123-456
-            r'([A-Za-z]+I)',  # Just enzyme name
-        ]
-        
-        sites = []
-        for pattern in enzyme_patterns:
-            matches = re.findall(pattern, command)
-            for match in matches:
-                if len(match) == 3:  # Has positions
-                    sites.append(f"{match[0]}:{match[1]}-{match[2]}")
-                elif len(match) == 1:  # Just enzyme name
-                    sites.append(f"{match[0]}:1-100")  # Default positions
-        
-        if sites:
-            return ", ".join(sites)
-        
-        return "BsaI:1-100"  # Default cloning site
+        return "pUC19"  # Default vector
 
 def parse_command_raw(command: str, session_id: Optional[str] = None) -> Dict[str, Any]:
     """Raw function for command parsing (for direct calls)."""

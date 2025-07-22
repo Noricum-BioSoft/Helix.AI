@@ -2,7 +2,7 @@
 
 import asyncio
 
-from typing import Dict
+from typing import Dict, List
 
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
@@ -250,6 +250,26 @@ def plasmid_visualization(vector_name: str, cloning_sites: str, insert_sequence:
         "visualization_type": result.get("visualization_type", "circular_plasmid"),
     }
 
+@tool
+def plasmid_for_representatives(representatives: List[str], aligned_sequences: str, vector_name: str = "pUC19", cloning_sites: str = "EcoRI, BamHI, HindIII") -> Dict:
+    """Create plasmid visualizations for representative sequences from clustering analysis."""
+    
+    # Import the plasmid visualization function
+    import sys
+    import os
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'tools'))
+    from plasmid_visualizer import create_plasmid_for_representatives
+    
+    result = create_plasmid_for_representatives(representatives, aligned_sequences, vector_name, cloning_sites)
+    
+    return {
+        "text": result.get("text", "Plasmid visualizations for representatives created successfully."),
+        "plasmid_results": result.get("plasmid_results", []),
+        "total_representatives": result.get("total_representatives", 0),
+        "vector_name": result.get("vector_name", vector_name),
+        "cloning_sites": result.get("cloning_sites", cloning_sites),
+    }
+
 
 # llm = init_chat_model("deepseek:deepseek-chat", temperature=0)
 
@@ -296,7 +316,7 @@ Think step by step about what tool to use, then respond accordingly."""
 
 agent = create_react_agent(
     model=model,
-    tools=[sequence_alignment, mutate_sequence, dna_vendor_research, phylogenetic_tree, sequence_selection, synthesis_submission, plasmid_visualization],
+    tools=[sequence_alignment, mutate_sequence, dna_vendor_research, phylogenetic_tree, sequence_selection, synthesis_submission, plasmid_visualization, plasmid_for_representatives],
     checkpointer=memory,
 )
 

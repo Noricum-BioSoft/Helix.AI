@@ -3,8 +3,9 @@ import { MSAView } from 'react-msaview';
 import Plot from 'react-plotly.js';
 import { mcpApi } from './services/mcpApi';
 import { CommandParser, ParsedCommand } from './utils/commandParser';
-import { PlasmidDataVisualizer } from './components/PlasmidVisualizer';
+import { PlasmidDataVisualizer, PlasmidRepresentativesVisualizer } from './components/PlasmidVisualizer';
 import { PhylogeneticTree } from './components/PhylogeneticTree';
+import PlasmidViewerDemo from './components/PlasmidViewerDemo';
 
 import 'bootstrap/dist/css/bootstrap.min.css';
 import Modal from 'react-bootstrap/Modal';
@@ -39,6 +40,7 @@ function App() {
   const [uploadedFile, setUploadedFile] = useState<{ name: string; content: string } | null>(null);
   const [workflowContext, setWorkflowContext] = useState<WorkflowContext>({});
   const [isInitialized, setIsInitialized] = useState(false);
+  const [showPlasmidDemo, setShowPlasmidDemo] = useState(false);
 
   const handleExampleClick = (exampleCommand: string) => {
     setCommand(exampleCommand);
@@ -289,6 +291,11 @@ function App() {
         timestamp: new Date()
       };
       
+      console.log('🔍 Adding to history:', historyItem);
+      console.log('🔍 Response structure:', JSON.stringify(response, null, 2));
+      console.log('🔍 Response success:', (response as any).success);
+      console.log('🔍 Response result keys:', (response as any).result ? Object.keys((response as any).result) : 'No result');
+      
       setHistory(prev => [historyItem, ...prev]);
       
     } catch (error) {
@@ -344,23 +351,125 @@ function App() {
     const { output, type } = item;
     
     // Add debugging
-    console.log('renderOutput called with:', { output, type });
-    console.log('output structure:', JSON.stringify(output, null, 2));
-    console.log('output keys:', Object.keys(output));
+    console.log('🔍 renderOutput called with:', { type, input: item.input });
+    console.log('🔍 output structure:', JSON.stringify(output, null, 2));
+    console.log('🔍 output keys:', Object.keys(output));
+    console.log('🔍 Checking for tree_newick in output:', output.tree_newick ? 'FOUND' : 'NOT FOUND');
+    console.log('🔍 Checking for ete_visualization in output:', output.ete_visualization ? 'FOUND' : 'NOT FOUND');
+    console.log('🔍 ETE3 SVG content:', output.ete_visualization?.svg ? 'PRESENT' : 'MISSING');
+    
+    // Check in result field if not found in output directly
+    const actualResult = output.result || output;
+    console.log('🔍 Checking for tree_newick in actualResult:', actualResult.tree_newick ? 'FOUND' : 'NOT FOUND');
+    console.log('🔍 Checking for ete_visualization in actualResult:', actualResult.ete_visualization ? 'FOUND' : 'NOT FOUND');
+    console.log('🔍 Checking for clustering_result in actualResult:', actualResult.clustering_result ? 'FOUND' : 'NOT FOUND');
+    
+          // Add visible debug info
+      if (actualResult.tree_newick) {
+        console.log('🔍 ETE3 Debug - Full actualResult:', actualResult);
+        // Show alert with debug info
+        // alert(`ETE3 Debug: ${actualResult.ete_visualization ? 'FOUND' : 'NOT FOUND'} | SVG: ${actualResult.ete_visualization?.svg ? 'FOUND' : 'NOT FOUND'}`);
+        
+        // Also show the ETE3 visualization if available
+        if (actualResult.ete_visualization?.svg) {
+          const eteDiv = document.createElement('div');
+          eteDiv.innerHTML = actualResult.ete_visualization.svg;
+          eteDiv.style.border = '2px solid red';
+          eteDiv.style.padding = '10px';
+          eteDiv.style.margin = '10px';
+          document.body.appendChild(eteDiv);
+        }
+      }
     
     // --- NEW: Render phylogenetic tree if present ---
-    if (output && output.tree_newick) {
+    if (actualResult && actualResult.tree_newick) {
+      console.log('🔍 Phylogenetic tree section 1 - tree_newick detected:', actualResult.tree_newick);
+      console.log('🔍 Full actualResult structure:', actualResult);
       return (
         <div>
-          <PhylogeneticTree newick={output.tree_newick} />
           {output.text && (
             <pre className="bg-light p-3 border rounded mb-3">{output.text}</pre>
           )}
-          {output.statistics && (
+          
+          {/* Debug Section - Hidden by default, expandable */}
+          <details className="bg-light p-2 border rounded mb-3">
+            <summary className="text-muted" style={{cursor: 'pointer'}}>
+              🔍 Debug Info (click to expand)
+            </summary>
+            <div className="mt-2">
+              <p>Output keys: {Object.keys(output).join(', ')}</p>
+              <p>Result keys: {output.result ? Object.keys(output.result).join(', ') : 'No result'}</p>
+              <p>Tree in output: {output.tree_newick ? 'YES' : 'NO'}</p>
+              <p>Tree in result: {output.result?.tree_newick ? 'YES' : 'NO'}</p>
+              <p>ETE3 in output: {output.ete_visualization ? 'YES' : 'NO'}</p>
+              <p>ETE3 in result: {output.result?.ete_visualization ? 'YES' : 'NO'}</p>
+            </div>
+          </details>
+          
+          {actualResult.text && (
+            <pre className="bg-light p-3 border rounded mb-3">{actualResult.text}</pre>
+          )}
+
+          {/* Clustering Results */}
+          {actualResult.clustering_result && (
+            <div className="bg-light p-3 border rounded mb-3">
+              <h5>🧬 Clustering Analysis Results</h5>
+              <div className="row">
+                <div className="col-md-6">
+                  <h6>Summary</h6>
+                  <ul className="list-unstyled">
+                    <li><strong>Total Sequences:</strong> {actualResult.clustering_result.total_sequences}</li>
+                    <li><strong>Number of Clusters:</strong> {actualResult.clustering_result.num_clusters}</li>
+                    <li><strong>Representatives:</strong> {actualResult.clustering_result.representatives?.join(', ')}</li>
+                  </ul>
+                </div>
+                <div className="col-md-6">
+                  <h6>Cluster Details</h6>
+                  {actualResult.clustering_result.clusters && (
+                    <div>
+                      {actualResult.clustering_result.clusters.map((cluster: any, index: number) => (
+                        <div key={index} className="mb-2">
+                          <strong>Cluster {cluster.cluster_id}:</strong>
+                          <ul className="list-unstyled ml-3">
+                            <li>Size: {cluster.size} sequences</li>
+                            <li>Representative: {cluster.representative}</li>
+                            <li>Average Distance: {cluster.average_distance?.toFixed(4)}</li>
+                          </ul>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Clustered Visualization */}
+          {actualResult.clustered_visualization && actualResult.clustered_visualization.svg && (
+            <div className="bg-light p-3 border rounded mb-3">
+              <h5>🧬 Clustered Phylogenetic Tree Visualization</h5>
+              <div dangerouslySetInnerHTML={{ __html: actualResult.clustered_visualization.svg }} />
+            </div>
+          )}
+
+          {/* ETE3 Visualization */}
+          {actualResult.ete_visualization && actualResult.ete_visualization.svg && (
+            <div className="bg-light p-3 border rounded mb-3">
+              <h5>🧬 ETE3 Phylogenetic Tree Visualization</h5>
+              <div dangerouslySetInnerHTML={{ __html: actualResult.ete_visualization.svg }} />
+            </div>
+          )}
+          
+          {/* D3.js Visualization as fallback */}
+          <div className="bg-light p-3 border rounded mb-3">
+            <h5>🧬 Interactive Phylogenetic Tree (D3.js)</h5>
+            <PhylogeneticTree newick={actualResult.tree_newick} />
+          </div>
+          {actualResult.statistics && (
             <div className="bg-light p-3 border rounded mb-3">
               <h6>Tree Statistics</h6>
               <div className="row">
-                {Object.entries(output.statistics).map(([key, value]) => (
+                {Object.entries(actualResult.statistics).map(([key, value]) => (
                   <div key={key} className="col-md-6 mb-2">
                     <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
                   </div>
@@ -657,8 +766,27 @@ function App() {
                     </div>
                   )}
                 </div>
-                <div className="my-3">
-                  <PlasmidDataVisualizer data={toolResult.plasmid_data} />
+                <div className="text-center mb-3">
+                  <button 
+                    className="btn btn-success btn-lg"
+                    onClick={() => {
+                      // Store plasmid data in workflow context and show plasmid viewer
+                      console.log('Opening plasmid viewer with data:', toolResult.plasmid_data);
+                      updateWorkflowContext('plasmid_visualization', toolResult.plasmid_data);
+                      setShowPlasmidDemo(true);
+                    }}
+                    style={{
+                      fontSize: '1.1rem',
+                      padding: '12px 24px',
+                      boxShadow: '0 4px 8px rgba(0,0,0,0.2)',
+                      borderRadius: '25px'
+                    }}
+                  >
+                    🧬 View Plasmid Visualization
+                  </button>
+                  <p className="text-muted mt-2">
+                    Click the button above to open the interactive plasmid viewer
+                  </p>
                 </div>
               </div>
             );
@@ -693,17 +821,71 @@ function App() {
       console.log('result structure:', JSON.stringify(result, null, 2));
       
       // Handle nested result structure from natural language commands
-      const actualResult = result.result || result;
       console.log('actualResult structure:', JSON.stringify(actualResult, null, 2));
 
       // --- NEW: Render phylogenetic tree if present in actualResult ---
       if (actualResult && actualResult.tree_newick) {
         return (
           <div>
-            <PhylogeneticTree newick={actualResult.tree_newick} />
             {actualResult.text && (
               <pre className="bg-light p-3 border rounded mb-3">{actualResult.text}</pre>
             )}
+
+            {/* Clustering Results */}
+            {actualResult.clustering_result && (
+              <div className="bg-light p-3 border rounded mb-3">
+                <h5>🧬 Clustering Analysis Results</h5>
+                <div className="row">
+                  <div className="col-md-6">
+                    <h6>Summary</h6>
+                    <ul className="list-unstyled">
+                      <li><strong>Total Sequences:</strong> {actualResult.clustering_result.total_sequences}</li>
+                      <li><strong>Number of Clusters:</strong> {actualResult.clustering_result.num_clusters}</li>
+                      <li><strong>Representatives:</strong> {actualResult.clustering_result.representatives?.join(', ')}</li>
+                    </ul>
+                  </div>
+                  <div className="col-md-6">
+                    <h6>Cluster Details</h6>
+                    {actualResult.clustering_result.clusters && (
+                      <div>
+                        {actualResult.clustering_result.clusters.map((cluster: any, index: number) => (
+                          <div key={index} className="mb-2">
+                            <strong>Cluster {cluster.cluster_id}:</strong>
+                            <ul className="list-unstyled ml-3">
+                              <li>Size: {cluster.size} sequences</li>
+                              <li>Representative: {cluster.representative}</li>
+                              <li>Average Distance: {cluster.average_distance?.toFixed(4)}</li>
+                            </ul>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Clustered Visualization */}
+            {actualResult.clustered_visualization && actualResult.clustered_visualization.svg && (
+              <div className="bg-light p-3 border rounded mb-3">
+                <h5>🧬 Clustered Phylogenetic Tree Visualization</h5>
+                <div dangerouslySetInnerHTML={{ __html: actualResult.clustered_visualization.svg }} />
+              </div>
+            )}
+
+            {/* ETE3 Visualization */}
+            {actualResult.ete_visualization && actualResult.ete_visualization.svg && (
+              <div className="bg-light p-3 border rounded mb-3">
+                <h5>🧬 ETE3 Phylogenetic Tree Visualization</h5>
+                <div dangerouslySetInnerHTML={{ __html: actualResult.ete_visualization.svg }} />
+              </div>
+            )}
+            
+                         {/* D3.js Visualization as fallback */}
+             <div className="bg-light p-3 border rounded mb-3">
+               <h5>🧬 Interactive Phylogenetic Tree (D3.js)</h5>
+               <PhylogeneticTree newick={actualResult.tree_newick} />
+             </div>
             {actualResult.statistics && (
               <div className="bg-light p-3 border rounded mb-3">
                 <h6>Tree Statistics</h6>
@@ -729,49 +911,25 @@ function App() {
               <pre className="bg-light p-3 border rounded mb-3">{actualResult.text}</pre>
             )}
             <div className="bg-light p-3 border rounded mb-3">
-              <h5>Plasmid Visualization</h5>
-              <div className="row">
-                <div className="col-md-6">
-                  <h6>Plasmid Details</h6>
-                  <ul className="list-unstyled">
-                    <li><strong>Name:</strong> {actualResult.plasmid_data.name}</li>
-                    <li><strong>Size:</strong> {actualResult.plasmid_data.size} bp</li>
-                    <li><strong>Description:</strong> {actualResult.plasmid_data.description}</li>
-                    <li><strong>Visualization Type:</strong> {actualResult.visualization_type}</li>
-                  </ul>
-                </div>
-                <div className="col-md-6">
-                  <h6>Features</h6>
-                  {actualResult.plasmid_data.features && actualResult.plasmid_data.features.length > 0 ? (
-                    <ul className="list-unstyled">
-                      {actualResult.plasmid_data.features.map((feature: any, index: number) => (
-                        <li key={index}>
-                          <strong>{feature.name}:</strong> {feature.description} 
-                          (position {feature.start}-{feature.end})
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="text-muted">No features defined</p>
-                  )}
-                </div>
-              </div>
-              {actualResult.metadata && (
-                <div className="mt-3">
-                  <h6>Input Parameters</h6>
-                  <div className="row">
-                    {Object.entries(actualResult.metadata).map(([key, value]) => (
-                      <div key={key} className="col-md-6 mb-2">
-                        <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-            <div className="my-3">
+              <h5>🧬 Plasmid Visualization</h5>
               <PlasmidDataVisualizer data={actualResult.plasmid_data} />
             </div>
+          </div>
+        );
+      }
+
+      // Handle plasmid for representatives results
+      if (actualResult.plasmid_results) {
+        return (
+          <div>
+            {actualResult.text && (
+              <pre className="bg-light p-3 border rounded mb-3">{actualResult.text}</pre>
+            )}
+            <PlasmidRepresentativesVisualizer 
+              plasmidResults={actualResult.plasmid_results}
+              vectorName={actualResult.vector_name || "pUC19"}
+              cloningSites={actualResult.cloning_sites || "EcoRI, BamHI, HindIII"}
+            />
           </div>
         );
       }
@@ -1221,47 +1379,7 @@ function App() {
                 <pre className="bg-light p-3 border rounded mb-3">{actualResult.text}</pre>
               )}
               <div className="bg-light p-3 border rounded mb-3">
-                <h5>Plasmid Visualization</h5>
-                <div className="row">
-                  <div className="col-md-6">
-                    <h6>Plasmid Details</h6>
-                    <ul className="list-unstyled">
-                      <li><strong>Name:</strong> {actualResult.plasmid_data.name}</li>
-                      <li><strong>Size:</strong> {actualResult.plasmid_data.size} bp</li>
-                      <li><strong>Description:</strong> {actualResult.plasmid_data.description}</li>
-                      <li><strong>Visualization Type:</strong> {actualResult.visualization_type}</li>
-                    </ul>
-                  </div>
-                  <div className="col-md-6">
-                    <h6>Features</h6>
-                    {actualResult.plasmid_data.features && actualResult.plasmid_data.features.length > 0 ? (
-                      <ul className="list-unstyled">
-                        {actualResult.plasmid_data.features.map((feature: any, index: number) => (
-                          <li key={index}>
-                            <strong>{feature.name}:</strong> {feature.description} 
-                            (position {feature.start}-{feature.end})
-                          </li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <p className="text-muted">No features defined</p>
-                    )}
-                  </div>
-                </div>
-                {actualResult.metadata && (
-                  <div className="mt-3">
-                    <h6>Input Parameters</h6>
-                    <div className="row">
-                      {Object.entries(actualResult.metadata).map(([key, value]) => (
-                        <div key={key} className="col-md-6 mb-2">
-                          <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-              <div className="my-3">
+                <h5>🧬 Plasmid Visualization</h5>
                 <PlasmidDataVisualizer data={actualResult.plasmid_data} />
               </div>
             </div>
@@ -1291,12 +1409,27 @@ function App() {
 
     if (output.tree_newick) {
       console.log('🔍 Detected tree_newick in output:', output.tree_newick);
+      console.log('🔍 Full output structure:', output);
       return (
         <div>
           {output.text && (
             <pre className="bg-light p-3 border rounded mb-3">{output.text}</pre>
           )}
-          <PhylogeneticTree newick={output.tree_newick} />
+          
+          {/* ETE3 Visualization */}
+          {output.ete_visualization && output.ete_visualization.svg && (
+            <div className="bg-light p-3 border rounded mb-3">
+              <h5>🧬 ETE3 Phylogenetic Tree Visualization</h5>
+              <div dangerouslySetInnerHTML={{ __html: output.ete_visualization.svg }} />
+            </div>
+          )}
+          
+          {/* D3.js Visualization as fallback */}
+          <div className="bg-light p-3 border rounded mb-3">
+            <h5>🧬 Interactive Phylogenetic Tree (D3.js)</h5>
+            <PhylogeneticTree newick={output.tree_newick} />
+          </div>
+          
           {output.statistics && (
             <div className="bg-light p-3 border rounded mb-3">
               <h6>Tree Statistics</h6>
@@ -1526,16 +1659,7 @@ function App() {
         <div className="col-md-8">
           <h1 className="mb-4">Helix.AI Bioinformatics Interface</h1>
           
-          {/* Navigation Tabs */}
-          <Nav variant="tabs" activeKey={activeTab} onSelect={(k) => setActiveTab(k || 'command')} className="mb-4">
-            <Nav.Item>
-              <Nav.Link eventKey="command">Command Interface</Nav.Link>
-            </Nav.Item>
-          </Nav>
-          
-          {/* Tab Content */}
-          <Tab.Content>
-            <Tab.Pane eventKey="command" active={activeTab === 'command'}>
+
           
           {/* Server Status */}
           <div className="mb-3">
@@ -1549,34 +1673,7 @@ function App() {
             )}
           </div>
           
-          {/* Command Mode Toggle */}
-          <div className="mb-3">
-            <div className="btn-group" role="group">
-              <input
-                type="radio"
-                className="btn-check"
-                name="commandMode"
-                id="naturalMode"
-                checked={commandMode === 'natural'}
-                onChange={() => setCommandMode('natural')}
-              />
-              <label className="btn btn-outline-primary" htmlFor="naturalMode">
-                Natural Language
-              </label>
-              
-              <input
-                type="radio"
-                className="btn-check"
-                name="commandMode"
-                id="structuredMode"
-                checked={commandMode === 'structured'}
-                onChange={() => setCommandMode('structured')}
-              />
-              <label className="btn btn-outline-primary" htmlFor="structuredMode">
-                Structured Commands
-              </label>
-            </div>
-          </div>
+
           
           {/* Workflow Context Display */}
           {(workflowContext.alignedSequences || workflowContext.selectedSequences || workflowContext.mutatedSequences || workflowContext.plasmidData) && (
@@ -1662,14 +1759,14 @@ function App() {
           
           {/* Command Input with Drag-and-Drop */}
       <div
-        className={`input-group mb-4${dragActive ? ' border border-primary border-3' : ''}`}
+        className={`mb-4${dragActive ? ' border border-primary border-3' : ''}`}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
         style={{ position: 'relative', background: dragActive ? '#e6f0ff' : undefined }}
       >
         <textarea
-          className="form-control"
+          className="form-control mb-3"
           value={command}
           onChange={(e) => setCommand(e.target.value)}
           rows={command.split('\n').length < 4 ? 4 : command.split('\n').length}
@@ -1680,26 +1777,25 @@ function App() {
               handleSubmit();
             }
           }}
-          placeholder={commandMode === 'natural' 
-            ? `Enter natural language command (multi-line supported, Ctrl+Enter to submit)\nExample for FASTA:\n>seq1\nATCGATCGATCG\n>seq2\nATCGATCGATCG`
-            : `Enter your bioinformatics command (multi-line supported, Ctrl+Enter to submit)\nExample for FASTA:\n>seq1\nATCGATCGATCG\n>seq2\nATCGATCGATCG`
-          }
+          placeholder="Enter your bioinformatics command (multi-line supported, Ctrl+Enter to submit)"
         />
-        <button 
-          className="btn btn-primary" 
-          onClick={handleSubmit}
-          disabled={loading}
-          style={{ marginLeft: 8 }}
-        >
-          {loading ? (
-            <>
-              <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
-              Processing...
-            </>
-          ) : (
-            'Submit'
-          )}
-        </button>
+        <div className="text-center">
+          <button 
+            className="btn btn-primary btn-lg" 
+            onClick={handleSubmit}
+            disabled={loading}
+            style={{ padding: '12px 30px', fontSize: '1.1rem' }}
+          >
+            {loading ? (
+              <>
+                <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                Processing...
+              </>
+            ) : (
+              'Submit'
+            )}
+          </button>
+        </div>
         {dragActive && (
           <div
             style={{
@@ -1738,10 +1834,7 @@ function App() {
               {renderOutput(item)}
             </div>
           ))}
-            </Tab.Pane>
-            
 
-          </Tab.Content>
           </div>
 
         {/* Sidebar with Available Tools */}
@@ -1917,17 +2010,14 @@ function App() {
                   
                   <div className="mb-3">
                     <strong>🔬 Plasmid Visualization:</strong>
-                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("express ATGCGATCG in pTet vector")} style={{cursor: 'pointer'}}>
-                      "express ATGCGATCG in pTet vector"
+                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("insert sequence ATGGTGCACCTGACTGATGCTGAGAAGTCTGCGGTACTGCCTGCTGGGGGGTCTACCCTTGGACCCAGAGGTTCTTTGAGTCCTTTGGGGATCTGTCCACTCCTGATGCTGTTATGGGCAACCCTAAGGTGAAGGCTCATGGCAAGAAAGTGCTCGGTGCCTTTAGTGATGGCCTGGCTCACCTGGACAACCTCAAGGGCACCTTTGCCACACTGAGTGAGCTGCACTGTGACAAGCTGCACGTGGATCCTGAGAACTTCAGGCTCCTGGGCAACGTGCTGGTCTGTGTGCTGGCCCATCACTTTGGCAAAGAATTCACCCCACCAGTGCAGGCTGCCTATCAGAAAGTGGTGGCTGGTGTGGCTAATGCCCTGGCCCACAAGTATCACTAA into pUC19 vector")} style={{cursor: 'pointer'}}>
+                      "Insert GFP gene into pUC19 vector"
                     </div>
-                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("create plasmid visualization for the variants")} style={{cursor: 'pointer'}}>
-                      "create plasmid visualization for the variants"
+                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("express sequence ATGGTGCACCTGACTGATGCTGAGAAGTCTGCGGTACTGCCTGCTGGGGGGTCTACCCTTGGACCCAGAGGTTCTTTGAGTCCTTTGGGGATCTGTCCACTCCTGATGCTGTTATGGGCAACCCTAAGGTGAAGGCTCATGGCAAGAAAGTGCTCGGTGCCTTTAGTGATGGCCTGGCTCACCTGGACAACCTCAAGGGCACCTTTGCCACACTGAGTGAGCTGCACTGTGACAAGCTGCACGTGGATCCTGAGAACTTCAGGCTCCTGGGCAACGTGCTGGTCTGTGTGCTGGCCCATCACTTTGGCAAAGAATTCACCCCACCAGTGCAGGCTGCCTATCAGAAAGTGGTGGCTGGTGTGGCTAATGCCCTGGCCCACAAGTATCACTAA in pUC19 vector")} style={{cursor: 'pointer'}}>
+                      "Express beta-globin gene in pUC19"
                     </div>
-                    <div className="small text-muted cursor-pointer" onClick={() => handleExampleClick("show cloning sites in pUC19 vector")} style={{cursor: 'pointer'}}>
-                      "show cloning sites in pUC19 vector"
-                    </div>
-                    <div className="small text-muted cursor-pointer" onClick={() => handleExampleClick("Visualize plasmid pUC19 with EcoRI site and insert ATGCGATCG")} style={{cursor: 'pointer'}}>
-                      "Visualize plasmid pUC19 with EcoRI site and insert ATGCGATCG"
+                    <div className="small text-muted mb-1 cursor-pointer" onClick={() => handleExampleClick("insert representatives into pUC19 vector")} style={{cursor: 'pointer'}}>
+                      "Insert representative sequences into pUC19 vector"
                     </div>
                   </div>
                 </>
@@ -1971,6 +2061,27 @@ function App() {
           </div>
         </div>
       </div>
+      
+      {/* Plasmid Viewer Demo Modal */}
+      {showPlasmidDemo && (
+        <div className="modal fade show d-block" style={{backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 1050}}>
+          <div className="modal-dialog modal-xl">
+            <div className="modal-content">
+              <div className="modal-header">
+                <h5 className="modal-title">🧬 Plasmid Viewer Demo</h5>
+                <button 
+                  type="button" 
+                  className="btn-close" 
+                  onClick={() => setShowPlasmidDemo(false)}
+                ></button>
+              </div>
+              <div className="modal-body p-0">
+                <PlasmidViewerDemo plasmidData={workflowContext.plasmidData} />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

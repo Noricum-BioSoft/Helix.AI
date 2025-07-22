@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Dict, Any, Optional, List
 import asyncio
@@ -7,12 +8,33 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+import numpy as np
 
 # Add the current directory to Python path for imports
 sys.path.append(str(Path(__file__).parent))
 
 from agent import handle_command
 from history_manager import history_manager
+
+def serialize_for_json(obj):
+    """Convert objects to JSON-serializable format, handling numpy types."""
+    if isinstance(obj, dict):
+        return {key: serialize_for_json(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [serialize_for_json(item) for item in obj]
+    elif isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    else:
+        return obj
+
+class CustomJSONResponse(JSONResponse):
+    def render(self, content):
+        serialized_content = serialize_for_json(content)
+        return json.dumps(serialized_content, default=str).encode("utf-8")
 
 app = FastAPI(title="Helix.AI Bioinformatics API", version="1.0.0")
 
@@ -76,6 +98,13 @@ class PlasmidVisualizationRequest(BaseModel):
     vector_name: str
     cloning_sites: str
     insert_sequence: str
+    session_id: Optional[str] = None
+
+class PlasmidForRepresentativesRequest(BaseModel):
+    representatives: List[str]
+    aligned_sequences: str
+    vector_name: str = "pUC19"
+    cloning_sites: str = "EcoRI, BamHI, HindIII"
     session_id: Optional[str] = None
 
 class SessionRequest(BaseModel):
@@ -164,11 +193,11 @@ async def execute(req: CommandRequest):
                 result
             )
             
-            return {
+            return CustomJSONResponse({
                 "success": True,
                 "result": result,
                 "session_id": req.session_id
-            }
+            })
         except ValueError as e:
             # Handle unknown tool errors gracefully
             error_result = {
@@ -177,17 +206,17 @@ async def execute(req: CommandRequest):
                 "tool": tool_name,
                 "suggestion": "Try a different command or check available tools"
             }
-            return {
+            return CustomJSONResponse({
                 "success": False,
                 "result": error_result,
                 "session_id": req.session_id
-            }
+            })
     except Exception as e:
-        return {
+        return CustomJSONResponse({
             "success": False,
             "error": str(e),
             "session_id": req.session_id
-        }
+        })
 
 @app.post("/mcp/sequence-alignment")
 async def sequence_alignment_mcp(req: SequenceAlignmentRequest):
@@ -211,9 +240,18 @@ async def sequence_alignment_mcp(req: SequenceAlignmentRequest):
             {"algorithm": req.algorithm}
         )
         
-        return MCPResponse(success=True, result=result, session_id=req.session_id)
+        return CustomJSONResponse({
+            "success": True,
+            "result": result,
+            "session_id": req.session_id
+        })
     except Exception as e:
-        return MCPResponse(success=False, result={}, error=str(e), session_id=req.session_id)
+        return CustomJSONResponse({
+            "success": False,
+            "result": {},
+            "error": str(e),
+            "session_id": req.session_id
+        })
 
 @app.post("/mcp/mutate-sequence")
 async def mutate_sequence_mcp(req: MutationRequest):
@@ -266,9 +304,18 @@ async def mutate_sequence_mcp(req: MutationRequest):
                     else:
                         print(f"  {key}: {type(value)}")
         
-        return MCPResponse(success=True, result=result, session_id=req.session_id)
+        return CustomJSONResponse({
+            "success": True,
+            "result": result,
+            "session_id": req.session_id
+        })
     except Exception as e:
-        return MCPResponse(success=False, result={}, error=str(e), session_id=req.session_id)
+        return CustomJSONResponse({
+            "success": False,
+            "result": {},
+            "error": str(e),
+            "session_id": req.session_id
+        })
 
 @app.post("/mcp/analyze-sequence-data")
 async def analyze_sequence_data_mcp(req: AnalysisRequest):
@@ -292,9 +339,18 @@ async def analyze_sequence_data_mcp(req: AnalysisRequest):
             {"analysis_type": req.analysis_type}
         )
         
-        return MCPResponse(success=True, result=result, session_id=req.session_id)
+        return CustomJSONResponse({
+            "success": True,
+            "result": result,
+            "session_id": req.session_id
+        })
     except Exception as e:
-        return MCPResponse(success=False, result={}, error=str(e), session_id=req.session_id)
+        return CustomJSONResponse({
+            "success": False,
+            "result": {},
+            "error": str(e),
+            "session_id": req.session_id
+        })
 
 @app.post("/mcp/select-variants")
 async def select_variants_mcp(req: VariantSelectionRequest):
@@ -340,9 +396,18 @@ async def select_variants_mcp(req: VariantSelectionRequest):
             }
         )
         
-        return MCPResponse(success=True, result=result, session_id=req.session_id)
+        return CustomJSONResponse({
+            "success": True,
+            "result": result,
+            "session_id": req.session_id
+        })
     except Exception as e:
-        return MCPResponse(success=False, result={}, error=str(e), session_id=req.session_id)
+        return CustomJSONResponse({
+            "success": False,
+            "result": {},
+            "error": str(e),
+            "session_id": req.session_id
+        })
 
 @app.post("/mcp/parse-command")
 async def parse_command_mcp(req: CommandParseRequest):
@@ -356,9 +421,18 @@ async def parse_command_mcp(req: CommandParseRequest):
         
         result = command_parser.parse_command_raw(req.command, req.session_id)
         
-        return MCPResponse(success=True, result=result, session_id=req.session_id)
+        return CustomJSONResponse({
+            "success": True,
+            "result": result,
+            "session_id": req.session_id
+        })
     except Exception as e:
-        return MCPResponse(success=False, result={}, error=str(e), session_id=req.session_id)
+        return CustomJSONResponse({
+            "success": False,
+            "result": {},
+            "error": str(e),
+            "session_id": req.session_id
+        })
 
 @app.post("/mcp/execute-command")
 async def execute_command_mcp(req: CommandExecuteRequest):
@@ -372,9 +446,17 @@ async def execute_command_mcp(req: CommandExecuteRequest):
         
         result = command_executor.execute_command_raw(req.parsed_command)
         
-        return MCPResponse(success=True, result=result, session_id=req.parsed_command.get("session_id"))
+        return CustomJSONResponse({
+            "success": True,
+            "result": result,
+            "session_id": req.parsed_command.get("session_id")
+        })
     except Exception as e:
-        return MCPResponse(success=False, result={}, error=str(e))
+        return CustomJSONResponse({
+            "success": False,
+            "result": {},
+            "error": str(e)
+        })
 
 @app.post("/mcp/handle-natural-command")
 async def handle_natural_command_mcp(req: NaturalCommandRequest):
@@ -388,9 +470,18 @@ async def handle_natural_command_mcp(req: NaturalCommandRequest):
         
         result = command_handler.handle_command_raw(req.command, req.session_id)
         
-        return MCPResponse(success=True, result=result, session_id=req.session_id)
+        return CustomJSONResponse({
+            "success": True,
+            "result": result,
+            "session_id": req.session_id
+        })
     except Exception as e:
-        return MCPResponse(success=False, result={}, error=str(e), session_id=req.session_id)
+        return CustomJSONResponse({
+            "success": False,
+            "result": {},
+            "error": str(e),
+            "session_id": req.session_id
+        })
 
 @app.post("/mcp/visualize-alignment")
 async def visualize_alignment_mcp(alignment_file: str, output_format: str = "png"):
@@ -400,9 +491,16 @@ async def visualize_alignment_mcp(alignment_file: str, output_format: str = "png
             "alignment_file": alignment_file,
             "output_format": output_format
         })
-        return MCPResponse(success=True, result=result)
+        return CustomJSONResponse({
+            "success": True,
+            "result": result
+        })
     except Exception as e:
-        return MCPResponse(success=False, result={}, error=str(e))
+        return CustomJSONResponse({
+            "success": False,
+            "result": {},
+            "error": str(e)
+        })
 
 @app.post("/mcp/plasmid-visualization")
 async def plasmid_visualization_mcp(req: PlasmidVisualizationRequest):
@@ -437,9 +535,65 @@ async def plasmid_visualization_mcp(req: PlasmidVisualizationRequest):
             }
         )
         
-        return MCPResponse(success=True, result=result, session_id=req.session_id)
+        return CustomJSONResponse({
+            "success": True,
+            "result": result,
+            "session_id": req.session_id
+        })
     except Exception as e:
-        return MCPResponse(success=False, result={}, error=str(e), session_id=req.session_id)
+        return CustomJSONResponse({
+            "success": False,
+            "result": {},
+            "error": str(e),
+            "session_id": req.session_id
+        })
+
+@app.post("/mcp/plasmid-for-representatives")
+async def plasmid_for_representatives_mcp(req: PlasmidForRepresentativesRequest):
+    """Generate plasmid visualizations for representative sequences from clustering."""
+    try:
+        # Create session if not provided
+        if not req.session_id:
+            req.session_id = history_manager.create_session()
+        
+        # Add tools directory to path
+        tools_path = str((Path(__file__).resolve().parent.parent / "tools").resolve())
+        sys.path.insert(0, tools_path)
+        
+        import plasmid_visualizer
+        
+        result = plasmid_visualizer.create_plasmid_for_representatives(
+            req.representatives,
+            req.aligned_sequences,
+            req.vector_name,
+            req.cloning_sites
+        )
+        
+        # Track in history
+        history_manager.add_history_entry(
+            req.session_id,
+            f"Create plasmid visualizations for {len(req.representatives)} representatives in {req.vector_name}",
+            "plasmid_for_representatives",
+            result,
+            {
+                "representatives": req.representatives,
+                "vector_name": req.vector_name,
+                "cloning_sites": req.cloning_sites
+            }
+        )
+        
+        return CustomJSONResponse({
+            "success": True,
+            "result": result,
+            "session_id": req.session_id
+        })
+    except Exception as e:
+        return CustomJSONResponse({
+            "success": False,
+            "result": {},
+            "error": str(e),
+            "session_id": req.session_id
+        })
 
 @app.get("/mcp/tools")
 async def list_mcp_tools():
@@ -497,6 +651,16 @@ async def list_mcp_tools():
                     "vector_name": "string (e.g., pTet)",
                     "cloning_sites": "string (e.g., BsaI:123-456, EcoRI:789-1012)",
                     "insert_sequence": "string (DNA sequence to insert)"
+                }
+            },
+            {
+                "name": "plasmid_for_representatives",
+                "description": "Create plasmid visualizations for representative sequences from clustering analysis",
+                "parameters": {
+                    "representatives": "list of strings (representative sequence names)",
+                    "aligned_sequences": "string (FASTA format sequences)",
+                    "vector_name": "string (e.g., pUC19)",
+                    "cloning_sites": "string (e.g., EcoRI, BamHI, HindIII)"
                 }
             }
         ]
@@ -557,6 +721,15 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
             arguments.get("insert_sequence", "")
         )
     
+    elif tool_name == "plasmid_for_representatives":
+        import plasmid_visualizer
+        return plasmid_visualizer.create_plasmid_for_representatives(
+            arguments.get("representatives", []),
+            arguments.get("aligned_sequences", ""),
+            arguments.get("vector_name", "pUC19"),
+            arguments.get("cloning_sites", "EcoRI, BamHI, HindIII")
+        )
+    
     elif tool_name == "handle_natural_command":
         # Use the natural command handler
         import command_handler
@@ -569,6 +742,20 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
         import phylogenetic_tree
         aligned_sequences = arguments.get("aligned_sequences", "")
         return phylogenetic_tree.run_phylogenetic_tree_raw(aligned_sequences)
+    
+    elif tool_name == "clustering_analysis":
+        # Handle clustering analysis
+        import phylogenetic_tree
+        aligned_sequences = arguments.get("aligned_sequences", "")
+        num_clusters = arguments.get("num_clusters", 5)
+        return phylogenetic_tree.run_clustering_from_tree(aligned_sequences, num_clusters)
+    
+    elif tool_name == "variant_selection":
+        # Handle variant selection
+        import phylogenetic_tree
+        aligned_sequences = arguments.get("aligned_sequences", "")
+        num_variants = arguments.get("num_variants", 10)
+        return phylogenetic_tree.run_variant_selection_from_tree(aligned_sequences, num_variants)
     
     else:
         raise ValueError(f"Unknown tool: {tool_name}")

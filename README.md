@@ -62,9 +62,10 @@ DataBloom.AI/
 │   │   └── App.tsx         # Main application with drag-and-drop
 │   └── package.json
 ├── backend/                  # FastAPI + MCP server with session tracking
-│   ├── main.py             # FastAPI with natural language integration
+│   ├── main_with_mcp.py    # Main FastAPI application with MCP integration
 │   ├── history_manager.py   # Session and history management
 │   ├── command_router.py   # Command handling and routing
+│   ├── agent.py            # LangChain agent with bioinformatics tools
 │   └── requirements.txt
 ├── tools/                    # Bioinformatics tool modules
 │   ├── mutations.py         # Sequence mutation and variant generation
@@ -77,13 +78,25 @@ DataBloom.AI/
 │   ├── command_executor.py  # Command execution engine
 │   ├── command_handler.py   # Combined parser and executor
 │   └── plasmid_visualizer.py # Plasmid and vector visualization
-├── tests/                    # Test files and sample data
-│   └── sample_files/        # Example FASTA and CSV files
+├── tests/                    # Comprehensive test suite
+│   ├── backend/             # Backend-specific tests
+│   ├── frontend/            # Frontend-specific tests
+│   ├── integration/         # End-to-end integration tests
+│   └── README.md           # Test documentation
+├── data/                     # Data files and samples
+│   ├── samples/             # Sample sequence files
+│   ├── phylogenetic/        # Phylogenetic tree datasets
+│   └── README.md           # Data documentation
 ├── docs/                     # Documentation
+│   ├── demos/              # Demo and tutorial files
+│   ├── reports/            # Test reports and analysis
 │   ├── MCP_SERVER_README.md
 │   ├── ENHANCED_MCP_README.md
 │   ├── HISTORY_TRACKING.md
 │   └── NATURAL_LANGUAGE_GUIDE.md
+├── bioinformatics-services/  # Microservices architecture
+├── workflow-engine/         # Directed evolution workflows
+├── shared/                  # Shared utilities and models
 └── start-dev.sh             # Development startup script
 ```
 

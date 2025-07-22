@@ -43,6 +43,23 @@ def serialize_langchain_messages(result: Any) -> Any:
     else:
         return result
 
+def serialize_for_json(obj: Any) -> Any:
+    """Convert objects to JSON-serializable format, handling numpy types."""
+    import numpy as np
+    
+    if isinstance(obj, dict):
+        return {key: serialize_for_json(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [serialize_for_json(item) for item in obj]
+    elif isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    else:
+        return obj
+
 class HistoryManager:
     """Manages user session history and results for bioinformatics operations."""
     
@@ -160,10 +177,10 @@ class HistoryManager:
             raise ValueError(f"Session {session_id} not found")
         session_file = self.storage_dir / f"{session_id}.json"
         try:
-            # Only write JSON-serializable data
-            import json
+            # Serialize the session data to handle numpy types and other non-JSON-serializable objects
+            serialized_session = serialize_for_json(self.sessions[session_id])
             with open(session_file, "w") as f:
-                json.dump(self.sessions[session_id], f, indent=2)
+                json.dump(serialized_session, f, indent=2)
         except Exception as e:
             print(f"[ERROR] Failed to save session {session_id}: {e}")
             # Optionally, remove the corrupted file
