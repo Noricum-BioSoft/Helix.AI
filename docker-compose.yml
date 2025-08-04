@@ -13,9 +13,9 @@ services:
   postgres:
     image: postgres:15-alpine
     environment:
-      POSTGRES_DB: databloom
-      POSTGRES_USER: databloom
-      POSTGRES_PASSWORD: databloom123
+      POSTGRES_DB: helix
+      POSTGRES_USER: helix
+      POSTGRES_PASSWORD: helix123
     ports:
       - "5432:5432"
     volumes:
@@ -41,7 +41,7 @@ services:
       - "8000:8000"
     environment:
       - REDIS_URL=redis://redis:6379
-      - POSTGRES_URL=postgresql://databloom:databloom123@postgres:5432/databloom
+      - POSTGRES_URL=postgresql://helix:helix123@postgres:5432/helix
     depends_on:
       - redis
       - postgres
@@ -56,7 +56,7 @@ services:
       - "8001:8001"
     environment:
       - REDIS_URL=redis://redis:6379
-      - POSTGRES_URL=postgresql://databloom:databloom123@postgres:5432/databloom
+      - POSTGRES_URL=postgresql://helix:helix123@postgres:5432/helix
     depends_on:
       - redis
       - postgres

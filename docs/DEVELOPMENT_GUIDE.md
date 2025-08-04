@@ -15,8 +15,8 @@ This guide provides comprehensive information for developers contributing to the
 
 1. **Clone the repository**:
    ```bash
-   git clone https://github.com/your-username/DataBloom.AI.git
-   cd DataBloom.AI
+   git clone https://github.com/your-username/Helix.AI.git
+cd Helix.AI
    ```
 
 2. **Set up Python environment**:

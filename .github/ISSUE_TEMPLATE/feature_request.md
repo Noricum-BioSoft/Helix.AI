@@ -1,6 +1,6 @@
 ---
 name: Feature request
-about: Suggest an idea for DataBloom.AI
+about: Suggest an idea for Helix.AI
 title: '[FEATURE] '
 labels: ['enhancement']
 assignees: ''

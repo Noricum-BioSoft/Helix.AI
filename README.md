@@ -60,7 +60,7 @@ An AI-powered web application for managing biotechnology workflows via natural l
 ## 🗂 Project Structure
 
 ```
-DataBloom.AI/
+Helix.AI/
 ├── frontend/                 # React frontend with natural language support
 │   ├── src/
 │   │   ├── components/      # React components including PhylogeneticTree, PlasmidVisualizer
@@ -118,8 +118,8 @@ DataBloom.AI/
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/your-username/DataBloom.AI.git
-   cd DataBloom.AI
+   git clone https://github.com/your-username/Helix.AI.git
+cd Helix.AI
    ```
 
 2. **Install backend dependencies**

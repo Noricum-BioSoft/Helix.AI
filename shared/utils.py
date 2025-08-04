@@ -43,7 +43,7 @@ async def get_db_connection():
     """Get database connection context manager"""
     import asyncpg
     
-    db_url = os.getenv("POSTGRES_URL", "postgresql://databloom:databloom123@localhost:5432/databloom")
+    db_url = os.getenv("POSTGRES_URL", "postgresql://helix:helix123@localhost:5432/helix")
     conn = await asyncpg.connect(db_url)
     try:
         yield conn
