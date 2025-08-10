@@ -61,48 +61,49 @@ An AI-powered web application for managing biotechnology workflows via natural l
 
 ```
 Helix.AI/
-├── frontend/                 # React frontend with natural language support
+├── start.sh                 # 🚀 Single startup command
+├── frontend/                # React frontend with natural language support
 │   ├── src/
-│   │   ├── components/      # React components including PhylogeneticTree, PlasmidVisualizer
-│   │   ├── services/        # MCP API service with session management
-│   │   ├── utils/           # Command parser and utilities
-│   │   └── App.tsx         # Main application with drag-and-drop
+│   │   ├── components/     # React components including PhylogeneticTree, PlasmidVisualizer
+│   │   ├── services/       # MCP API service with session management
+│   │   ├── utils/          # Command parser and utilities
+│   │   └── App.tsx        # Main application with drag-and-drop
 │   └── package.json
-├── backend/                  # FastAPI + MCP server with session tracking
-│   ├── main_with_mcp.py    # Main FastAPI application with MCP integration
-│   ├── history_manager.py   # Session and history management
-│   ├── command_router.py   # Command handling and routing
-│   ├── agent.py            # LangChain agent with bioinformatics tools
+├── backend/                 # FastAPI + Enhanced MCP backend
+│   ├── main_with_mcp.py   # Main FastAPI application with MCP integration
+│   ├── history_manager.py  # Session and history management
+│   ├── command_router.py  # Command handling and routing
+│   ├── agent.py           # LangChain agent with bioinformatics tools
 │   └── requirements.txt
-├── tools/                    # Bioinformatics tool modules
-│   ├── mutations.py         # Sequence mutation and variant generation
-│   ├── alignment.py         # Sequence alignment tools
-│   ├── data_science.py      # Statistical analysis and visualization
+├── tools/                   # Bioinformatics tool modules
+│   ├── mutations.py        # Sequence mutation and variant generation
+│   ├── alignment.py        # Sequence alignment tools
+│   ├── data_science.py     # Statistical analysis and visualization
 │   ├── variant_selection.py # Smart variant selection algorithms
 │   ├── phylogenetic_tree.py # Phylogenetic tree construction and analysis
 │   ├── dna_vendor_research.py # DNA synthesis vendor research
-│   ├── command_parser.py    # Natural language command parsing
-│   ├── command_executor.py  # Command execution engine
-│   ├── command_handler.py   # Combined parser and executor
+│   ├── command_parser.py   # Natural language command parsing
+│   ├── command_executor.py # Command execution engine
+│   ├── command_handler.py  # Combined parser and executor
 │   └── plasmid_visualizer.py # Plasmid and vector visualization
-├── tests/                    # Comprehensive test suite
-│   ├── backend/             # Backend-specific tests
-│   ├── frontend/            # Frontend-specific tests
-│   ├── integration/         # End-to-end integration tests
-│   └── README.md           # Test documentation
-├── data/                     # Data files and samples
-│   ├── samples/             # Sample sequence files
-│   ├── phylogenetic/        # Phylogenetic tree datasets
-│   └── README.md           # Data documentation
-├── docs/                     # Documentation
-│   ├── demos/              # Demo and tutorial files
-│   ├── reports/            # Test reports and analysis
+├── tests/                   # Comprehensive test suite
+│   ├── backend/            # Backend-specific tests
+│   ├── frontend/           # Frontend-specific tests
+│   ├── integration/        # End-to-end integration tests
+│   └── README.md          # Test documentation
+├── data/                    # Data files and samples
+│   ├── samples/            # Sample sequence files
+│   ├── phylogenetic/       # Phylogenetic tree datasets
+│   └── README.md          # Data documentation
+├── docs/                    # Documentation
+│   ├── demos/             # Demo and tutorial files
+│   ├── reports/           # Test reports and analysis
 │   ├── MCP_SERVER_README.md
 │   ├── ENHANCED_MCP_README.md
 │   ├── HISTORY_TRACKING.md
 │   └── NATURAL_LANGUAGE_GUIDE.md
-├── shared/                  # Shared utilities and models
-└── start.sh                 # Unified startup script
+├── shared/                 # Shared utilities and models
+└── README.md              # This file
 ```
 
 ## 🚀 Quick Start
@@ -198,9 +199,10 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 📊 Status
 
-- **Architecture**: ✅ Unified monolithic system
+- **Architecture**: ✅ Unified monolithic system (primary)
 - **Backend**: ✅ Running (FastAPI + Enhanced MCP)
 - **Frontend**: ✅ Running (React + TypeScript)
 - **Session Management**: ✅ File-based with optional Redis
 - **Testing**: ✅ Comprehensive test suite
 - **Documentation**: ✅ Complete documentation
+- **Cloud Ready**: 🔄 Microservices option for future scaling
