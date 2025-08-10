@@ -6,7 +6,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)](https://fastapi.tiangolo.com/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-An AI-powered web application for managing biotechnology workflows via natural language commands, featuring interactive phylogenetic tree visualization, DNA synthesis vendor research, and comprehensive bioinformatics tools with session management and history tracking.
+An AI-powered web application for managing biotechnology workflows via natural language commands, featuring interactive phylogenetic tree visualization, simulated DNA synthesis vendor research, and comprehensive bioinformatics tools with session management and history tracking.
 
 ## 🚀 Features
 
@@ -18,11 +18,12 @@ An AI-powered web application for managing biotechnology workflows via natural l
 - **Real-time Updates**: Trees update as you analyze new sequences
 - **Clustering Analysis**: Select representative sequences from phylogenetic clusters
 
-### 🔬 **DNA Synthesis Vendor Research**
-- **Vendor Comparison**: Compare 7 major DNA synthesis vendors
-- **Pricing Analysis**: Real-time pricing ranges and service comparisons
+### 🔬 **DNA Synthesis Vendor Research (Simulated)**
+- **Vendor Comparison**: Compare 7 major DNA synthesis vendors with simulated data
+- **Pricing Analysis**: Simulated pricing ranges and service comparisons
 - **Service Matching**: Find vendors based on sequence length and quantity
 - **Recommendations**: AI-powered vendor selection advice
+- **Note**: Currently uses simulated data. Real integration requires coordination with vendors for API access and pricing agreements.
 
 ### 🤖 **Natural Language Commands**
 - **Intelligent Command Parsing**: Understand commands like "visualize the phylogenetic tree"
@@ -81,7 +82,7 @@ Helix.AI/
 │   ├── data_science.py     # Statistical analysis and visualization
 │   ├── variant_selection.py # Smart variant selection algorithms
 │   ├── phylogenetic_tree.py # Phylogenetic tree construction and analysis
-│   ├── dna_vendor_research.py # DNA synthesis vendor research
+│   ├── dna_vendor_research.py # Simulated DNA synthesis vendor research
 │   ├── command_parser.py   # Natural language command parsing
 │   ├── command_executor.py # Command execution engine
 │   ├── command_handler.py  # Combined parser and executor
@@ -154,7 +155,7 @@ The application will be available at:
 - `"align these sequences: >seq1 ATGCGATCG >seq2 ATGCGATC"`
 - `"perform multiple sequence alignment on the uploaded sequences"`
 - `"select 5 sequences with the highest mutation rate"`
-- `"research DNA synthesis vendors for 1000bp sequences"`
+- `"research DNA synthesis vendors for 1000bp sequences"` (simulated data)
 - `"show me the plasmid visualization with circular view"`
 
 ## 🧪 Testing
@@ -176,7 +177,7 @@ python -m pytest tests/integration/
 
 - **[Natural Language Guide](docs/NATURAL_LANGUAGE_GUIDE.md)**: How to use natural language commands
 - **[Phylogenetic Tree Guide](docs/PHYLOGENETIC_TREE_GUIDE.md)**: Tree visualization and analysis
-- **[DNA Vendor Research](docs/DNA_VENDOR_RESEARCH_GUIDE.md)**: Vendor comparison and selection
+- **[DNA Vendor Research](docs/DNA_VENDOR_RESEARCH_GUIDE.md)**: Simulated vendor comparison and selection
 - **[MCP Server Documentation](docs/MCP_SERVER_README.md)**: Model Context Protocol integration
 - **[Development Guide](docs/DEVELOPMENT_SUMMARY.md)**: Development setup and guidelines
 
