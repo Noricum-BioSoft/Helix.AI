@@ -197,6 +197,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **FastAPI**: Modern web framework
 - **React**: Frontend framework
 - **BioPython**: Bioinformatics toolkit
+- **Cursor.AI**: AI-based code generator and editor
 
 ## 📊 Status
 
