@@ -1,35 +1,29 @@
-markdownify
-smolagents
-smolagents[gradio]
-requests
-duckduckgo_search
+# Core dependencies
+fastapi
+uvicorn
+python-dotenv
+
+# Data processing
 pandas
+numpy
+requests
 
-PyPDF2
+# Bioinformatics
+biopython
+plotly
+ete3
+seaborn
 
-pymsaviz
-streamlit
-
+# LangChain (for agent functionality)
 langchain
 langchain-community
 langchain-openai
 langgraph
 
-seaborn
-
-biopython
+# Utilities
+markdownify
 tabulate
 
+# Testing
 pytest
 pytest-asyncio
-python-dotenv
-
-# MCP (Model Context Protocol) dependencies
-mcp>=1.0.0
-fastapi
-uvicorn
-
-# Bioinformatics dependencies
-biopython
-plotly
-ete3
