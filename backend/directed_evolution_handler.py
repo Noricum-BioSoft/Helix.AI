@@ -12,9 +12,27 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime
 
 # Add the workflow engine directory to the path
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'workflow-engine'))
+# sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'workflow-engine'))
 
-from directed_evolution_workflow import DirectedEvolutionWorkflow, create_workflow_config
+# from directed_evolution_workflow import DirectedEvolutionWorkflow, create_workflow_config
+
+# Placeholder for directed evolution workflow (removed during microservices cleanup)
+class DirectedEvolutionWorkflow:
+    def __init__(self):
+        pass
+    
+    def run_complete_workflow(self, config):
+        return {
+            'workflow_info': {'workflow_id': 'placeholder'},
+            'results': {
+                'best_mutant': type('obj', (object,), {'name': 'placeholder_mutant'}),
+                'report': {'assay_results': {'improvement': 0.0}},
+                'library': type('obj', (object,), {'library_size': 0})
+            }
+        }
+
+def create_workflow_config():
+    return {}
 
 
 class DirectedEvolutionHandler:

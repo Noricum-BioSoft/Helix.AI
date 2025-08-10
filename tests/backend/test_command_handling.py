@@ -8,8 +8,8 @@ import asyncio
 import json
 from pathlib import Path
 
-# Add the current directory to Python path for imports
-sys.path.append(str(Path(__file__).parent))
+# Add the backend directory to Python path for imports
+sys.path.append(str(Path(__file__).parent.parent.parent / "backend"))
 
 from history_manager import history_manager
 
@@ -75,7 +75,7 @@ async def test_specific_command():
         print("\n📋 Step 2: Testing command parsing...")
         
         # Add tools directory to path
-        tools_path = str((Path(__file__).parent.parent / "tools").resolve())
+        tools_path = str((Path(__file__).parent.parent.parent / "tools").resolve())
         sys.path.insert(0, tools_path)
         
         import command_parser

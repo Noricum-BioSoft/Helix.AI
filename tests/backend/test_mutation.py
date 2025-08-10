@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 # Add tools to path
-tools_path = str((Path(__file__).resolve().parent.parent / "tools").resolve())
+tools_path = str((Path(__file__).resolve().parent.parent.parent / "tools").resolve())
 sys.path.insert(0, tools_path)
 
 def test_mutation():

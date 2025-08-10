@@ -6,7 +6,7 @@ Simple test to verify tool imports work correctly
 import sys
 from pathlib import Path
 
-tools_path = str((Path(__file__).resolve().parent.parent / "tools").resolve())
+tools_path = str((Path(__file__).resolve().parent.parent.parent / "tools").resolve())
 sys.path.insert(0, tools_path)
 print(f"🔧 Added tools path: {tools_path}")
 
