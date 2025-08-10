@@ -38,12 +38,11 @@ cd Helix.AI
 
 4. **Set up development environment**:
    ```bash
-   # Make scripts executable
-   chmod +x start-dev.sh
-   chmod +x start-app.sh
+   # Make startup script executable
+   chmod +x start.sh
    
-   # Start development servers
-   ./start-dev.sh
+   # Start the unified system
+   ./start.sh
    ```
 
 ## 🏗️ Project Architecture
@@ -391,11 +390,11 @@ export const SequenceVisualizer: React.FC<SequenceVisualizerProps> = ({
 ### Development Deployment
 
 ```bash
-# Start development servers
-./start-dev.sh
+# Start the unified system
+./start.sh
 
 # Access application
-# Frontend: http://localhost:5175
+# Frontend: http://localhost:5173
 # Backend: http://localhost:8001
 ```
 
@@ -407,9 +406,6 @@ cd frontend && npm run build
 
 # Start production backend
 python backend/main_with_mcp.py --production
-
-# Or use Docker
-docker-compose up -d
 ```
 
 ## 🐛 Debugging
@@ -455,7 +451,7 @@ console.log('Debug data:', data);
    
    app.add_middleware(
        CORSMiddleware,
-       allow_origins=["http://localhost:5175"],
+       allow_origins=["http://localhost:5173"],
        allow_credentials=True,
        allow_methods=["*"],
        allow_headers=["*"],

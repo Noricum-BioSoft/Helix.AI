@@ -26,7 +26,7 @@ The MCP server provides bioinformatics tools through the Model Context Protocol,
 
 ## Startup Process
 
-The `start-app.sh` script follows this sequence:
+The unified startup process follows this sequence:
 
 1. **Prerequisites Check** - Python, Node.js, npm
 2. **Dependency Installation** - Backend and frontend dependencies
@@ -264,7 +264,7 @@ If you encounter issues:
 
 ## Related Files
 
-- `start-app.sh` - Main startup script
+- `start.sh` - Main unified startup script
 - `main_with_mcp.py` - FastAPI server with MCP integration
 - `frontend/src/mcpApi.ts` - Frontend MCP API client
 - `frontend/src/commandParser.ts` - Command routing logic 
