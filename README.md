@@ -101,10 +101,8 @@ Helix.AI/
 │   ├── ENHANCED_MCP_README.md
 │   ├── HISTORY_TRACKING.md
 │   └── NATURAL_LANGUAGE_GUIDE.md
-├── bioinformatics-services/  # Microservices architecture
-├── workflow-engine/         # Directed evolution workflows
 ├── shared/                  # Shared utilities and models
-└── start-dev.sh             # Development startup script
+└── start.sh                 # Unified startup script
 ```
 
 ## 🚀 Quick Start
@@ -134,13 +132,13 @@ cd Helix.AI
    cd ..
    ```
 
-4. **Start the development environment**
+4. **Start the unified system**
    ```bash
-   ./start-dev.sh
+   ./start.sh
    ```
 
 The application will be available at:
-- **Frontend**: http://localhost:5175
+- **Frontend**: http://localhost:5173
 - **Backend API**: http://localhost:8001
 
 ## 📖 Usage Examples
@@ -200,8 +198,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 📊 Status
 
-- **Backend**: ✅ Running (FastAPI + MCP)
+- **Architecture**: ✅ Unified monolithic system
+- **Backend**: ✅ Running (FastAPI + Enhanced MCP)
 - **Frontend**: ✅ Running (React + TypeScript)
-- **Database**: ✅ Session management active
+- **Session Management**: ✅ File-based with optional Redis
 - **Testing**: ✅ Comprehensive test suite
 - **Documentation**: ✅ Complete documentation
