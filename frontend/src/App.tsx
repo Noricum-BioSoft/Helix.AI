@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import ReactMarkdown from 'react-markdown';
 import { MSAView } from 'react-msaview';
 import Plot from 'react-plotly.js';
 import { mcpApi } from './services/mcpApi';
@@ -7,10 +8,14 @@ import { PlasmidDataVisualizer, PlasmidRepresentativesVisualizer } from './compo
 import { PhylogeneticTree } from './components/PhylogeneticTree';
 
 import 'bootstrap/dist/css/bootstrap.min.css';
-import Modal from 'react-bootstrap/Modal';
+import './theme.css';
 import Button from 'react-bootstrap/Button';
-import Nav from 'react-bootstrap/Nav';
-import Tab from 'react-bootstrap/Tab';
+import Card from 'react-bootstrap/Card';
+import { ExampleCommandsPanel } from './components/ExampleCommandsPanel';
+import { DesignOptionOne, DesignOptionTwo, DesignOptionThree } from './components/designs';
+import type { PromptDesignProps, QuickExample } from './components/designs';
+import { getExampleWithSequences, sampleSequences } from './utils/sampleSequences';
+import { theme } from './theme';
 
 interface HistoryItem {
   input: string;
@@ -26,11 +31,21 @@ interface WorkflowContext {
   plasmidData?: any;
 }
 
+const DESIGN_OPTIONS = [
+  { id: 'classic', label: 'Classic', component: null },
+  { id: 'integrated', label: 'Integrated Panel', component: DesignOptionOne },
+  { id: 'split', label: 'Split View', component: DesignOptionTwo },
+  { id: 'workspace', label: 'Workspace Tabs', component: DesignOptionThree },
+] as const;
+
+type DesignOptionId = (typeof DESIGN_OPTIONS)[number]['id'];
+
+
 function App() {
   const [command, setCommand] = useState('');
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [loading, setLoading] = useState(false);
-  const [availableTools, setAvailableTools] = useState<any[]>([]);
+  const [agentLoading, setAgentLoading] = useState(false);
   const [serverStatus, setServerStatus] = useState<string>('unknown');
   const [dragActive, setDragActive] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -39,11 +54,21 @@ function App() {
   const [uploadedFile, setUploadedFile] = useState<{ name: string; content: string } | null>(null);
   const [workflowContext, setWorkflowContext] = useState<WorkflowContext>({});
   const [isInitialized, setIsInitialized] = useState(false);
+  const [selectedDesign, setSelectedDesign] = useState<DesignOptionId>('integrated');
+  const [examplesOpen, setExamplesOpen] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const SelectedDesignComponent = useMemo(() => {
+    const option = DESIGN_OPTIONS.find(option => option.id === selectedDesign);
+    return option?.component;
+  }, [selectedDesign]);
 
   const handleExampleClick = (exampleCommand: string) => {
     setCommand(exampleCommand);
   };
 
+  const handleToggleExamples = () => {
+    setExamplesOpen(prev => !prev);
+  };
   // Create a session on mount and check server health
   useEffect(() => {
     const initializeApp = async () => {
@@ -54,10 +79,6 @@ function App() {
         
         // Check server health first
         await checkServerHealth();
-        
-        // Load available tools
-        await loadAvailableTools();
-        
         // Create session
         const res = await mcpApi.createSession() as { session_id: string };
         setSessionId(res.session_id);
@@ -77,15 +98,6 @@ function App() {
     } catch (error) {
       setServerStatus('error');
       console.error('Server health check failed:', error);
-    }
-  };
-
-  const loadAvailableTools = async () => {
-    try {
-      const toolsResponse = await mcpApi.listTools();
-      setAvailableTools((toolsResponse as any).tools);
-    } catch (error) {
-      console.error('Failed to load available tools:', error);
     }
   };
 
@@ -315,6 +327,54 @@ function App() {
     }
   };
 
+  const handleAgentSubmit = async () => {
+    if (!command.trim()) return;
+
+    setAgentLoading(true);
+
+    try {
+      let finalCommand = enhanceCommandWithContext(command);
+
+      if (uploadedFile) {
+        finalCommand = `${finalCommand}\n\nFile content:\n${uploadedFile.content}`;
+      }
+
+      const response = await mcpApi.agentCommand({
+        prompt: finalCommand,
+        session_id: sessionId || undefined,
+        files: uploadedFile ? [{ name: uploadedFile.name, content: uploadedFile.content }] : undefined,
+      });
+
+      if ((response as any).session_id && !sessionId) {
+        setSessionId((response as any).session_id);
+      }
+
+      const historyItem: HistoryItem = {
+        input: command,
+        output: (response && response.result) ? response.result : response,
+        type: 'agent',
+        timestamp: new Date(),
+      };
+
+      setHistory(prev => [historyItem, ...prev]);
+    } catch (error) {
+      console.error('Error executing agent command:', error);
+      const historyItem: HistoryItem = {
+        input: command,
+        output: { error: error instanceof Error ? error.message : 'Unknown error' },
+        type: 'agent_error',
+        timestamp: new Date(),
+      };
+      setHistory(prev => [historyItem, ...prev]);
+    } finally {
+      setCommand('');
+      setUploadedFile(null);
+      setAgentLoading(false);
+    }
+  };
+
+
+
   // Drag-and-drop handlers
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -342,10 +402,166 @@ function App() {
     }
   };
 
+  const handleBrowseClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileRemove = () => setUploadedFile(null);
+
+  const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      const file = e.target.files[0];
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const content = event.target?.result as string;
+        setUploadedFile({ name: file.name, content });
+      };
+      reader.readAsText(file);
+    }
+  };
+
+  const extractAgentMessageText = (content: any): string => {
+    if (!content) return '';
+    if (typeof content === 'string') return content;
+    if (Array.isArray(content)) {
+      return content
+        .map((part) => {
+          if (!part) return '';
+          if (typeof part === 'string') return part;
+          if (typeof part === 'object') {
+            if (typeof part.text === 'string') return part.text;
+            if (typeof part.value === 'string') return part.value;
+            if (part.content) return extractAgentMessageText(part.content);
+          }
+          return typeof part === 'object' ? JSON.stringify(part) : String(part);
+        })
+        .filter(Boolean)
+        .join('\n');
+    }
+    if (typeof content === 'object') {
+      if (typeof content.text === 'string') return content.text;
+      if (typeof content.value === 'string') return content.value;
+      if (content.content) return extractAgentMessageText(content.content);
+    }
+    return typeof content === 'object' ? JSON.stringify(content, null, 2) : String(content);
+  };
+
+  const formatLabel = (key: string) => {
+    return key
+      .replace(/_/g, ' ')
+      .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+      .replace(/^./, (char) => char.toUpperCase());
+  };
+
+  const renderStructuredData = (data: any, depth = 0, visited = new WeakSet()): React.ReactNode => {
+    if (data === null || data === undefined) return null;
+
+    if (typeof data === 'string' || typeof data === 'number' || typeof data === 'boolean') {
+      return <span>{String(data)}</span>;
+    }
+
+    if (Array.isArray(data)) {
+      if (data.length === 0) return null;
+      return (
+        <ul className="structured-list">
+          {data.map((item, index) => (
+            <li key={index}>{renderStructuredData(item, depth + 1, visited)}</li>
+          ))}
+        </ul>
+      );
+    }
+
+    if (typeof data === 'object') {
+      if (visited.has(data)) {
+        return <span>[circular]</span>;
+      }
+      visited.add(data);
+
+      if (typeof data.text === 'string' && Object.keys(data).length === 1) {
+        return <span>{data.text}</span>;
+      }
+
+      const entries = Object.entries(data).filter(([_, value]) => value !== undefined && value !== null);
+      if (entries.length === 0) return null;
+
+      return (
+        <div className={`structured-object structured-object-depth-${depth}`}>
+          {entries.map(([key, value]) => (
+            <div key={key} className="structured-row">
+              <div className="structured-label">{formatLabel(key)}</div>
+              <div className="structured-value">{renderStructuredData(value, depth + 1, visited)}</div>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    return null;
+  };
+
+
+  const renderAgentResponse = (agentOutput: any) => {
+    const agentResult = agentOutput?.result ?? agentOutput;
+    const messages: any[] = Array.isArray(agentResult?.messages)
+      ? agentResult.messages
+      : Array.isArray(agentResult?.output?.messages)
+        ? agentResult.output.messages
+        : [];
+
+    const assistantMessages = messages.filter((msg) =>
+      msg?.role === 'assistant' || msg?.type === 'ai'
+    );
+    const finalAssistant = assistantMessages.length > 0 ? assistantMessages[assistantMessages.length - 1] : null;
+    let finalText = finalAssistant
+      ? extractAgentMessageText((finalAssistant as any).content ?? (finalAssistant as any).text ?? (finalAssistant as any).value)
+      : '';
+
+    if (!finalText && typeof agentResult?.final_output === 'string') {
+      finalText = agentResult.final_output;
+    }
+    if (!finalText && typeof agentResult?.response === 'string') {
+      finalText = agentResult.response;
+    }
+    if (!finalText && typeof agentResult?.text === 'string') {
+      finalText = agentResult.text;
+    }
+
+    if (finalText) {
+      return (
+        <div className="agent-response-markdown">
+          <ReactMarkdown>{finalText}</ReactMarkdown>
+        </div>
+      );
+    }
+
+    if (renderStructuredData(agentResult)) {
+      return (
+        <div className="bg-light p-3 border rounded">
+          {renderStructuredData(agentResult)}
+        </div>
+      );
+    }
+
+    return (
+      <details className="bg-light p-2 border rounded">
+        <summary className="text-muted" style={{ cursor: 'pointer' }}>View Raw Agent Output</summary>
+        <pre className="bg-white border rounded p-2 mt-2">{JSON.stringify(agentResult, null, 2)}</pre>
+      </details>
+    );
+  };
 
 
   const renderOutput = (item: HistoryItem) => {
     const { output, type } = item;
+
+    if (type === 'agent_error') {
+      const message = output?.error || 'Agent encountered an error while processing the request.';
+      return <div className="alert alert-danger mb-0">{message}</div>;
+    }
+
+    if (type === 'agent') {
+      return renderAgentResponse(output);
+    }
     
     // Add debugging
     console.log('🔍 renderOutput called with:', { type, input: item.input });
@@ -1649,6 +1865,191 @@ function App() {
     return formatResponse(output);
   };
 
+  const renderWorkflowContextSection = () => {
+    const hasContext = Boolean(
+      workflowContext.alignedSequences ||
+      workflowContext.selectedSequences ||
+      workflowContext.mutatedSequences ||
+      workflowContext.plasmidData
+    );
+
+    if (!hasContext) {
+      return null;
+    }
+
+    return (
+      <section className="alert alert-success mb-4">
+        <div className="d-flex justify-content-between align-items-center mb-2">
+          <h2 className="h5 mb-0">🔄 Workflow Context Available</h2>
+          <Button
+            variant="outline-secondary"
+            size="sm"
+            onClick={() => setWorkflowContext({})}
+          >
+            Clear Context
+          </Button>
+        </div>
+        <div className="row gy-2">
+          {workflowContext.alignedSequences && (
+            <div className="col-md-6">
+              <strong>📊 Aligned Sequences</strong>
+              <div className="text-muted small">
+                {workflowContext.alignedSequences.split('\n').length} lines available
+              </div>
+            </div>
+          )}
+          {workflowContext.selectedSequences && (
+            <div className="col-md-6">
+              <strong>🎯 Selected Sequences</strong>
+              <div className="text-muted small">
+                {workflowContext.selectedSequences.length} sequences available
+              </div>
+            </div>
+          )}
+          {workflowContext.mutatedSequences && (
+            <div className="col-md-6">
+              <strong>🧬 Mutated Sequences</strong>
+              <div className="text-muted small">
+                {workflowContext.mutatedSequences.length} variants available
+              </div>
+            </div>
+          )}
+          {workflowContext.plasmidData && (
+            <div className="col-md-6">
+              <strong>🧪 Plasmid Data</strong>
+              <div className="text-muted small">
+                Vector visualization available
+              </div>
+            </div>
+          )}
+        </div>
+      </section>
+    );
+  };
+
+  const renderHistorySection = () => {
+    if (history.length === 0) {
+      return (
+        <section className="mt-4">
+          <h2 className="h5 mb-3">Conversation</h2>
+          <div className="text-muted">Run a command to see your prompts and responses here.</div>
+        </section>
+      );
+    }
+
+    return (
+      <section className="mt-4">
+        <h2 className="h5 mb-3">Conversation</h2>
+        <div className="d-flex flex-column gap-4">
+          {history.map((item, index) => {
+            const timestamp = item.timestamp instanceof Date ? item.timestamp : new Date(item.timestamp);
+            return (
+              <div key={index} className="d-flex flex-column gap-3">
+                <div
+                  className="align-self-start bg-blue-subtle border border-brand-blue rounded-4 shadow-sm px-3 py-2"
+                  style={{ maxWidth: '100%', wordBreak: 'break-word', overflowWrap: 'anywhere' }}
+                >
+                  <div className="text-muted small text-uppercase fw-semibold mb-1">Prompt</div>
+                  <div style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{item.input}</div>
+                  <div className="text-muted small mt-1">{timestamp.toLocaleTimeString()} • {item.type}</div>
+                </div>
+                <Card className="border-0 shadow-sm">
+                  <Card.Body>
+                    <div className="text-muted small text-uppercase fw-semibold mb-2">Response</div>
+                    {renderOutput(item)}
+                  </Card.Body>
+                </Card>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+    );
+  };
+
+  const quickExamples = useMemo<QuickExample[]>(() => [
+    {
+      title: 'Visualize Phylogenetic Tree',
+      description: 'Build a tree with sample sequences',
+      command: getExampleWithSequences('visualize the phylogenetic tree', 'phylogenetic'),
+    },
+    {
+      title: 'Align Sample Sequences',
+      description: 'Perform alignment with sample FASTA data',
+      command: getExampleWithSequences('align these sequences', 'threeSequences'),
+    },
+    {
+      title: 'Create 96 Variants',
+      description: 'Generate mutations from a sample sequence',
+      command: getExampleWithSequences('create 96 variants', 'single'),
+    },
+    {
+      title: 'Research DNA Vendors',
+      description: 'Find synthesis vendors for 1000bp sequences',
+      command: 'research DNA synthesis vendors for 1000bp sequences',
+    },
+  ], []);
+
+  const workflowContextContent = renderWorkflowContextSection();
+  const historyContent = renderHistorySection();
+
+  const designProps: PromptDesignProps = {
+    command,
+    onCommandChange: setCommand,
+    onSubmit: handleSubmit,
+    loading,
+    agentLoading,
+    onAgentSubmit: handleAgentSubmit,
+    placeholder: 'visualize the phylogenetic tree',
+    dragActive,
+    uploadedFile,
+    onFileRemove: handleFileRemove,
+    onDropZoneDragOver: handleDragOver,
+    onDropZoneDragLeave: handleDragLeave,
+    onDropZoneDrop: handleDrop,
+    onBrowseClick: handleBrowseClick,
+    examplesPanel: <ExampleCommandsPanel onCommandSelect={handleExampleClick} />,
+    quickExamples,
+    onExampleClick: handleExampleClick,
+    examplesOpen,
+    onToggleExamples: handleToggleExamples,
+    workflowContextContent,
+    historyContent,
+  };
+
+  if (SelectedDesignComponent) {
+    return (
+      <div className="container-fluid py-4 px-5">
+        <input
+          type="file"
+          ref={fileInputRef}
+          style={{ display: 'none' }}
+          accept=".fasta,.fa,.fas,.fastq,.csv,.txt"
+          onChange={handleFileInput}
+        />
+
+        <div className="d-flex justify-content-between align-items-start flex-wrap mb-4">
+          <div className="mb-3">
+            <h1 className="mb-1">Helix.AI</h1>
+            <div className="d-flex align-items-center gap-2">
+              <span className={`badge ${serverStatus === 'healthy' ? 'bg-success' : 'bg-danger'}`}>
+                Server: {serverStatus}
+              </span>
+              {sessionId && (
+                <span className="badge" style={{ backgroundColor: theme.colors.blue, color: theme.colors.white }}>
+                  Session: {sessionId.substring(0, 8)}...
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <SelectedDesignComponent {...designProps} />
+      </div>
+    );
+  }
+
+
   return (
     <div className="container-fluid py-4 px-5">
       <div className="row">
@@ -2023,29 +2424,6 @@ function App() {
           </div>
         </div>
           
-          <div className="card mt-3">
-            <div className="card-header bg-success text-white">
-              <h6 className="mb-0">🛠️ Available MCP Tools</h6>
-            </div>
-            <div className="card-body p-3" style={{ maxHeight: '300px', overflowY: 'auto' }}>
-              {availableTools.map((tool, index) => (
-                <div key={index} className="mb-2 p-2 border rounded">
-                  <h6 className="text-success mb-1" style={{ fontSize: '0.9rem' }}>{tool.name}</h6>
-                  <p className="small text-muted mb-1" style={{ fontSize: '0.75rem' }}>{tool.description}</p>
-                  {tool.parameters && (
-                    <div className="small">
-                      <strong style={{ fontSize: '0.75rem' }}>Parameters:</strong>
-                      <ul className="list-unstyled mt-1" style={{ fontSize: '0.7rem' }}>
-                        {Object.entries(tool.parameters).map(([key, value]) => (
-                          <li key={key}><code>{key}</code>: {String(value)}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
         </div>
       </div>
       

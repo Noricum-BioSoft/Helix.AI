@@ -9,6 +9,7 @@ This guide provides comprehensive information for developers contributing to the
 - **Python 3.10+**: For backend development
 - **Node.js 16+**: For frontend development
 - **Git**: Version control
+- **[uv](https://github.com/astral-sh/uv)** (optional, recommended): Fast Python package installer
 - **Docker** (optional): For containerized development
 
 ### Environment Setup
@@ -19,14 +20,29 @@ This guide provides comprehensive information for developers contributing to the
 cd Helix.AI
    ```
 
-2. **Set up Python environment**:
+2. **Set up Python environment** (choose one):
+
+   **Option A: Using uv (recommended - faster)**
    ```bash
-   # Create virtual environment
+   # Install uv if not already installed
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   
+   # Install dependencies
+   cd backend
+   uv pip install -r requirements.txt
+   cd ..
+   ```
+   
+   **Option B: Using pip**
+   ```bash
+   # Create virtual environment (optional but recommended)
    python -m venv venv
    source venv/bin/activate  # On Windows: venv\Scripts\activate
    
    # Install dependencies
+   cd backend
    pip install -r requirements.txt
+   cd ..
    ```
 
 3. **Set up Node.js environment**:

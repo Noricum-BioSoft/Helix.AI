@@ -18,6 +18,7 @@ seaborn
 langchain
 langchain-community
 langchain-openai
+langchain-deepseek
 langgraph
 
 # Utilities

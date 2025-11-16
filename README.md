@@ -10,6 +10,14 @@ An AI-powered web application for managing biotechnology workflows via natural l
 
 ## 🚀 Features
 
+### 🧭 Tool‑first Dispatch (not just an LLM wrapper)
+- **Hybrid routing (auto + override)**: Prompts are routed to either:
+  - **Direct tool execution (Submit)** when required inputs are present and the intent matches a known operation.
+  - **Agent planning (Agent)** for open-ended questions, missing inputs, or multi‑step workflows.
+- **Validation before execution**: Required parameters (e.g., sequences for alignment) are checked up front.
+- **Provenance & reproducibility**: Each run records tool name, version, parameters, inputs, and outputs.
+- **Explainability**: When using the agent, the final answer is rendered in Markdown; intermediate planner chatter is hidden.
+
 ### 🌳 **Interactive Phylogenetic Tree Visualization**
 - **ETE3 Integration**: High-quality phylogenetic tree visualization with SVG rendering
 - **D3.js Tree Rendering**: Interactive phylogenetic trees with zoom and pan
@@ -56,7 +64,8 @@ An AI-powered web application for managing biotechnology workflows via natural l
 - **Command Mode Toggle**: Switch between natural language and structured commands
 - **Real-time Feedback**: Immediate response and progress indicators
 - **Responsive Design**: Works on desktop and mobile devices
-- **Professional UI**: Clean 75/25 layout with optimized spacing and helpful tips
+- **Professional UI**: Clean layout with collapsible Examples; MCP Tools panel removed for clarity
+- **Agent vs Submit**: Two buttons with clear tooltips; default dispatch uses heuristics but users can override
 
 ## 🗂 Project Structure
 
@@ -113,6 +122,7 @@ Helix.AI/
 - Python 3.10+
 - Node.js 16+
 - npm or yarn
+- [uv](https://github.com/astral-sh/uv) (optional, recommended for faster installs)
 
 ### Installation
 
@@ -122,9 +132,24 @@ Helix.AI/
 cd Helix.AI
    ```
 
-2. **Install backend dependencies**
+2. **Install backend dependencies** (choose one):
+   
+   **Option A: Using uv (recommended - faster)**
    ```bash
+   # Install uv if not already installed
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   
+   # Install dependencies
+   cd backend
+   uv pip install -r requirements.txt
+   cd ..
+   ```
+   
+   **Option B: Using pip**
+   ```bash
+   cd backend
    pip install -r requirements.txt
+   cd ..
    ```
 
 3. **Install frontend dependencies**
@@ -143,6 +168,20 @@ The application will be available at:
 - **Frontend**: http://localhost:5173
 - **Backend API**: http://localhost:8001
 
+## 🧭 How Dispatch Works (Agent vs Submit)
+
+- **Auto-dispatch defaults**
+  - Question/exploration (“what is…”, “how should I…”, “design a workflow…”) → **Agent**.
+  - Clear operation with required inputs present (align/trim/merge/mutate/visualize) → **Submit**.
+- **Override anytime**: Click the other button to force the route.
+- **Input validation**: Direct runs are blocked with actionable hints if required inputs are missing.
+- **Agent output**: Only the final response content is shown (Markdown). Raw traces are suppressed.
+
+Examples:
+- “What is a sequence alignment?” → Agent
+- “Align these sequences” (and sequences uploaded/pasted) → Submit
+- “Plan a short-read preprocessing pipeline” → Agent (may propose trim → merge → QC → align)
+
 ## 📖 Usage Examples
 
 ### Basic Workflow
@@ -157,6 +196,28 @@ The application will be available at:
 - `"select 5 sequences with the highest mutation rate"`
 - `"research DNA synthesis vendors for 1000bp sequences"` (simulated data)
 - `"show me the plasmid visualization with circular view"`
+
+## ☁️ Deployment (AWS)
+
+1. Backend (FastAPI)
+   - Package with Docker (multi-stage build). Expose `:8001`.
+   - Store `.env`/secrets in AWS SSM Parameter Store or Secrets Manager.
+   - Run on ECS/Fargate or EC2 with an ALB. Enable health check `/health`.
+   - Persist sessions to EFS or S3 if needed; or point to Redis/ElastiCache for scalable session storage.
+
+2. Frontend (Vite/React)
+   - Build static assets: `npm run build`.
+   - Host on S3 + CloudFront (recommended) or serve via NGINX on ECS/EC2.
+   - Set `VITE_API_BASE_URL` to the backend load balancer URL.
+
+3. Observability
+   - Enable CloudWatch logs for backend container.
+   - Add ALB access logs to S3.
+   - Optional: push client telemetry events (dispatch route, tool, latency) to CloudWatch or OpenTelemetry.
+
+4. CI/CD
+   - GitHub Actions: build + push Docker image, run tests, deploy to ECS.
+   - Invalidate CloudFront after frontend deploy.
 
 ## 🧪 Testing
 

@@ -98,6 +98,16 @@ if ! command -v npm &> /dev/null; then
     exit 1
 fi
 
+# Detect Python package manager (prefer uv, fallback to pip)
+USE_UV=false
+if command -v uv &> /dev/null; then
+    USE_UV=true
+    print_status "Detected uv - will use uv for faster package installation"
+else
+    print_status "uv not found - will use pip for package installation"
+    print_status "Tip: Install uv for faster installs: curl -LsSf https://astral.sh/uv/install.sh | sh"
+fi
+
 print_success "Prerequisites check passed"
 
 # Check ports
@@ -107,29 +117,82 @@ check_port $FRONTEND_PORT || exit 1
 
 # Optional: Check Redis (for enhanced session management)
 USE_REDIS=false
-if command -v redis-server &> /dev/null; then
-    if check_port $REDIS_PORT; then
-        print_status "Starting Redis for enhanced session management..."
-        redis-server --port $REDIS_PORT --daemonize yes
+REDIS_STARTED_BY_US=false
+if command -v redis-cli &> /dev/null; then
+    # Check if Redis is already running on the port
+    if redis-cli -p $REDIS_PORT ping > /dev/null 2>&1; then
         USE_REDIS=true
-        print_success "Redis started on port $REDIS_PORT"
+        print_success "Using existing Redis server on port $REDIS_PORT"
+    elif command -v redis-server &> /dev/null; then
+        if check_port $REDIS_PORT; then
+            print_status "Starting Redis for enhanced session management..."
+            redis-server --port $REDIS_PORT --daemonize yes
+            USE_REDIS=true
+            REDIS_STARTED_BY_US=true
+            print_success "Redis started on port $REDIS_PORT"
+        else
+            print_warning "Redis port $REDIS_PORT is in use but not responding, using file-based sessions"
+        fi
     else
-        print_warning "Redis port $REDIS_PORT is in use, using file-based sessions"
+        print_warning "Redis not found, using file-based sessions"
     fi
 else
-    print_warning "Redis not found, using file-based sessions"
+    print_warning "Redis client not found, using file-based sessions"
 fi
 
 # Install backend dependencies
 print_status "Installing backend dependencies..."
 cd backend
 
-# Install from requirements.txt
+# Install from requirements.txt using detected package manager
 if [ -f "requirements.txt" ]; then
-    python -m pip install -r requirements.txt
+    if [ "$USE_UV" = true ]; then
+        print_status "Installing dependencies with uv..."
+        # Check if we're in a virtual environment, otherwise use --system flag
+        if [ -z "$VIRTUAL_ENV" ]; then
+            uv pip install --system -r requirements.txt
+        else
+            uv pip install -r requirements.txt
+        fi
+    else
+        print_status "Installing dependencies with pip..."
+        python -m pip install -r requirements.txt
+    fi
 else
     print_warning "requirements.txt not found, installing essential packages..."
-    python -m pip install fastapi uvicorn langchain langgraph pydantic requests pandas seaborn plotly
+    if [ "$USE_UV" = true ]; then
+        if [ -z "$VIRTUAL_ENV" ]; then
+            uv pip install --system fastapi uvicorn langchain langgraph pydantic requests pandas seaborn plotly
+        else
+            uv pip install fastapi uvicorn langchain langgraph pydantic requests pandas seaborn plotly
+        fi
+    else
+        python -m pip install fastapi uvicorn langchain langgraph pydantic requests pandas seaborn plotly
+    fi
+fi
+
+# Check for environment variables
+print_status "Checking environment configuration..."
+if [ ! -f "../.env" ] && [ ! -f ".env" ]; then
+    print_warning "No .env file found. Creating example configuration..."
+    cat > .env.example << EOF
+# Helix.AI Environment Configuration
+# Copy this file to .env and fill in your API keys
+
+# OpenAI API Key (required for fallback and some features)
+OPENAI_API_KEY=your_openai_api_key_here
+
+# DeepSeek API Key (optional - if not provided, will fallback to OpenAI)
+DEEPSEEK_API_KEY=your_deepseek_api_key_here
+EOF
+    print_warning "Please create a .env file with your API keys. See ENVIRONMENT_SETUP.md for details."
+fi
+
+# Check if at least one API key is available
+if [ -z "$OPENAI_API_KEY" ] && [ -z "$DEEPSEEK_API_KEY" ]; then
+    print_warning "No API keys found in environment variables."
+    print_warning "Please set OPENAI_API_KEY or DEEPSEEK_API_KEY in your .env file."
+    print_warning "See ENVIRONMENT_SETUP.md for setup instructions."
 fi
 
 # Test plasmid visualizer import
@@ -210,7 +273,8 @@ cleanup() {
     kill $BACKEND_PID 2>/dev/null
     kill $FRONTEND_PID 2>/dev/null
     
-    if [ "$USE_REDIS" = true ]; then
+    # Only stop Redis if we started it ourselves
+    if [ "$USE_REDIS" = true ] && [ "$REDIS_STARTED_BY_US" = true ]; then
         print_status "Stopping Redis..."
         redis-cli -p $REDIS_PORT shutdown 2>/dev/null || true
     fi

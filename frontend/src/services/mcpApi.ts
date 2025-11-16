@@ -24,7 +24,12 @@ export const mcpApi = {
     return response.data;
   },
 
-  // Natural language command handling
+  // Agent orchestrator command
+  agentCommand: async (payload: { prompt: string; session_id?: string | null; files?: Array<{ name: string; content: string }>; }) => {
+    const response = await axios.post(`${API_BASE_URL}/agent`, payload);
+    return response.data;
+  },
+
   handleNaturalCommand: async (command: string, sessionId?: string) => {
     const response = await axios.post(`${API_BASE_URL}/mcp/handle-natural-command`, {
       command,
@@ -124,6 +129,17 @@ export const mcpApi = {
   },
 
   // Phylogenetic tree
+
+  readTrimming: async (params: { reads: string; adapter?: string; quality_threshold?: number }, sessionId?: string) => {
+    const response = await axios.post(`${API_BASE_URL}/mcp/read-trimming`, { ...params, session_id: sessionId });
+    return response.data;
+  },
+
+  readMerging: async (params: { forward_reads: string; reverse_reads: string; min_overlap?: number }, sessionId?: string) => {
+    const response = await axios.post(`${API_BASE_URL}/mcp/read-merging`, { ...params, session_id: sessionId });
+    return response.data;
+  },
+
   phylogeneticTree: async (params: { aligned_sequences: string }) => {
     const response = await axios.post(`${API_BASE_URL}/mcp/phylogenetic-tree`, params);
     return response.data;

@@ -273,46 +273,35 @@ def plasmid_for_representatives(representatives: List[str], aligned_sequences: s
 
 # llm = init_chat_model("deepseek:deepseek-chat", temperature=0)
 
+import os
 from langchain_deepseek import ChatDeepSeek
 
-llm = ChatDeepSeek(
-    model="deepseek-chat",
-    temperature=0,
-    max_tokens=None,
-    timeout=None,
-    max_retries=2,
-)
+# Initialize LLM with proper error handling
+try:
+    if os.getenv("DEEPSEEK_API_KEY"):
+        llm = ChatDeepSeek(
+            model="deepseek-chat",
+            temperature=0,
+            max_tokens=None,
+            timeout=None,
+            max_retries=2,
+        )
+        print("✅ DeepSeek LLM initialized with API key")
+    elif os.getenv("OPENAI_API_KEY"):
+        # Fallback to OpenAI if DeepSeek API key is not available
+        llm = init_chat_model("openai:gpt-4o", temperature=0)
+        print("⚠️  DEEPSEEK_API_KEY not found, using OpenAI as fallback")
+    else:
+        raise ValueError("No API keys found. Please set either DEEPSEEK_API_KEY or OPENAI_API_KEY in your environment variables.")
+except Exception as e:
+    print(f"❌ Error initializing LLM: {e}")
+    print("📋 Please check ENVIRONMENT_SETUP.md for configuration instructions")
+    raise
 
 memory = MemorySaver()
-model = init_chat_model("openai:gpt-4o", max_tokens=4000)
+# Use the same LLM instance for consistency
+model = llm
 config = {"configurable": {"thread_id": "abc123"}}
-
-# Create a custom prompt that helps the agent choose the right tool
-CUSTOM_PROMPT = """You are a bioinformatics assistant with access to the following tools:
-
-1. sequence_alignment - Use for aligning DNA/RNA sequences
-2. mutate_sequence - Use for CREATING new sequence variants from an input sequence
-3. dna_vendor_research - Use for ORDERING sequences, finding VENDORS, or researching TESTING options
-4. phylogenetic_tree - Use for creating phylogenetic trees from aligned sequences
-5. sequence_selection - Use for selecting sequences from alignments based on criteria
-6. synthesis_submission - Use for submitting sequences for DNA synthesis
-
-IMPORTANT: 
-- When the user mentions "order", "vendor", "synthesis", "test", "assay", "expression", "function", "binding" - use the dna_vendor_research tool.
-- When the user wants to CREATE new variants from a sequence, use mutate_sequence.
-- When the user wants to COMPARE existing sequences, use sequence_alignment.
-- When the user wants to create a phylogenetic tree from aligned sequences, use phylogenetic_tree.
-- When the user wants to select sequences from an alignment, use sequence_selection.
-- When the user wants to submit sequences for synthesis, use synthesis_submission.
-
-SEQUENCE SELECTION vs ALIGNMENT:
-- Use sequence_selection when the user says: "pick", "select", "choose", "from the", "randomly pick", "select from", "choose from"
-- Use sequence_alignment when the user says: "align", "alignment", "compare sequences", "multiple sequence alignment"
-- If the user says "pick 1 sequence" or "select 3 sequences" - this is sequence_selection, NOT alignment
-
-The user's request: {input}
-
-Think step by step about what tool to use, then respond accordingly."""
 
 agent = create_react_agent(
     model=model,
@@ -325,41 +314,14 @@ async def handle_command(command: str, session_id: str = "default", session_cont
     print(f"[handle_command] command: {command}")
     print(f"[handle_command] session_id: {session_id}")
 
-    # Clear agent memory to prevent context accumulation
-    try:
-        # Clear the memory for this session to prevent token bloat
-        memory.clear()
-        print(f"[handle_command] Cleared agent memory for session {session_id}")
-    except Exception as e:
-        print(f"[handle_command] Could not clear memory: {e}")
+    # NOTE: Memory clearing is left disabled so the LangGraph MemorySaver can
+    # retain session-scoped context. If token growth becomes an issue, consider
+    # adding a configurable flag to reset selectively rather than wiping on
+    # every request.
 
-    # Check if this is a vendor research command
-    vendor_keywords = ['order', 'vendor', 'synthesis', 'test', 'assay', 'expression', 'function', 'binding']
-    if any(keyword in command.lower() for keyword in vendor_keywords):
-        print("[handle_command] Detected vendor research command, using dna_vendor_research tool")
-        
-        # Extract sequence length from command if mentioned
-        sequence_length = None
-        if '96' in command or 'variants' in command:
-            sequence_length = 1000  # Default length for variants
-        
-        # Use the vendor research tool directly
-        import sys
-        import os
-        sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'tools'))
-        from dna_vendor_research import run_dna_vendor_research_raw
-        
-        result = run_dna_vendor_research_raw(command, sequence_length, 'large')
-        
-        return {
-            "text": f"DNA vendor research completed: {result.get('message', 'Research done')}",
-            "input": command,
-            "output": result,
-            "plot": {
-                "data": [{"x": ["Vendors", "Testing Options"], "y": [result.get('total_vendors', 0), result.get('total_testing_options', 0)], "type": "bar"}],
-                "layout": {"title": "DNA Vendor Research Results"},
-            },
-        }
+    vendor_response = _maybe_handle_vendor_request(command)
+    if vendor_response is not None:
+        return vendor_response
 
     # For other commands, use the agent with session-specific config
     input_message = {
@@ -373,21 +335,6 @@ async def handle_command(command: str, session_id: str = "default", session_cont
     print(f"[handle_command] result: {result}")
 
     return result
-    #
-    # from pymsaviz import MsaViz, get_msa_testdata
-    #
-    # msa_file = get_msa_testdata("HIGD2A.fa")
-    # mv = MsaViz(msa_file, wrap_length=60, show_count=True)
-    #
-    # fig = mv.plotfig()
-    #
-    # # mv.savefig("api_example01.png")
-
-
-    return {
-        "text": result.tool_input,
-        "plot": fig
-    }
 
 
 if __name__ == "__main__":
@@ -396,4 +343,40 @@ if __name__ == "__main__":
 
     mut_results = asyncio.run(handle_command("mutate the given sequence."))
     print(mut_results)
+
+
+def _maybe_handle_vendor_request(command: str):
+    """Detect vendor-focused requests and handle them directly."""
+    vendor_keywords = ['order', 'vendor', 'synthesis', 'test', 'assay', 'expression', 'function', 'binding']
+    if not any(keyword in command.lower() for keyword in vendor_keywords):
+        return None
+
+    print("[handle_command] Detected vendor research command, using dna_vendor_research tool")
+
+    sequence_length = None
+    if '96' in command or 'variants' in command:
+        sequence_length = 1000
+
+    import sys
+    import os
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'tools'))
+    from dna_vendor_research import run_dna_vendor_research_raw
+
+    result = run_dna_vendor_research_raw(command, sequence_length, 'large')
+
+    return {
+        "text": f"DNA vendor research completed: {result.get('message', 'Research done')}",
+        "input": command,
+        "output": result,
+        "plot": {
+            "data": [
+                {
+                    "x": ["Vendors", "Testing Options"],
+                    "y": [result.get('total_vendors', 0), result.get('total_testing_options', 0)],
+                    "type": "bar",
+                }
+            ],
+            "layout": {"title": "DNA Vendor Research Results"},
+        },
+    }
 

@@ -9,7 +9,7 @@ Thank you for your interest in contributing to Helix.AI! This document provides 
 - Python 3.10+
 - Node.js 16+
 - Git
-- Conda (recommended) or virtual environment
+- [uv](https://github.com/astral-sh/uv) (optional, recommended) or pip/conda
 
 ### Development Setup
 
@@ -19,12 +19,33 @@ Thank you for your interest in contributing to Helix.AI! This document provides 
 cd Helix.AI
    ```
 
-2. **Setup Backend**
+2. **Setup Backend** (choose one):
+
+   **Option A: Using uv (recommended - faster)**
+   ```bash
+   # Install uv if not already installed
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   
+   # Install dependencies
+   cd backend
+   uv pip install -r requirements.txt
+   cd ..
+   ```
+   
+   **Option B: Using pip**
+   ```bash
+   cd backend
+   pip install -r requirements.txt
+   cd ..
+   ```
+   
+   **Option C: Using Conda**
    ```bash
    cd backend
    conda create -n helix-dev python=3.10
 conda activate helix-dev
    pip install -r requirements.txt
+   cd ..
    ```
 
 3. **Setup Frontend**

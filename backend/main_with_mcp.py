@@ -94,6 +94,11 @@ class NaturalCommandRequest(BaseModel):
     command: str
     session_id: Optional[str] = None
 
+class AgentCommandRequest(BaseModel):
+    prompt: str
+    session_id: Optional[str] = None
+    files: Optional[List[Dict[str, Any]]] = None
+
 class PlasmidVisualizationRequest(BaseModel):
     vector_name: str
     cloning_sites: str
@@ -105,6 +110,18 @@ class PlasmidForRepresentativesRequest(BaseModel):
     aligned_sequences: str
     vector_name: str = "pUC19"
     cloning_sites: str = "EcoRI, BamHI, HindIII"
+    session_id: Optional[str] = None
+
+class ReadTrimmingRequest(BaseModel):
+    reads: str
+    adapter: Optional[str] = None
+    quality_threshold: int = 20
+    session_id: Optional[str] = None
+
+class ReadMergingRequest(BaseModel):
+    forward_reads: str
+    reverse_reads: str
+    min_overlap: int = 12
     session_id: Optional[str] = None
 
 class SessionRequest(BaseModel):
@@ -218,6 +235,45 @@ async def execute(req: CommandRequest):
             "session_id": req.session_id
         })
 
+@app.post("/agent")
+async def agent_command(req: AgentCommandRequest):
+    """Proxy endpoint for the bioinformatics agent orchestrator."""
+    try:
+        session_id = req.session_id or history_manager.create_session()
+
+        # Capture uploaded files in session context if provided
+        if req.files:
+            if hasattr(history_manager, "sessions"):
+                session_store = history_manager.sessions.setdefault(session_id, {})
+                uploaded = session_store.setdefault("uploaded_files", [])
+                uploaded.extend(req.files)
+
+        session_context = {}
+        if hasattr(history_manager, "sessions"):
+            session_context = history_manager.sessions.get(session_id, {})
+
+        result = await handle_command(req.prompt, session_id=session_id, session_context=session_context)
+
+        # Track agent interaction in history
+        history_manager.add_history_entry(
+            session_id,
+            req.prompt,
+            "agent",
+            result,
+        )
+
+        return CustomJSONResponse({
+            "success": True,
+            "result": result,
+            "session_id": session_id
+        })
+    except Exception as err:
+        return CustomJSONResponse({
+            "success": False,
+            "error": str(err),
+            "session_id": req.session_id
+        })
+
 @app.post("/mcp/sequence-alignment")
 async def sequence_alignment_mcp(req: SequenceAlignmentRequest):
     """Perform sequence alignment using MCP server with session tracking."""
@@ -243,6 +299,13 @@ async def sequence_alignment_mcp(req: SequenceAlignmentRequest):
         return CustomJSONResponse({
             "success": True,
             "result": result,
+            "session_id": req.session_id
+        })
+    except Exception as e:
+        return CustomJSONResponse({
+            "success": False,
+            "result": {},
+            "error": str(e),
             "session_id": req.session_id
         })
     except Exception as e:
@@ -595,6 +658,71 @@ async def plasmid_for_representatives_mcp(req: PlasmidForRepresentativesRequest)
             "session_id": req.session_id
         })
 
+@app.post("/mcp/read-trimming")
+async def read_trimming_mcp(req: ReadTrimmingRequest):
+    """Perform read trimming using MCP tooling."""
+    try:
+        session_id = req.session_id or history_manager.create_session()
+        result = await call_mcp_tool("read_trimming", {
+            "reads": req.reads,
+            "adapter": req.adapter,
+            "quality_threshold": req.quality_threshold,
+        })
+        history_manager.add_history_entry(
+            session_id,
+            "Trim sequencing reads",
+            "read_trimming",
+            result,
+            {
+                "adapter": req.adapter,
+                "quality_threshold": req.quality_threshold,
+            }
+        )
+        return CustomJSONResponse({
+            "success": True,
+            "result": result,
+            "session_id": session_id
+        })
+    except Exception as e:
+        return CustomJSONResponse({
+            "success": False,
+            "result": {},
+            "error": str(e),
+            "session_id": req.session_id
+        })
+
+@app.post("/mcp/read-merging")
+async def read_merging_mcp(req: ReadMergingRequest):
+    """Merge paired-end reads using MCP tooling."""
+    try:
+        session_id = req.session_id or history_manager.create_session()
+        result = await call_mcp_tool("read_merging", {
+            "forward_reads": req.forward_reads,
+            "reverse_reads": req.reverse_reads,
+            "min_overlap": req.min_overlap,
+        })
+        history_manager.add_history_entry(
+            session_id,
+            "Merge paired-end reads",
+            "read_merging",
+            result,
+            {
+                "min_overlap": req.min_overlap,
+            }
+        )
+        return CustomJSONResponse({
+            "success": True,
+            "result": result,
+            "session_id": session_id
+        })
+    except Exception as e:
+        return CustomJSONResponse({
+            "success": False,
+            "result": {},
+            "error": str(e),
+            "session_id": req.session_id
+        })
+
 @app.get("/mcp/tools")
 async def list_mcp_tools():
     """List available MCP tools."""
@@ -662,6 +790,24 @@ async def list_mcp_tools():
                     "vector_name": "string (e.g., pUC19)",
                     "cloning_sites": "string (e.g., EcoRI, BamHI, HindIII)"
                 }
+            },
+            {
+                "name": "read_trimming",
+                "description": "Trim adapters and low-quality bases from sequencing reads",
+                "parameters": {
+                    "reads": "string (FASTQ format)",
+                    "adapter": "string (adapter sequence to remove)",
+                    "quality_threshold": "integer (minimum Phred score to retain)"
+                }
+            },
+            {
+                "name": "read_merging",
+                "description": "Merge paired-end reads using overlap consensus",
+                "parameters": {
+                    "forward_reads": "string (FASTQ format with forward reads)",
+                    "reverse_reads": "string (FASTQ format with reverse reads)",
+                    "min_overlap": "integer (minimum overlap length for merging)"
+                }
             }
         ]
         return {"tools": tools}
@@ -728,6 +874,22 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
             arguments.get("aligned_sequences", ""),
             arguments.get("vector_name", "pUC19"),
             arguments.get("cloning_sites", "EcoRI, BamHI, HindIII")
+        )
+
+    elif tool_name == "read_trimming":
+        import read_trimming
+        return read_trimming.run_read_trimming_raw(
+            arguments.get("reads", ""),
+            arguments.get("adapter"),
+            arguments.get("quality_threshold", 20),
+        )
+
+    elif tool_name == "read_merging":
+        import read_merging
+        return read_merging.run_read_merging_raw(
+            arguments.get("forward_reads", ""),
+            arguments.get("reverse_reads", ""),
+            arguments.get("min_overlap", 12),
         )
     
     elif tool_name == "handle_natural_command":
