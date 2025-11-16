@@ -1,0 +1,17 @@
+.git
+.gitignore
+node_modules
+frontend/node_modules
+frontend/dist
+__pycache__/
+*.pyc
+.venv
+venv
+.ruff_cache/
+.pytest_cache/
+sessions/
+backend/sessions/
+.DS_Store
+*.log
+
+
