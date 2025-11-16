@@ -471,3 +471,12 @@ docs/HISTORY_TRACKING.md
 docs/WORKFLOW_EXAMPLE.md
 docs/COMPLETE_WORKFLOW_EXAMPLE.md
 docs/API_DOCUMENTATION.md
+
+# -----------------------------------------------------------------------------
+# Restrict docs tracked in repo
+# Keep only top-level README.md and TRL_ASSESSMENT.md; ignore others
+# -----------------------------------------------------------------------------
+docs/**
+/*.md
+!/README.md
+!/TRL_ASSESSMENT.md
