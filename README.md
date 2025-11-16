@@ -225,6 +225,17 @@ Examples:
    - GitHub Actions: build + push Docker image, run tests, deploy to ECS.
    - Invalidate CloudFront after frontend deploy.
 
+### GitHub Actions (CI/CD) Setup
+- Add the following repository secrets:
+  - `AWS_REGION` (e.g., us-east-1)
+  - `AWS_ACCOUNT_ID`
+  - `AWS_OIDC_ROLE_ARN` (IAM role for GitHub OIDC with ECR/S3/CloudFront permissions)
+  - `ECR_REPOSITORY` (e.g., helix-backend)
+  - `S3_BUCKET` (S3 bucket for frontend)
+  - `CLOUDFRONT_DISTRIBUTION_ID` (optional)
+  - `VITE_API_BASE_URL` (frontend build-time API base URL)
+- Workflow: `.github/workflows/deploy.yml` builds and pushes the backend image to ECR and syncs frontend assets to S3 (with optional CloudFront invalidation) on push to `main`.
+
 ## 🧪 Testing
 
 Run the comprehensive test suite:
