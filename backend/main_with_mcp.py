@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException
+from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -9,6 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 import numpy as np
+from datetime import datetime, timezone
 
 # Add the current directory to Python path for imports
 sys.path.append(str(Path(__file__).parent))
@@ -99,6 +101,77 @@ class AgentCommandRequest(BaseModel):
     session_id: Optional[str] = None
     files: Optional[List[Dict[str, Any]]] = None
 
+# -------------------------------
+# Limits and validation utilities
+# -------------------------------
+
+TEN_MB_BYTES = 10 * 1024 * 1024
+MAX_PROMPT_TOKENS = 5000
+MAX_PROMPTS_PER_DAY = 100
+
+# In-memory per-identity counters. In production, move to Redis or DB.
+_daily_prompt_counters: Dict[str, Dict[str, int]] = {}
+
+def _get_request_identity(req: Request, session_id: Optional[str]) -> str:
+    """
+    Identify requester for rate limiting. Prefer session_id; fall back to client IP.
+    """
+    if session_id:
+        return f"session:{session_id}"
+    client_ip = req.client.host if req and req.client else "unknown"
+    return f"ip:{client_ip}"
+
+def _today_iso() -> str:
+    return datetime.now(timezone.utc).date().isoformat()
+
+def _check_and_increment_daily_counter(identity: str) -> None:
+    day = _today_iso()
+    by_identity = _daily_prompt_counters.setdefault(identity, {})
+    count = by_identity.get(day, 0)
+    if count >= MAX_PROMPTS_PER_DAY:
+        raise HTTPException(status_code=429, detail=f"Daily prompt limit reached ({MAX_PROMPTS_PER_DAY}). Try again tomorrow.")
+    by_identity[day] = count + 1
+
+def _estimate_token_count(text: str) -> int:
+    """
+    Lightweight token estimator without external deps.
+    Uses a conservative heuristic ~4 chars per token.
+    """
+    if not text:
+        return 0
+    char_tokens = max(1, round(len(text) / 4))
+    word_tokens = len(text.split())
+    return max(char_tokens, word_tokens)
+
+def _validate_prompt_length(prompt: str) -> None:
+    tokens = _estimate_token_count(prompt)
+    if tokens > MAX_PROMPT_TOKENS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Prompt too long: ~{tokens} tokens (max {MAX_PROMPT_TOKENS}). Please shorten your prompt."
+        )
+
+def _validate_files(files: Optional[List[Dict[str, Any]]]) -> None:
+    if not files:
+        return
+    for idx, f in enumerate(files):
+        # Accept 'size' in bytes if provided by the client.
+        size = f.get("size")
+        if isinstance(size, int) and size > TEN_MB_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Uploaded file #{idx+1} exceeds 10 MB limit."
+            )
+        # If raw content is provided, guard enormous payloads
+        content = f.get("content")
+        if isinstance(content, str):
+            # Rough size check: 1 char ~ 1 byte for ASCII payloads
+            if len(content) > TEN_MB_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Uploaded file #{idx+1} content exceeds 10 MB limit."
+                )
+
 class PlasmidVisualizationRequest(BaseModel):
     vector_name: str
     cloning_sites: str
@@ -169,12 +242,19 @@ async def get_session_info(session_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/execute")
-async def execute(req: CommandRequest):
+async def execute(req: CommandRequest, request: Request):
     """Execute a general command using the existing agent with session tracking."""
     try:
+        # Validate prompt length
+        _validate_prompt_length(req.command)
+
         # Create session if not provided
         if not req.session_id:
             req.session_id = history_manager.create_session()
+        
+        # Rate limit per identity (session or IP)
+        identity = _get_request_identity(request, req.session_id)
+        _check_and_increment_daily_counter(identity)
         
         # Get session context from history manager
         session_context = {}
@@ -236,13 +316,22 @@ async def execute(req: CommandRequest):
         })
 
 @app.post("/agent")
-async def agent_command(req: AgentCommandRequest):
+async def agent_command(req: AgentCommandRequest, request: Request):
     """Proxy endpoint for the bioinformatics agent orchestrator."""
     try:
+        # Validate prompt length
+        _validate_prompt_length(req.prompt)
+
         session_id = req.session_id or history_manager.create_session()
+
+        # Rate limit per identity (session or IP)
+        identity = _get_request_identity(request, session_id)
+        _check_and_increment_daily_counter(identity)
 
         # Capture uploaded files in session context if provided
         if req.files:
+            # Validate file sizes
+            _validate_files(req.files)
             if hasattr(history_manager, "sessions"):
                 session_store = history_manager.sessions.setdefault(session_id, {})
                 uploaded = session_store.setdefault("uploaded_files", [])

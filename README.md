@@ -67,6 +67,12 @@ An AI-powered web application for managing biotechnology workflows via natural l
 - **Professional UI**: Clean layout with collapsible Examples; MCP Tools panel removed for clarity
 - **Agent vs Submit**: Two buttons with clear tooltips; default dispatch uses heuristics but users can override
 
+### 🔒 Usage Limits & Safety
+- **Max upload size**: 10 MB per file (enforced server-side).
+- **Max prompt length**: 5,000 tokens (estimated server-side).
+- **Daily prompt cap**: 100 prompts per session/IP per day.
+- In production, back these limits with Redis or a database for distributed enforcement.
+
 ## 🗂 Project Structure
 
 ```
