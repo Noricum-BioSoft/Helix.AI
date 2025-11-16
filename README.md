@@ -242,11 +242,11 @@ python -m pytest tests/integration/
 
 ## 📚 Documentation
 
+- **[Bioinformatics Agent Plan](docs/BioinformaticsAgentPlan.md)**: System architecture, agent prompt, roadmap
 - **[Natural Language Guide](docs/NATURAL_LANGUAGE_GUIDE.md)**: How to use natural language commands
 - **[Phylogenetic Tree Guide](docs/PHYLOGENETIC_TREE_GUIDE.md)**: Tree visualization and analysis
 - **[DNA Vendor Research](docs/DNA_VENDOR_RESEARCH_GUIDE.md)**: Simulated vendor comparison and selection
-- **[MCP Server Documentation](docs/MCP_SERVER_README.md)**: Model Context Protocol integration
-- **[Development Guide](docs/DEVELOPMENT_SUMMARY.md)**: Development setup and guidelines
+- **[Development Guide](docs/DEVELOPMENT_GUIDE.md)**: Development setup and guidelines
 
 ## 🤝 Contributing
 

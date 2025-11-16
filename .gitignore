@@ -459,3 +459,15 @@ pnpm-lock.yaml
 *.pdf
 !logo.png
 !favicon.ico
+
+# -----------------------------------------------------------------------------
+# Legacy/obsolete docs (kept out of repository)
+# -----------------------------------------------------------------------------
+docs/ENHANCED_MCP_README.md
+docs/MCP_SERVER_README.md
+docs/MCP_README.md
+docs/MCP_DATA_CONTROL_FLOW.md
+docs/HISTORY_TRACKING.md
+docs/WORKFLOW_EXAMPLE.md
+docs/COMPLETE_WORKFLOW_EXAMPLE.md
+docs/API_DOCUMENTATION.md
