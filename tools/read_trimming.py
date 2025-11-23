@@ -41,8 +41,19 @@ def _parse_fastq(content: str) -> List[FastqRecord]:
 
 def _quality_trim(sequence: str, quality: str, threshold: int) -> Tuple[str, str]:
     """Trim low-quality bases from the end of a read."""
-    trim_index = len(sequence)
-    for idx in range(len(sequence) - 1, -1, -1):
+    # Ensure quality and sequence have the same length
+    min_length = min(len(sequence), len(quality))
+    if min_length == 0:
+        return "", ""
+    
+    # Trim both to the same length if they differ
+    sequence = sequence[:min_length]
+    quality = quality[:min_length]
+    
+    trim_index = min_length
+    for idx in range(min_length - 1, -1, -1):
+        if idx >= len(quality):
+            break
         q_score = ord(quality[idx]) - PHRED_OFFSET
         if q_score >= threshold:
             break
@@ -51,10 +62,25 @@ def _quality_trim(sequence: str, quality: str, threshold: int) -> Tuple[str, str
 
 
 def _adapter_trim(sequence: str, adapter: str) -> str:
+    """Remove adapter sequence from the end of the sequence."""
     if not adapter:
         return sequence
+    
+    # Check if adapter is present (exact match)
     if adapter in sequence:
         return sequence.replace(adapter, "")
+    
+    # Also check for adapter at the end (common case)
+    # This handles cases where adapter might be partially present
+    if sequence.endswith(adapter):
+        return sequence[:-len(adapter)]
+    
+    # Check if sequence ends with a prefix of the adapter (partial adapter contamination)
+    # Remove the longest matching suffix
+    for i in range(len(adapter), 0, -1):
+        if sequence.endswith(adapter[:i]):
+            return sequence[:-i]
+    
     return sequence
 
 
@@ -84,7 +110,20 @@ def run_read_trimming_raw(
     for record in records:
         total_bases += len(record.sequence)
         seq = _adapter_trim(record.sequence, adapter)
-        qual = record.quality[: len(seq)]
+        # Ensure quality string matches sequence length
+        # If adapter was removed, we need to adjust quality accordingly
+        if len(seq) < len(record.sequence):
+            # Adapter was removed, take quality corresponding to remaining sequence
+            # This assumes adapter was at the end (most common case)
+            qual = record.quality[:len(seq)]
+        else:
+            qual = record.quality[:len(seq)]
+        
+        # Ensure quality and sequence are same length before quality trimming
+        min_len = min(len(seq), len(qual))
+        seq = seq[:min_len]
+        qual = qual[:min_len]
+        
         seq, qual = _quality_trim(seq, qual, quality_threshold)
         trimmed_bases += len(record.sequence) - len(seq)
         trimmed_records.append(

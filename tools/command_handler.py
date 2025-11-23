@@ -54,7 +54,11 @@ class CommandHandler:
             # Step 2: Execute the command
             result = await self.executor.execute_command(command_dict)
             
-            logger.info(f"Command execution result: {result}")
+            print(f"🔧 [HANDLER] Command execution result type: {type(result)}")
+            print(f"🔧 [HANDLER] Command execution result keys: {result.keys() if isinstance(result, dict) else 'Not a dict'}")
+            print(f"🔧 [HANDLER] Command execution result status: {result.get('status', 'No status') if isinstance(result, dict) else 'N/A'}")
+            if isinstance(result, dict) and 'result' in result:
+                print(f"🔧 [HANDLER] Nested result keys: {result['result'].keys() if isinstance(result['result'], dict) else 'Not a dict'}")
             
             return result
             

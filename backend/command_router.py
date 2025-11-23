@@ -81,8 +81,14 @@ class CommandRouter:
             print(f"🔧 Command router: Matched 'phylogenetic tree' -> phylogenetic_tree")
             return 'phylogenetic_tree', self._extract_parameters(command, 'phylogenetic_tree', session_context)
         
-        # Check for mutation/variant generation
-        if any(phrase in command_lower for phrase in ['mutate', 'mutation', 'variant', 'create variants', 'generate variants']):
+        # Check for quality assessment/report (HIGH PRIORITY - before mutation)
+        # Check for "quality report" or "quality assessment" first
+        if 'quality report' in command_lower or 'quality assessment' in command_lower or ('generate' in command_lower and 'quality' in command_lower and 'report' in command_lower):
+            print(f"🔧 Command router: Matched 'quality assessment' -> handle_natural_command")
+            return "handle_natural_command", {"command": command, "session_id": session_context.get("session_id", "")}
+        
+        # Check for mutation/variant generation (but not "generate quality")
+        if any(phrase in command_lower for phrase in ['mutate', 'mutation', 'variant', 'create variants', 'generate variants']) and 'quality' not in command_lower:
             print(f"🔧 Command router: Matched 'mutation' -> mutate_sequence")
             return 'mutate_sequence', self._extract_parameters(command, 'mutate_sequence', session_context)
         
@@ -121,14 +127,34 @@ class CommandRouter:
             print(f"🔧 Command router: Matched 'directed evolution' -> directed_evolution")
             return 'directed_evolution', self._extract_parameters(command, 'directed_evolution', session_context)
         
+        # Check for read trimming/adapter removal (HIGH PRIORITY - before alignment fallback)
+        # Check for adapter removal first (more specific)
+        if any(phrase in command_lower for phrase in ['remove adapter', 'adapter removal', 'remove adapter sequences', 'adapter sequences']):
+            print(f"🔧 Command router: Matched 'adapter removal' -> handle_natural_command")
+            return "handle_natural_command", {"command": command, "session_id": session_context.get("session_id", "")}
+        
+        # Check for read trimming
+        if any(phrase in command_lower for phrase in ['trim', 'trimming', 'remove low-quality', 'quality trim', 'trim fastq', 'trim reads']):
+            print(f"🔧 Command router: Matched 'read trimming' -> handle_natural_command")
+            return "handle_natural_command", {"command": command, "session_id": session_context.get("session_id", "")}
+        
+        # Check for read merging (HIGH PRIORITY - before alignment fallback)
+        if any(phrase in command_lower for phrase in ['merge reads', 'merge paired-end', 'merge r1 r2', 'combine reads']):
+            print(f"🔧 Command router: Matched 'read merging' -> handle_natural_command")
+            return "handle_natural_command", {"command": command, "session_id": session_context.get("session_id", "")}
+        
         # Default fallback - try to route to sequence_alignment for alignment-like commands
-        if any(phrase in command_lower for phrase in ['align', 'alignment', 'sequences']):
+        # Make this more specific to avoid false matches with adapter removal commands
+        if any(phrase in command_lower for phrase in ['align sequences', 'sequence alignment', 'perform alignment', 'compare sequences']):
             print(f"🔧 Command router: Defaulting to sequence_alignment for alignment command")
             return "sequence_alignment", self._extract_parameters(command, 'sequence_alignment', session_context)
         
         # For other commands, try to use the natural command handler
         print(f"🔧 Command router: No specific match, using natural command handler")
-        return "handle_natural_command", {"command": command, "session_id": session_context.get("session_id", "")}
+        # Get session_id from session_context if available, otherwise use empty string
+        # The session_id should be passed from the endpoint
+        session_id = session_context.get("session_id", "")
+        return "handle_natural_command", {"command": command, "session_id": session_id}
     
     def _extract_parameters(self, command: str, tool_name: str, session_context: Dict[str, Any]) -> Dict[str, Any]:
         """Extract parameters for the specific tool."""
@@ -285,11 +311,14 @@ class CommandRouter:
                 
                 return {"aligned_sequences": sequences_text}
             
-            # Use aligned sequences from session context
+            # Use aligned sequences from session context (populated from history if available)
             aligned_sequences = session_context.get("aligned_sequences", "")
             if not aligned_sequences and session_context.get("mutated_sequences"):
                 # If we have mutated sequences but no aligned sequences, create FASTA format
                 aligned_sequences = "\n".join([f">mutant_{i+1}\n{seq}" for i, seq in enumerate(session_context["mutated_sequences"])])
+            
+            if not aligned_sequences:
+                print(f"⚠️ [ROUTER] No aligned sequences found in command or session context for {tool_name}")
             
             return {"aligned_sequences": aligned_sequences}
         
@@ -354,43 +383,28 @@ class CommandRouter:
             variants_match = re.search(r'(\d+)\s+variants?', command, re.IGNORECASE)
             num_variants = int(variants_match.group(1)) if variants_match else 10
             
-            # Extract sequences (same logic as phylogenetic_tree)
-            sequences_text = None
+            # Extract selection criteria
+            selection_criteria = "diversity"  # default
+            command_lower = command.lower()
+            if "diverse" in command_lower or "diversity" in command_lower:
+                selection_criteria = "diversity"
+            elif "random" in command_lower:
+                selection_criteria = "random"
+            elif "length" in command_lower:
+                selection_criteria = "length"
+            elif "best" in command_lower or "conservation" in command_lower:
+                selection_criteria = "conservation"
             
-            # Pattern 1: Extract sequences after "sequences:" or "File content:"
-            sequences_match = re.search(r'(?:sequences?|File content?)[:\s]+([^"]+)', command, re.IGNORECASE | re.DOTALL)
-            if sequences_match:
-                sequences_text = sequences_match.group(1).strip()
-                print(f"🔧 Extracted sequences for variant selection: '{sequences_text}'")
+            # Get session_id from session context
+            session_id = session_context.get("session_id", "")
             
-            # Pattern 2: Extract FASTA content directly
-            if not sequences_text:
-                fasta_match = re.search(r'(>[\w\s\n>]+)', command, re.DOTALL)
-                if fasta_match:
-                    sequences_text = fasta_match.group(1).strip()
-                    print(f"🔧 Extracted FASTA content for variant selection: '{sequences_text}'")
-            
-            if sequences_text:
-                # Convert simple space-separated sequences to FASTA format
-                if not sequences_text.startswith('>'):
-                    seq_list = sequences_text.split()
-                    if len(seq_list) >= 2:
-                        sequences_text = "\n".join([f">seq{i+1}\n{seq}" for i, seq in enumerate(seq_list)])
-                        print(f"🔧 Converted to FASTA format for variant selection: '{sequences_text}'")
-                
-                # Convert inline FASTA format to proper format
-                elif '\n' not in sequences_text:
-                    sequences_text = re.sub(r'>([^\s]+)\s+([^>]+)', r'>\1\n\2', sequences_text)
-                    sequences_text = re.sub(r'>([^\s]+)\s+([^>]+)', r'>\1\n\2', sequences_text)
-                
-                return {"aligned_sequences": sequences_text, "num_variants": num_variants}
-            
-            # Use aligned sequences from session context
-            aligned_sequences = session_context.get("aligned_sequences", "")
-            if not aligned_sequences and session_context.get("mutated_sequences"):
-                aligned_sequences = "\n".join([f">mutant_{i+1}\n{seq}" for i, seq in enumerate(session_context["mutated_sequences"])])
-            
-            return {"aligned_sequences": aligned_sequences, "num_variants": num_variants}
+            # Variant selection from mutation history needs session_id, not aligned_sequences
+            return {
+                "session_id": session_id,
+                "num_variants": num_variants,
+                "selection_criteria": selection_criteria,
+                "custom_filters": None
+            }
         
         elif tool_name == "dna_vendor_research":
             return {

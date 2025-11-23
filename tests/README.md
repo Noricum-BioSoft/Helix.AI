@@ -6,19 +6,26 @@ This directory contains the comprehensive test suite for the Helix.AI bioinforma
 
 ```
 tests/
-├── backend/              # Backend-specific tests
+├── backend/              # Backend-specific unit tests
 │   ├── test_agent.py    # LangChain agent tests
-│   ├── test_command_router.py  # Command routing tests
-│   ├── test_history.py  # Session management tests
-│   └── test_mcp_integration.py # MCP integration tests
+│   ├── test_command_handling.py  # Command handling tests
+│   ├── test_history.py  # History manager tests
+│   ├── test_imports.py  # Import validation tests
+│   ├── test_mutation.py # Mutation tool tests
+│   └── test_session_history.py  # Session history unit tests
 ├── frontend/            # Frontend-specific tests
 │   ├── test_components/ # React component tests
 │   ├── test_services/   # API service tests
 │   └── test_utils/      # Utility function tests
 ├── integration/         # End-to-end integration tests
-│   ├── test_workflows/  # Complete workflow tests
-│   ├── test_api/        # API integration tests
-│   └── test_ui/         # UI integration tests
+│   ├── test_core_functionalities.py  # Core functionality tests via API
+│   ├── test_natural_language_mapping.py  # Natural language command mapping tests
+│   └── test-microservices.py  # Microservices integration tests
+├── workflows/          # End-to-end workflow tests
+│   ├── test_rnaseq_workflow.py              # RNA-seq preprocessing workflow
+│   ├── test_alignment_phylogenetic_workflow.py  # Alignment & phylogeny workflow
+│   ├── test_variant_analysis_workflow.py    # Variant analysis workflow
+│   └── test_workflow_permutations.py       # Comprehensive workflow permutations
 ├── data/               # Test data files
 │   ├── sequences/      # Test sequence files
 │   ├── alignments/     # Test alignment files
@@ -49,6 +56,23 @@ python -m pytest tests/backend/test_command_router.py -v
 python -m pytest tests/backend/ --cov=backend --cov-report=html
 ```
 
+### Workflow Tests (End-to-End)
+
+```bash
+# Run all workflow tests
+python -m pytest tests/workflows/ -v
+
+# Run specific workflow test
+python3 tests/workflows/test_rnaseq_workflow.py
+python3 tests/workflows/test_alignment_phylogenetic_workflow.py
+python3 tests/workflows/test_variant_analysis_workflow.py
+
+# Run comprehensive permutation test
+python3 tests/workflows/test_workflow_permutations.py
+```
+
+**Note**: Workflow tests require the backend server to be running on `http://localhost:8001`
+
 ### Frontend Tests
 
 ```bash
@@ -68,9 +92,16 @@ cd frontend && npm test -- --testNamePattern="PlasmidVisualizer"
 # Run all integration tests
 python -m pytest tests/integration/ -v
 
-# Run specific workflow test
-python -m pytest tests/integration/test_workflows/test_phylogenetic_workflow.py -v
+# Run specific integration test
+python -m pytest tests/integration/test_core_functionalities.py -v
+python -m pytest tests/integration/test_natural_language_mapping.py -v
+
+# Or run directly
+python3 tests/integration/test_core_functionalities.py
+python3 tests/integration/test_natural_language_mapping.py
 ```
+
+**Note**: Integration tests require the backend server to be running on `http://localhost:8001`
 
 ### Complete Test Suite
 

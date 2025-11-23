@@ -128,15 +128,32 @@ class HistoryManager:
         self._save_session(session_id)
         logger.info(f"Added history entry to session {session_id}: {tool}")
     
-    def get_latest_result(self, session_id: str, tool: str) -> Optional[Dict[str, Any]]:
-        """Get the most recent result for a specific tool in a session."""
+    def get_latest_result(self, session_id: str, tool: str, skip_errors: bool = True) -> Optional[Dict[str, Any]]:
+        """Get the most recent result for a specific tool in a session.
+        
+        Args:
+            session_id: Session ID
+            tool: Tool name
+            skip_errors: If True, skip results with status="error"
+        """
         if session_id not in self.sessions:
             return None
         
         # Find the most recent entry for this tool
         for entry in reversed(self.sessions[session_id]["history"]):
             if entry["tool"] == tool:
-                return entry["result"]
+                result = entry["result"]
+                # Skip error results if requested
+                if skip_errors:
+                    # Check if result is an error (could be nested)
+                    if isinstance(result, dict):
+                        if result.get("status") == "error":
+                            continue
+                        # Also check nested result structure
+                        if "result" in result and isinstance(result["result"], dict):
+                            if result["result"].get("status") == "error":
+                                continue
+                return result
         return None
     
     def get_all_results(self, session_id: str, tool: str) -> List[Dict[str, Any]]:

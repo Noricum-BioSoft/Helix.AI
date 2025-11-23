@@ -261,12 +261,41 @@ async def execute(req: CommandRequest, request: Request):
         if hasattr(history_manager, 'sessions') and req.session_id in history_manager.sessions:
             session_context = history_manager.sessions[req.session_id]
         
+        # Ensure session_id is in session_context for the router
+        session_context["session_id"] = req.session_id
+        
+        # Populate session_context with aligned sequences from history if not present
+        # This helps tools like phylogenetic_tree retrieve aligned sequences from previous steps
+        if "aligned_sequences" not in session_context or not session_context["aligned_sequences"]:
+            alignment_result = history_manager.get_latest_result(req.session_id, "sequence_alignment", skip_errors=True)
+            if alignment_result and isinstance(alignment_result, dict):
+                # Check for nested result structure
+                result_data = alignment_result
+                if isinstance(result_data, dict) and "result" in result_data:
+                    result_data = result_data["result"]
+                
+                # Extract aligned sequences from alignment result
+                if "alignment" in result_data and isinstance(result_data["alignment"], list):
+                    # Convert alignment list to FASTA format
+                    fasta_lines = []
+                    for seq in result_data["alignment"]:
+                        name = seq.get("name", "seq")
+                        sequence = seq.get("sequence", "")
+                        fasta_lines.append(f">{name}")
+                        fasta_lines.append(sequence)
+                    session_context["aligned_sequences"] = "\n".join(fasta_lines)
+                    print(f"🔧 [EXECUTE] Retrieved aligned sequences from history: {len(session_context['aligned_sequences'])} chars")
+        
         # Use command router with session context
         from command_router import CommandRouter
         command_router = CommandRouter()
         
         # Route the command to the appropriate tool
         tool_name, parameters = command_router.route_command(req.command, session_context)
+        
+        # Ensure session_id is in parameters for handle_natural_command
+        if tool_name == "handle_natural_command":
+            parameters["session_id"] = req.session_id
         print(f"🔧 Routed command '{req.command}' to tool '{tool_name}' with parameters: {parameters}")
         
         # DEBUG: Print session context before tool call
@@ -283,12 +312,21 @@ async def execute(req: CommandRequest, request: Request):
             result = await call_mcp_tool(tool_name, parameters)
             
             # Track in history with the correct tool name
-            history_manager.add_history_entry(
-                req.session_id,
-                req.command,
-                tool_name,  # Use the actual tool name instead of "general_command"
-                result
-            )
+            # If handle_natural_command was used, the executor already saved to history with the actual tool name
+            # So we don't need to save again. For other tools, save to history.
+            if tool_name != "handle_natural_command":
+                # Extract the actual tool name from the result if available
+                actual_tool = tool_name
+                if isinstance(result, dict) and "tool" in result:
+                    actual_tool = result.get("tool", tool_name)
+                
+                history_manager.add_history_entry(
+                    req.session_id,
+                    req.command,
+                    actual_tool,
+                    result
+                )
+            # For handle_natural_command, the executor already saved with the correct tool name (e.g., "read_trimming")
             
             return CustomJSONResponse({
                 "success": True,
@@ -621,6 +659,14 @@ async def handle_natural_command_mcp(req: NaturalCommandRequest):
         import command_handler
         
         result = command_handler.handle_command_raw(req.command, req.session_id)
+        
+        print(f"🔧 [DEBUG] handle_natural_command result type: {type(result)}")
+        print(f"🔧 [DEBUG] handle_natural_command result keys: {result.keys() if isinstance(result, dict) else 'Not a dict'}")
+        if isinstance(result, dict):
+            print(f"🔧 [DEBUG] handle_natural_command result status: {result.get('status', 'No status')}")
+            print(f"🔧 [DEBUG] handle_natural_command result tool: {result.get('tool', 'No tool')}")
+            if 'result' in result:
+                print(f"🔧 [DEBUG] handle_natural_command nested result keys: {result['result'].keys() if isinstance(result['result'], dict) else 'Not a dict'}")
         
         return CustomJSONResponse({
             "success": True,
@@ -986,7 +1032,11 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
         import command_handler
         command = arguments.get("command", "")
         session_id = arguments.get("session_id", "")
-        return command_handler.handle_command_raw(command, session_id)
+        print(f"🔧 [MCP] handle_natural_command called with session_id: {session_id}")
+        result = command_handler.handle_command_raw(command, session_id)
+        print(f"🔧 [MCP] handle_natural_command result keys: {result.keys() if isinstance(result, dict) else 'Not a dict'}")
+        print(f"🔧 [MCP] handle_natural_command result session_id: {result.get('session_id', 'NOT FOUND')}")
+        return result
     
     elif tool_name == "phylogenetic_tree":
         # Handle phylogenetic tree analysis
@@ -1002,11 +1052,29 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
         return phylogenetic_tree.run_clustering_from_tree(aligned_sequences, num_clusters)
     
     elif tool_name == "variant_selection":
-        # Handle variant selection
-        import phylogenetic_tree
-        aligned_sequences = arguments.get("aligned_sequences", "")
+        # Handle variant selection - use regular variant selection from mutation history
+        import variant_selection
+        session_id = arguments.get("session_id", "")
+        selection_criteria = arguments.get("selection_criteria", "diversity")
         num_variants = arguments.get("num_variants", 10)
-        return phylogenetic_tree.run_variant_selection_from_tree(aligned_sequences, num_variants)
+        custom_filters = arguments.get("custom_filters", None)
+        
+        # If session_id is not provided, try to get it from arguments
+        if not session_id:
+            # Try to extract from aligned_sequences if it's actually a session context
+            aligned_sequences = arguments.get("aligned_sequences", "")
+            if not aligned_sequences:
+                return {
+                    "status": "error",
+                    "message": "Session ID required for variant selection from mutation history"
+                }
+        
+        return variant_selection.run_variant_selection_raw(
+            session_id=session_id,
+            selection_criteria=selection_criteria,
+            num_variants=num_variants,
+            custom_filters=custom_filters
+        )
     
     else:
         raise ValueError(f"Unknown tool: {tool_name}")

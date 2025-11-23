@@ -15,8 +15,9 @@ export interface PromptDesignProps {
   agentLoading: boolean;
   placeholder?: string;
   dragActive: boolean;
-  uploadedFile: { name: string; content: string } | null;
-  onFileRemove: () => void;
+  uploadedFiles: Array<{ name: string; content: string }>;
+  onFileRemove: (index: number) => void;
+  onRemoveAllFiles: () => void;
   onDropZoneDragOver: (event: React.DragEvent) => void;
   onDropZoneDragLeave: (event: React.DragEvent) => void;
   onDropZoneDrop: (event: React.DragEvent) => void;

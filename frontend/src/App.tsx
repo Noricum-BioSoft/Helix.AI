@@ -51,7 +51,7 @@ function App() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [commandMode, setCommandMode] = useState<'structured' | 'natural'>('natural');
   const [activeTab, setActiveTab] = useState<string>('command');
-  const [uploadedFile, setUploadedFile] = useState<{ name: string; content: string } | null>(null);
+  const [uploadedFiles, setUploadedFiles] = useState<Array<{ name: string; content: string }>>([]);
   const [workflowContext, setWorkflowContext] = useState<WorkflowContext>({});
   const [isInitialized, setIsInitialized] = useState(false);
   const [selectedDesign, setSelectedDesign] = useState<DesignOptionId>('integrated');
@@ -173,8 +173,18 @@ function App() {
       console.log('Workflow context before sending:', workflowContext);
       
       // If there's an uploaded file, append its content to the command
-      if (uploadedFile) {
-        finalCommand = `${finalCommand}\n\nFile content:\n${uploadedFile.content}`;
+      // Add all uploaded files to the command
+      if (uploadedFiles.length > 0) {
+        uploadedFiles.forEach((file, index) => {
+          // For paired-end reads, detect R1/R2 pattern
+          if (file.name.match(/[._-]R?1[._-]/i)) {
+            finalCommand = `${finalCommand}\n\nForward reads (${file.name}):\n${file.content}`;
+          } else if (file.name.match(/[._-]R?2[._-]/i)) {
+            finalCommand = `${finalCommand}\n\nReverse reads (${file.name}):\n${file.content}`;
+          } else {
+            finalCommand = `${finalCommand}\n\nFile ${index + 1} (${file.name}):\n${file.content}`;
+          }
+        });
       }
       
       if (commandMode === 'natural') {
@@ -322,7 +332,7 @@ function App() {
       setHistory(prev => [historyItem, ...prev]);
     } finally {
       setCommand('');
-      setUploadedFile(null); // Clear uploaded file after processing
+      setUploadedFiles([]); // Clear uploaded files after processing
       setLoading(false);
     }
   };
@@ -335,14 +345,17 @@ function App() {
     try {
       let finalCommand = enhanceCommandWithContext(command);
 
-      if (uploadedFile) {
-        finalCommand = `${finalCommand}\n\nFile content:\n${uploadedFile.content}`;
+      // Add all uploaded files to the command
+      if (uploadedFiles.length > 0) {
+        uploadedFiles.forEach((file, index) => {
+          finalCommand = `${finalCommand}\n\nFile ${index + 1} (${file.name}):\n${file.content}`;
+        });
       }
 
       const response = await mcpApi.agentCommand({
         prompt: finalCommand,
         session_id: sessionId || undefined,
-        files: uploadedFile ? [{ name: uploadedFile.name, content: uploadedFile.content }] : undefined,
+        files: uploadedFiles.length > 0 ? uploadedFiles.map(f => ({ name: f.name, content: f.content })) : undefined,
       });
 
       if ((response as any).session_id && !sessionId) {
@@ -368,7 +381,7 @@ function App() {
       setHistory(prev => [historyItem, ...prev]);
     } finally {
       setCommand('');
-      setUploadedFile(null);
+      setUploadedFiles([]);
       setAgentLoading(false);
     }
   };
@@ -391,14 +404,24 @@ function App() {
     e.stopPropagation();
     setDragActive(false);
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      const file = e.dataTransfer.files[0];
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const content = event.target?.result as string;
-        setUploadedFile({ name: file.name, content });
-        // Removed auto-population of command - let user decide what to do
-      };
-      reader.readAsText(file);
+      const files = Array.from(e.dataTransfer.files);
+      const newFiles: Array<{ name: string; content: string }> = [];
+      let filesRead = 0;
+      
+      files.forEach((file) => {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const content = event.target?.result as string;
+          newFiles.push({ name: file.name, content });
+          filesRead++;
+          
+          // When all files are read, update state
+          if (filesRead === files.length) {
+            setUploadedFiles(prev => [...prev, ...newFiles]);
+          }
+        };
+        reader.readAsText(file);
+      });
     }
   };
 
@@ -406,17 +429,37 @@ function App() {
     fileInputRef.current?.click();
   };
 
-  const handleFileRemove = () => setUploadedFile(null);
+  const handleFileRemove = (index: number) => {
+    setUploadedFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleRemoveAllFiles = () => {
+    setUploadedFiles([]);
+  };
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      const file = e.target.files[0];
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const content = event.target?.result as string;
-        setUploadedFile({ name: file.name, content });
-      };
-      reader.readAsText(file);
+      const files = Array.from(e.target.files);
+      const newFiles: Array<{ name: string; content: string }> = [];
+      let filesRead = 0;
+      
+      files.forEach((file) => {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const content = event.target?.result as string;
+          newFiles.push({ name: file.name, content });
+          filesRead++;
+          
+          // When all files are read, update state
+          if (filesRead === files.length) {
+            setUploadedFiles(prev => [...prev, ...newFiles]);
+          }
+        };
+        reader.readAsText(file);
+      });
+      
+      // Reset input so same files can be selected again
+      e.target.value = '';
     }
   };
 
@@ -1144,6 +1187,164 @@ function App() {
             />
           </div>
         );
+      }
+      
+      // Handle read merging results FIRST - check nested structure (result.result contains the tool output)
+      const mergingResult = (result && result.result) ? result.result : (actualResult.result || actualResult);
+      
+      console.log('🔍 [FRONTEND] Merging result structure:', {
+        hasMergedSequences: !!mergingResult?.merged_sequences,
+        hasSummary: !!mergingResult?.summary,
+        totalPairs: mergingResult?.summary?.total_pairs,
+        keys: mergingResult ? Object.keys(mergingResult) : []
+      });
+      
+      // Check for merging results first (by looking for merged_sequences or total_pairs in summary)
+      if (mergingResult && (mergingResult.merged_sequences || (mergingResult.summary && mergingResult.summary.total_pairs !== undefined))) {
+        const summary = mergingResult.summary || {};
+        return (
+          <div>
+            {mergingResult.text && (
+              <div className="alert alert-success mb-3">{mergingResult.text}</div>
+            )}
+            <div className="bg-light p-3 border rounded mb-3">
+              <h5>📊 Read Merging Summary</h5>
+              <ul className="list-unstyled">
+                <li><strong>Total Pairs:</strong> {summary.total_pairs || 'N/A'}</li>
+                <li><strong>Merged Pairs:</strong> {summary.merged_pairs || 'N/A'}</li>
+                <li><strong>Average Overlap:</strong> {summary.average_overlap ? summary.average_overlap.toFixed(2) : 'N/A'} bases</li>
+                <li><strong>Minimum Overlap:</strong> {summary.min_overlap || 'N/A'} bases</li>
+              </ul>
+            </div>
+            {mergingResult.merged_sequences && (
+              <div className="bg-light p-3 border rounded">
+                <h6>Merged Sequences (FASTA)</h6>
+                <pre style={{ maxHeight: '400px', overflow: 'auto', fontSize: '0.85em' }}>
+                  {mergingResult.merged_sequences}
+                </pre>
+              </div>
+            )}
+          </div>
+        );
+      }
+      
+      // Handle read trimming results - check nested structure (result.result contains the tool output)
+      const trimmingResult = (result && result.result) ? result.result : (actualResult.result || actualResult);
+      
+      console.log('🔍 [FRONTEND] Trimming result structure:', {
+        hasTrimmedReads: !!trimmingResult?.trimmed_reads,
+        hasSummary: !!trimmingResult?.summary,
+        hasForwardReads: !!trimmingResult?.forward_reads,
+        hasReverseReads: !!trimmingResult?.reverse_reads,
+        fileType: trimmingResult?.file_type,
+        keys: trimmingResult ? Object.keys(trimmingResult) : []
+      });
+      
+      // Only match trimming results if they have trimmed_reads or forward_reads (not just any summary)
+      if (trimmingResult && (trimmingResult.trimmed_reads || trimmingResult.forward_reads)) {
+        const fileType = trimmingResult.file_type || 'single';
+        
+        console.log('🔍 [FRONTEND] File type:', fileType);
+        console.log('🔍 [FRONTEND] Has forward_reads:', !!trimmingResult.forward_reads);
+        console.log('🔍 [FRONTEND] Has reverse_reads:', !!trimmingResult.reverse_reads);
+        
+        // Handle paired-end reads
+        if (fileType === 'paired_end' && trimmingResult.forward_reads && trimmingResult.reverse_reads) {
+          console.log('🔍 [FRONTEND] Rendering paired-end view');
+          const combinedSummary = trimmingResult.summary || {};
+          const forwardSummary = trimmingResult.forward_reads.summary || {};
+          const reverseSummary = trimmingResult.reverse_reads.summary || {};
+          
+          return (
+            <div>
+              {trimmingResult.text && (
+                <div className="alert alert-success mb-3">{trimmingResult.text}</div>
+              )}
+              
+              {/* Combined Summary */}
+              <div className="bg-light p-3 border rounded mb-3">
+                <h5>📊 Read Trimming Summary (Paired-End)</h5>
+                <div className="row">
+                  <div className="col-md-6">
+                    <h6>Forward Reads (R1)</h6>
+                    <ul className="list-unstyled">
+                      <li><strong>Total Reads:</strong> {forwardSummary.total_reads || 'N/A'}</li>
+                      <li><strong>Total Bases:</strong> {forwardSummary.total_bases || 'N/A'}</li>
+                      <li><strong>Bases Trimmed:</strong> {forwardSummary.trimmed_bases || 'N/A'}</li>
+                    </ul>
+                  </div>
+                  <div className="col-md-6">
+                    <h6>Reverse Reads (R2)</h6>
+                    <ul className="list-unstyled">
+                      <li><strong>Total Reads:</strong> {reverseSummary.total_reads || 'N/A'}</li>
+                      <li><strong>Total Bases:</strong> {reverseSummary.total_bases || 'N/A'}</li>
+                      <li><strong>Bases Trimmed:</strong> {reverseSummary.trimmed_bases || 'N/A'}</li>
+                    </ul>
+                  </div>
+                </div>
+                <hr />
+                <ul className="list-unstyled mb-0">
+                  <li><strong>Quality Threshold:</strong> {combinedSummary.quality_threshold || 'N/A'}</li>
+                  {combinedSummary.adapter_removed && (
+                    <li><strong>Adapter Removed:</strong> Yes</li>
+                  )}
+                </ul>
+              </div>
+              
+              {/* Forward Reads Output */}
+              {trimmingResult.forward_reads.trimmed_reads && (
+                <div className="bg-light p-3 border rounded mb-3">
+                  <h6>📁 Forward Reads (R1) - Trimmed FASTQ</h6>
+                  <pre style={{ maxHeight: '300px', overflow: 'auto', fontSize: '0.85em' }}>
+                    {trimmingResult.forward_reads.trimmed_reads}
+                  </pre>
+                </div>
+              )}
+              
+              {/* Reverse Reads Output */}
+              {trimmingResult.reverse_reads.trimmed_reads && (
+                <div className="bg-light p-3 border rounded">
+                  <h6>📁 Reverse Reads (R2) - Trimmed FASTQ</h6>
+                  <pre style={{ maxHeight: '300px', overflow: 'auto', fontSize: '0.85em' }}>
+                    {trimmingResult.reverse_reads.trimmed_reads}
+                  </pre>
+                </div>
+              )}
+            </div>
+          );
+        }
+        
+        // Handle single file
+        else {
+          const summary = trimmingResult.summary || {};
+          return (
+            <div>
+              {trimmingResult.text && (
+                <div className="alert alert-success mb-3">{trimmingResult.text}</div>
+              )}
+              <div className="bg-light p-3 border rounded mb-3">
+                <h5>📊 Read Trimming Summary</h5>
+                <ul className="list-unstyled">
+                  <li><strong>Total Reads:</strong> {summary.total_reads || 'N/A'}</li>
+                  <li><strong>Total Bases:</strong> {summary.total_bases || 'N/A'}</li>
+                  <li><strong>Bases Trimmed:</strong> {summary.trimmed_bases || 'N/A'}</li>
+                  <li><strong>Quality Threshold:</strong> {summary.quality_threshold || 'N/A'}</li>
+                  {summary.adapter_removed && (
+                    <li><strong>Adapter Removed:</strong> Yes</li>
+                  )}
+                </ul>
+              </div>
+              {trimmingResult.trimmed_reads && (
+                <div className="bg-light p-3 border rounded">
+                  <h6>Trimmed Reads (FASTQ)</h6>
+                  <pre style={{ maxHeight: '400px', overflow: 'auto', fontSize: '0.85em' }}>
+                    {trimmingResult.trimmed_reads}
+                  </pre>
+                </div>
+              )}
+            </div>
+          );
+        }
       }
       // --- END NEW ---
 
@@ -2002,8 +2203,9 @@ function App() {
     onAgentSubmit: handleAgentSubmit,
     placeholder: 'visualize the phylogenetic tree',
     dragActive,
-    uploadedFile,
+    uploadedFiles,
     onFileRemove: handleFileRemove,
+    onRemoveAllFiles: handleRemoveAllFiles,
     onDropZoneDragOver: handleDragOver,
     onDropZoneDragLeave: handleDragLeave,
     onDropZoneDrop: handleDrop,
@@ -2025,6 +2227,7 @@ function App() {
           ref={fileInputRef}
           style={{ display: 'none' }}
           accept=".fasta,.fa,.fas,.fastq,.csv,.txt"
+          multiple
           onChange={handleFileInput}
         />
 
@@ -2138,24 +2341,39 @@ function App() {
             </div>
           )}
 
-          {/* Uploaded File Display */}
-          {uploadedFile && (
-            <div className="alert alert-info mb-3">
-              <div className="d-flex justify-content-between align-items-center">
-                <div>
-                  <strong>📁 File uploaded:</strong> {uploadedFile.name}
-                  <br />
-                  <small className="text-muted">
-                    Content length: {uploadedFile.content.length} characters
-                  </small>
-                </div>
+          {/* Uploaded Files Display */}
+          {uploadedFiles.length > 0 && (
+            <div className="mb-3">
+              <div className="d-flex justify-content-between align-items-center mb-2">
+                <strong>📁 Uploaded Files ({uploadedFiles.length}):</strong>
                 <button 
                   className="btn btn-sm btn-outline-secondary"
-                  onClick={() => setUploadedFile(null)}
+                  onClick={handleRemoveAllFiles}
                 >
-                  ✕ Remove
+                  Remove All
                 </button>
               </div>
+              {uploadedFiles.map((file, index) => (
+                <div key={index} className="alert alert-info mb-2">
+                  <div className="d-flex justify-content-between align-items-center">
+                    <div>
+                      <strong>{file.name}</strong>
+                      {file.name.match(/[._-]R?1[._-]/i) && <span className="badge bg-primary ms-2">R1</span>}
+                      {file.name.match(/[._-]R?2[._-]/i) && <span className="badge bg-success ms-2">R2</span>}
+                      <br />
+                      <small className="text-muted">
+                        Content length: {file.content.length.toLocaleString()} characters
+                      </small>
+                    </div>
+                    <button 
+                      className="btn btn-sm btn-outline-secondary"
+                      onClick={() => handleFileRemove(index)}
+                    >
+                      ✕ Remove
+                    </button>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
           

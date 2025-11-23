@@ -75,13 +75,13 @@ class NaturalLanguageMappingTester:
                         actual_tool = "unknown"
                     
                     # Check if the tool matches expected
-                    tool_match = expected_tool in actual_tool or actual_tool in expected_tool or expected_tool == "any"
+                    tool_match = expected_tool in actual_tool or actual_tool in expected_tool
                     
                     # Analyze parameters if provided
                     param_match = True
                     if expected_params:
-                        # Placeholder for parameter validation if needed
-                        param_match = True
+                        # This is a simplified check - in practice we'd need to parse the actual parameters
+                        param_match = True  # Placeholder for parameter validation
                     
                     success = tool_match and param_match
                     details = f"Command: '{command}'"
@@ -426,7 +426,6 @@ class NaturalLanguageMappingTester:
         
         # Recommendations
         print(f"\n💡 Recommendations:")
-        tool_mapping_accuracy = (passed_tests / total_tests) * 100 if total_tests else 0
         if tool_mapping_accuracy >= 90:
             print("   ✅ Excellent natural language mapping! System is very robust.")
         elif tool_mapping_accuracy >= 80:
@@ -478,6 +477,4 @@ def main():
     sys.exit(0 if success else 1)
 
 if __name__ == "__main__":
-    main()
-
-
+    main() 

@@ -15,8 +15,9 @@ export const DesignOptionTwo: React.FC<PromptDesignProps> = ({
   placeholder,
   onAgentSubmit,
   dragActive,
-  uploadedFile,
+  uploadedFiles,
   onFileRemove,
+  onRemoveAllFiles,
   onDropZoneDragOver,
   onDropZoneDragLeave,
   onDropZoneDrop,
@@ -157,18 +158,32 @@ export const DesignOptionTwo: React.FC<PromptDesignProps> = ({
                 onBrowseClick={onBrowseClick}
               />
 
-              {uploadedFile && (
-                <Card className="mt-3 border-0 bg-light">
-                  <Card.Body className="d-flex justify-content-between align-items-center">
-                    <div>
-                      <div className="fw-semibold">{uploadedFile.name}</div>
-                      <div className="text-muted small">{uploadedFile.content.length.toLocaleString()} characters</div>
-                    </div>
-                    <Button variant="outline-secondary" size="sm" onClick={onFileRemove}>
-                      Remove
+              {uploadedFiles.length > 0 && (
+                <div className="mt-3">
+                  <div className="d-flex justify-content-between align-items-center mb-2">
+                    <div className="fw-semibold">Uploaded Files ({uploadedFiles.length})</div>
+                    <Button variant="outline-secondary" size="sm" onClick={onRemoveAllFiles}>
+                      Remove All
                     </Button>
-                  </Card.Body>
-                </Card>
+                  </div>
+                  {uploadedFiles.map((file, index) => (
+                    <Card key={index} className="mb-2 border-0 bg-light">
+                      <Card.Body className="d-flex justify-content-between align-items-center">
+                        <div>
+                          <div className="fw-semibold">
+                            {file.name}
+                            {file.name.match(/[._-]R?1[._-]/i) && <span className="badge bg-primary ms-2">R1</span>}
+                            {file.name.match(/[._-]R?2[._-]/i) && <span className="badge bg-success ms-2">R2</span>}
+                          </div>
+                          <div className="text-muted small">{file.content.length.toLocaleString()} characters</div>
+                        </div>
+                        <Button variant="outline-secondary" size="sm" onClick={() => onFileRemove(index)}>
+                          Remove
+                        </Button>
+                      </Card.Body>
+                    </Card>
+                  ))}
+                </div>
               )}
             </Card.Body>
           </Card>
