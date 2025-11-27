@@ -17,7 +17,6 @@ export const DesignOptionThree: React.FC<PromptDesignProps> = ({
   dragActive,
   uploadedFiles,
   onFileRemove,
-  onRemoveAllFiles,
   onDropZoneDragOver,
   onDropZoneDragLeave,
   onDropZoneDrop,
@@ -173,36 +172,32 @@ export const DesignOptionThree: React.FC<PromptDesignProps> = ({
                 >
                   <div className="mb-3" style={{ fontSize: '3rem' }}>🗂️</div>
                   <h6 className="fw-semibold">Drop FASTA or CSV files here</h6>
-                  <p className="text-muted small mb-3">{dragActive ? 'Release to upload your files.' : 'Supports FASTA (.fasta, .fa, .fas), FASTQ (.fastq), CSV (.csv), TXT (.txt) formats. You can upload multiple files at once.'}</p>
+                  <p className="text-muted small mb-3">{dragActive ? 'Release to upload your file.' : 'Supports FASTA (.fasta, .fa, .fas), CSV (.csv), TXT (.txt) formats.'}</p>
                   <Button variant="outline-primary" onClick={onBrowseClick}>Browse Files</Button>
                 </div>
 
                 {uploadedFiles.length > 0 && (
-                  <div className="mt-3">
-                    <div className="d-flex justify-content-between align-items-center mb-2">
-                      <div className="fw-semibold">Uploaded Files ({uploadedFiles.length})</div>
-                      <Button variant="outline-secondary" size="sm" onClick={onRemoveAllFiles}>
-                        Remove All
-                      </Button>
-                    </div>
-                    {uploadedFiles.map((file, index) => (
-                      <Card key={index} className="mb-2 border-0 bg-light">
-                        <Card.Body className="d-flex justify-content-between align-items-center">
+                  <Card className="mt-3 border-0 bg-light">
+                    <Card.Body>
+                      <div className="d-flex justify-content-between align-items-center mb-2">
+                        <div className="fw-semibold">Uploaded Files ({uploadedFiles.length})</div>
+                        <Button variant="outline-secondary" size="sm" onClick={() => onFileRemove()}>
+                          Clear All
+                        </Button>
+                      </div>
+                      {uploadedFiles.map((file, index) => (
+                        <div key={index} className="d-flex justify-content-between align-items-center mb-2 pb-2 border-bottom">
                           <div>
-                            <div className="fw-semibold">
-                              {file.name}
-                              {file.name.match(/[._-]R?1[._-]/i) && <span className="badge bg-primary ms-2">R1</span>}
-                              {file.name.match(/[._-]R?2[._-]/i) && <span className="badge bg-success ms-2">R2</span>}
-                            </div>
+                            <div className="fw-semibold small">{file.name}</div>
                             <div className="text-muted small">{file.content.length.toLocaleString()} characters</div>
                           </div>
                           <Button variant="outline-secondary" size="sm" onClick={() => onFileRemove(index)}>
                             Remove
                           </Button>
-                        </Card.Body>
-                      </Card>
-                    ))}
-                  </div>
+                        </div>
+                      ))}
+                    </Card.Body>
+                  </Card>
                 )}
               </Tab.Pane>
             </Tab.Content>

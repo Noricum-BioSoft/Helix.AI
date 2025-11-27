@@ -13,8 +13,7 @@ import os
 from pathlib import Path
 
 # Add project root to path
-# Go up from tests/backend to project root
-project_root = Path(__file__).parent.parent.parent
+project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(project_root / "backend"))
 sys.path.insert(0, str(project_root / "tools"))

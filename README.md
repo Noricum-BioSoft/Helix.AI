@@ -241,20 +241,8 @@ Examples:
 Run the comprehensive test suite:
 
 ```bash
-# Backend unit tests
-python -m pytest tests/backend/ -v
-
-# Integration tests (requires backend running)
-python -m pytest tests/integration/ -v
-# Or run directly:
-python3 tests/integration/test_core_functionalities.py
-python3 tests/integration/test_natural_language_mapping.py
-
-# End-to-end workflow tests (requires backend running on localhost:8001)
-python3 tests/workflows/test_rnaseq_workflow.py
-python3 tests/workflows/test_alignment_phylogenetic_workflow.py
-python3 tests/workflows/test_variant_analysis_workflow.py
-python3 tests/workflows/test_workflow_permutations.py
+# Backend tests
+python -m pytest tests/backend/
 
 # Frontend tests
 cd frontend && npm test

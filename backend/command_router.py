@@ -81,14 +81,8 @@ class CommandRouter:
             print(f"🔧 Command router: Matched 'phylogenetic tree' -> phylogenetic_tree")
             return 'phylogenetic_tree', self._extract_parameters(command, 'phylogenetic_tree', session_context)
         
-        # Check for quality assessment/report (HIGH PRIORITY - before mutation)
-        # Check for "quality report" or "quality assessment" first
-        if 'quality report' in command_lower or 'quality assessment' in command_lower or ('generate' in command_lower and 'quality' in command_lower and 'report' in command_lower):
-            print(f"🔧 Command router: Matched 'quality assessment' -> handle_natural_command")
-            return "handle_natural_command", {"command": command, "session_id": session_context.get("session_id", "")}
-        
-        # Check for mutation/variant generation (but not "generate quality")
-        if any(phrase in command_lower for phrase in ['mutate', 'mutation', 'variant', 'create variants', 'generate variants']) and 'quality' not in command_lower:
+        # Check for mutation/variant generation
+        if any(phrase in command_lower for phrase in ['mutate', 'mutation', 'variant', 'create variants', 'generate variants']):
             print(f"🔧 Command router: Matched 'mutation' -> mutate_sequence")
             return 'mutate_sequence', self._extract_parameters(command, 'mutate_sequence', session_context)
         
@@ -127,34 +121,29 @@ class CommandRouter:
             print(f"🔧 Command router: Matched 'directed evolution' -> directed_evolution")
             return 'directed_evolution', self._extract_parameters(command, 'directed_evolution', session_context)
         
-        # Check for read trimming/adapter removal (HIGH PRIORITY - before alignment fallback)
-        # Check for adapter removal first (more specific)
-        if any(phrase in command_lower for phrase in ['remove adapter', 'adapter removal', 'remove adapter sequences', 'adapter sequences']):
-            print(f"🔧 Command router: Matched 'adapter removal' -> handle_natural_command")
-            return "handle_natural_command", {"command": command, "session_id": session_context.get("session_id", "")}
+        # Check for quality assessment (HIGH PRIORITY - before other checks)
+        if any(phrase in command_lower for phrase in ['quality report', 'quality assessment', 'generate quality', 'quality metrics', 'qc report', 'quality check', 'assess quality']):
+            print(f"🔧 Command router: Matched 'quality assessment' -> quality_assessment")
+            return 'quality_assessment', self._extract_parameters(command, 'quality_assessment', session_context)
         
-        # Check for read trimming
-        if any(phrase in command_lower for phrase in ['trim', 'trimming', 'remove low-quality', 'quality trim', 'trim fastq', 'trim reads']):
-            print(f"🔧 Command router: Matched 'read trimming' -> handle_natural_command")
-            return "handle_natural_command", {"command": command, "session_id": session_context.get("session_id", "")}
+        # Check for read merging (HIGH PRIORITY - before trimming to avoid conflicts)
+        if any(phrase in command_lower for phrase in ['merge', 'merging', 'merge reads', 'merge paired', 'merge paired-end', 'merge my paired']):
+            print(f"🔧 Command router: Matched 'read merging' -> read_merging")
+            return 'read_merging', self._extract_parameters(command, 'read_merging', session_context)
         
-        # Check for read merging (HIGH PRIORITY - before alignment fallback)
-        if any(phrase in command_lower for phrase in ['merge reads', 'merge paired-end', 'merge r1 r2', 'combine reads']):
-            print(f"🔧 Command router: Matched 'read merging' -> handle_natural_command")
-            return "handle_natural_command", {"command": command, "session_id": session_context.get("session_id", "")}
+        # Check for read trimming (HIGH PRIORITY - before alignment fallback)
+        if any(phrase in command_lower for phrase in ['trim', 'trimming', 'trim reads', 'trim low-quality', 'quality trim', 'quality threshold', 'remove adapter', 'adapter removal']):
+            print(f"🔧 Command router: Matched 'read trimming' -> read_trimming")
+            return 'read_trimming', self._extract_parameters(command, 'read_trimming', session_context)
         
         # Default fallback - try to route to sequence_alignment for alignment-like commands
-        # Make this more specific to avoid false matches with adapter removal commands
-        if any(phrase in command_lower for phrase in ['align sequences', 'sequence alignment', 'perform alignment', 'compare sequences']):
+        if any(phrase in command_lower for phrase in ['align', 'alignment', 'sequences']):
             print(f"🔧 Command router: Defaulting to sequence_alignment for alignment command")
             return "sequence_alignment", self._extract_parameters(command, 'sequence_alignment', session_context)
         
         # For other commands, try to use the natural command handler
         print(f"🔧 Command router: No specific match, using natural command handler")
-        # Get session_id from session_context if available, otherwise use empty string
-        # The session_id should be passed from the endpoint
-        session_id = session_context.get("session_id", "")
-        return "handle_natural_command", {"command": command, "session_id": session_id}
+        return "handle_natural_command", {"command": command, "session_id": session_context.get("session_id", "")}
     
     def _extract_parameters(self, command: str, tool_name: str, session_context: Dict[str, Any]) -> Dict[str, Any]:
         """Extract parameters for the specific tool."""
@@ -311,14 +300,36 @@ class CommandRouter:
                 
                 return {"aligned_sequences": sequences_text}
             
-            # Use aligned sequences from session context (populated from history if available)
+            # Use aligned sequences from session context
             aligned_sequences = session_context.get("aligned_sequences", "")
+            
+            # If not found in session context, try to get from previous alignment result in history
+            if not aligned_sequences:
+                history = session_context.get("history", [])
+                for entry in reversed(history):  # Start from most recent
+                    if entry.get("tool") == "sequence_alignment":
+                        result = entry.get("result", {})
+                        # Check for nested result structure
+                        if isinstance(result, dict):
+                            actual_result = result.get("result", result)
+                            if isinstance(actual_result, dict):
+                                # Extract alignment list and convert to FASTA
+                                alignment = actual_result.get("alignment", [])
+                                if isinstance(alignment, list) and len(alignment) > 0:
+                                    fasta_lines = []
+                                    for seq in alignment:
+                                        if isinstance(seq, dict):
+                                            name = seq.get("name", "sequence")
+                                            sequence = seq.get("sequence", "")
+                                            fasta_lines.append(f">{name}")
+                                            fasta_lines.append(sequence)
+                                    aligned_sequences = "\n".join(fasta_lines)
+                                    print(f"🔧 Extracted aligned sequences from history: {len(alignment)} sequences")
+                                    break  # Use the most recent alignment result
+            
             if not aligned_sequences and session_context.get("mutated_sequences"):
                 # If we have mutated sequences but no aligned sequences, create FASTA format
                 aligned_sequences = "\n".join([f">mutant_{i+1}\n{seq}" for i, seq in enumerate(session_context["mutated_sequences"])])
-            
-            if not aligned_sequences:
-                print(f"⚠️ [ROUTER] No aligned sequences found in command or session context for {tool_name}")
             
             return {"aligned_sequences": aligned_sequences}
         
@@ -367,6 +378,31 @@ class CommandRouter:
             
             # Use aligned sequences from session context
             aligned_sequences = session_context.get("aligned_sequences", "")
+            
+            # If not found in session context, try to get from previous alignment result in history
+            if not aligned_sequences:
+                history = session_context.get("history", [])
+                for entry in reversed(history):  # Start from most recent
+                    if entry.get("tool") == "sequence_alignment":
+                        result = entry.get("result", {})
+                        # Check for nested result structure
+                        if isinstance(result, dict):
+                            actual_result = result.get("result", result)
+                            if isinstance(actual_result, dict):
+                                # Extract alignment list and convert to FASTA
+                                alignment = actual_result.get("alignment", [])
+                                if isinstance(alignment, list) and len(alignment) > 0:
+                                    fasta_lines = []
+                                    for seq in alignment:
+                                        if isinstance(seq, dict):
+                                            name = seq.get("name", "sequence")
+                                            sequence = seq.get("sequence", "")
+                                            fasta_lines.append(f">{name}")
+                                            fasta_lines.append(sequence)
+                                    aligned_sequences = "\n".join(fasta_lines)
+                                    print(f"🔧 Extracted aligned sequences from history for clustering: {len(alignment)} sequences")
+                                    break  # Use the most recent alignment result
+            
             if not aligned_sequences and session_context.get("mutated_sequences"):
                 aligned_sequences = "\n".join([f">mutant_{i+1}\n{seq}" for i, seq in enumerate(session_context["mutated_sequences"])])
             
@@ -383,28 +419,43 @@ class CommandRouter:
             variants_match = re.search(r'(\d+)\s+variants?', command, re.IGNORECASE)
             num_variants = int(variants_match.group(1)) if variants_match else 10
             
-            # Extract selection criteria
-            selection_criteria = "diversity"  # default
-            command_lower = command.lower()
-            if "diverse" in command_lower or "diversity" in command_lower:
-                selection_criteria = "diversity"
-            elif "random" in command_lower:
-                selection_criteria = "random"
-            elif "length" in command_lower:
-                selection_criteria = "length"
-            elif "best" in command_lower or "conservation" in command_lower:
-                selection_criteria = "conservation"
+            # Extract sequences (same logic as phylogenetic_tree)
+            sequences_text = None
             
-            # Get session_id from session context
-            session_id = session_context.get("session_id", "")
+            # Pattern 1: Extract sequences after "sequences:" or "File content:"
+            sequences_match = re.search(r'(?:sequences?|File content?)[:\s]+([^"]+)', command, re.IGNORECASE | re.DOTALL)
+            if sequences_match:
+                sequences_text = sequences_match.group(1).strip()
+                print(f"🔧 Extracted sequences for variant selection: '{sequences_text}'")
             
-            # Variant selection from mutation history needs session_id, not aligned_sequences
-            return {
-                "session_id": session_id,
-                "num_variants": num_variants,
-                "selection_criteria": selection_criteria,
-                "custom_filters": None
-            }
+            # Pattern 2: Extract FASTA content directly
+            if not sequences_text:
+                fasta_match = re.search(r'(>[\w\s\n>]+)', command, re.DOTALL)
+                if fasta_match:
+                    sequences_text = fasta_match.group(1).strip()
+                    print(f"🔧 Extracted FASTA content for variant selection: '{sequences_text}'")
+            
+            if sequences_text:
+                # Convert simple space-separated sequences to FASTA format
+                if not sequences_text.startswith('>'):
+                    seq_list = sequences_text.split()
+                    if len(seq_list) >= 2:
+                        sequences_text = "\n".join([f">seq{i+1}\n{seq}" for i, seq in enumerate(seq_list)])
+                        print(f"🔧 Converted to FASTA format for variant selection: '{sequences_text}'")
+                
+                # Convert inline FASTA format to proper format
+                elif '\n' not in sequences_text:
+                    sequences_text = re.sub(r'>([^\s]+)\s+([^>]+)', r'>\1\n\2', sequences_text)
+                    sequences_text = re.sub(r'>([^\s]+)\s+([^>]+)', r'>\1\n\2', sequences_text)
+                
+                return {"aligned_sequences": sequences_text, "num_variants": num_variants}
+            
+            # Use aligned sequences from session context
+            aligned_sequences = session_context.get("aligned_sequences", "")
+            if not aligned_sequences and session_context.get("mutated_sequences"):
+                aligned_sequences = "\n".join([f">mutant_{i+1}\n{seq}" for i, seq in enumerate(session_context["mutated_sequences"])])
+            
+            return {"aligned_sequences": aligned_sequences, "num_variants": num_variants}
         
         elif tool_name == "dna_vendor_research":
             return {
@@ -475,6 +526,276 @@ class CommandRouter:
                 "strategy": strategy,
                 "num_cycles": num_cycles,
                 "command": command
+            }
+        
+        elif tool_name == "read_trimming":
+            # Extract FASTQ reads from command
+            # Split command into sections and extract FASTQ content
+            forward_reads = ""
+            reverse_reads = ""
+            reads = ""
+            
+            # Pattern 1: Extract from "Forward reads (filename):\n{content}"
+            # Use a simpler approach: find the section header and extract everything until next section or end
+            forward_section = re.search(r'Forward reads\s*\([^)]+\):\s*\n', command, re.IGNORECASE)
+            if forward_section:
+                start_pos = forward_section.end()
+                # Find the next section or end of string
+                next_section = re.search(r'\n\n(?:Reverse reads|Forward reads|File content)', command[start_pos:], re.IGNORECASE)
+                if next_section:
+                    forward_reads = command[start_pos:start_pos + next_section.start()].strip()
+                else:
+                    forward_reads = command[start_pos:].strip()
+                print(f"🔧 [DEBUG] Extracted forward reads: {len(forward_reads)} characters")
+            
+            reverse_section = re.search(r'Reverse reads\s*\([^)]+\):\s*\n', command, re.IGNORECASE)
+            if reverse_section:
+                start_pos = reverse_section.end()
+                # Find the next section or end of string
+                next_section = re.search(r'\n\n(?:Forward reads|Reverse reads|File content)', command[start_pos:], re.IGNORECASE)
+                if next_section:
+                    reverse_reads = command[start_pos:start_pos + next_section.start()].strip()
+                else:
+                    reverse_reads = command[start_pos:].strip()
+                print(f"🔧 [DEBUG] Extracted reverse reads: {len(reverse_reads)} characters")
+            
+            if not forward_reads and not reverse_reads:
+                # Pattern 2: Extract FASTQ content directly (look for @ headers)
+                # Match FASTQ records: @header\nsequence\n+\nquality (can repeat)
+                fastq_match = re.search(r'(@[^\n]+\n[^\n]+\n\+[^\n]+\n[^\n]+(?:\n@[^\n]+\n[^\n]+\n\+[^\n]+\n[^\n]+)*)', command, re.MULTILINE)
+                if fastq_match:
+                    reads = fastq_match.group(0).strip()
+                    print(f"🔧 [DEBUG] Extracted combined reads: {len(reads)} characters")
+                else:
+                    # Try to get trimmed reads from session history (for adapter removal on already-trimmed reads)
+                    history = session_context.get("history", [])
+                    for entry in reversed(history):  # Start from most recent
+                        if entry.get("tool") == "read_trimming":
+                            result = entry.get("result", {})
+                            # Check for nested result structure
+                            if isinstance(result, dict):
+                                actual_result = result.get("result", result)
+                                if isinstance(actual_result, dict):
+                                    # Check for paired-end results
+                                    if "forward_reads" in actual_result and "reverse_reads" in actual_result:
+                                        forward_data = actual_result["forward_reads"]
+                                        reverse_data = actual_result["reverse_reads"]
+                                        if isinstance(forward_data, dict) and "trimmed_reads" in forward_data:
+                                            forward_reads = forward_data["trimmed_reads"]
+                                        if isinstance(reverse_data, dict) and "trimmed_reads" in reverse_data:
+                                            reverse_reads = reverse_data["trimmed_reads"]
+                                        print(f"🔧 [DEBUG] Retrieved paired-end trimmed reads from session history")
+                                        break
+                                    # Check for single-end results
+                                    elif "trimmed_reads" in actual_result:
+                                        reads = actual_result["trimmed_reads"]
+                                        print(f"🔧 [DEBUG] Retrieved trimmed reads from session history: {len(reads)} characters")
+                                        break
+                    
+                    # Also check results dict
+                    if not forward_reads and not reverse_reads and not reads:
+                        results = session_context.get("results", {})
+                        trimming_keys = [k for k in results.keys() if k.startswith("read_trimming_")]
+                        if trimming_keys:
+                            latest_key = sorted(trimming_keys, key=lambda x: int(x.split("_")[-1]) if x.split("_")[-1].isdigit() else 0)[-1]
+                            trimmed_result = results.get(latest_key, {})
+                            if isinstance(trimmed_result, dict):
+                                actual_result = trimmed_result.get("result", trimmed_result)
+                                if isinstance(actual_result, dict):
+                                    if "forward_reads" in actual_result and "reverse_reads" in actual_result:
+                                        forward_data = actual_result["forward_reads"]
+                                        reverse_data = actual_result["reverse_reads"]
+                                        if isinstance(forward_data, dict) and "trimmed_reads" in forward_data:
+                                            forward_reads = forward_data["trimmed_reads"]
+                                        if isinstance(reverse_data, dict) and "trimmed_reads" in reverse_data:
+                                            reverse_reads = reverse_data["trimmed_reads"]
+                                    elif "trimmed_reads" in actual_result:
+                                        reads = actual_result["trimmed_reads"]
+            
+            # Extract quality threshold
+            quality_threshold = 20  # default
+            threshold_match = re.search(r'quality\s+threshold\s+(\d+)', command, re.IGNORECASE)
+            if threshold_match:
+                quality_threshold = int(threshold_match.group(1))
+            else:
+                # Look for "quality 20" or "Q20" patterns
+                simple_threshold = re.search(r'quality\s+(\d+)', command, re.IGNORECASE)
+                if simple_threshold:
+                    quality_threshold = int(simple_threshold.group(1))
+            
+            # Extract adapter sequence
+            adapter = None
+            # Try multiple patterns to catch different command formats
+            # Pattern 1: "remove adapter sequences AGATCGGAAGAGC" or "remove adapter AGATCGGAAGAGC"
+            remove_adapter = re.search(r'remove\s+adapter\s+(?:sequences?|sequence)?\s+([ATCGN]+)', command, re.IGNORECASE)
+            if remove_adapter:
+                adapter = remove_adapter.group(1).strip()
+                print(f"🔧 [DEBUG] Extracted adapter from 'remove adapter' pattern: {adapter}")
+            else:
+                # Pattern 2: "adapter sequences AGATCGGAAGAGC" or "adapter AGATCGGAAGAGC"
+                adapter_match = re.search(r'adapter\s+(?:sequences?|sequence)?\s+([ATCGN]+)', command, re.IGNORECASE)
+                if adapter_match:
+                    adapter = adapter_match.group(1).strip()
+                    print(f"🔧 [DEBUG] Extracted adapter from 'adapter' pattern: {adapter}")
+            
+            if adapter:
+                print(f"🔧 [DEBUG] Adapter sequence to remove: {adapter}")
+            else:
+                print(f"🔧 [DEBUG] No adapter sequence found in command")
+            
+            # Return parameters - prefer forward/reverse if both present
+            if forward_reads and reverse_reads:
+                return {
+                    "forward_reads": forward_reads,
+                    "reverse_reads": reverse_reads,
+                    "adapter": adapter,
+                    "quality_threshold": quality_threshold
+                }
+            elif reads:
+                return {
+                    "reads": reads,
+                    "adapter": adapter,
+                    "quality_threshold": quality_threshold
+                }
+            else:
+                return {
+                    "forward_reads": forward_reads,
+                    "reverse_reads": reverse_reads,
+                    "adapter": adapter,
+                    "quality_threshold": quality_threshold
+                }
+        
+        elif tool_name == "read_merging":
+            # Extract forward and reverse reads
+            # Pattern 1: Extract from "Forward reads (filename):\n{content}" and "Reverse reads (filename):\n{content}"
+            forward_reads = ""
+            reverse_reads = ""
+            
+            forward_section = re.search(r'Forward reads\s*\([^)]+\):\s*\n', command, re.IGNORECASE)
+            if forward_section:
+                start_pos = forward_section.end()
+                next_section = re.search(r'\n\n(?:Reverse reads|Forward reads|File content)', command[start_pos:], re.IGNORECASE)
+                if next_section:
+                    forward_reads = command[start_pos:start_pos + next_section.start()].strip()
+                else:
+                    forward_reads = command[start_pos:].strip()
+            
+            reverse_section = re.search(r'Reverse reads\s*\([^)]+\):\s*\n', command, re.IGNORECASE)
+            if reverse_section:
+                start_pos = reverse_section.end()
+                next_section = re.search(r'\n\n(?:Forward reads|Reverse reads|File content)', command[start_pos:], re.IGNORECASE)
+                if next_section:
+                    reverse_reads = command[start_pos:start_pos + next_section.start()].strip()
+                else:
+                    reverse_reads = command[start_pos:].strip()
+            
+            # If not found in command, try to get from session context (trimmed reads from previous step)
+            if not forward_reads or not reverse_reads:
+                # Try to get trimmed reads from session history
+                # Look for the latest read_trimming result in history
+                history = session_context.get("history", [])
+                for entry in reversed(history):  # Start from most recent
+                    if entry.get("tool") == "read_trimming":
+                        result = entry.get("result", {})
+                        # Check for nested result structure
+                        if isinstance(result, dict):
+                            actual_result = result.get("result", result)
+                            if isinstance(actual_result, dict):
+                                if "forward_reads" in actual_result:
+                                    forward_data = actual_result["forward_reads"]
+                                    if isinstance(forward_data, dict) and "trimmed_reads" in forward_data:
+                                        forward_reads = forward_data["trimmed_reads"]
+                                if "reverse_reads" in actual_result:
+                                    reverse_data = actual_result["reverse_reads"]
+                                    if isinstance(reverse_data, dict) and "trimmed_reads" in reverse_data:
+                                        reverse_reads = reverse_data["trimmed_reads"]
+                        break  # Use the most recent trimming result
+                
+                # Also check results dict
+                if not forward_reads or not reverse_reads:
+                    results = session_context.get("results", {})
+                    # Find the latest read_trimming result
+                    trimming_keys = [k for k in results.keys() if k.startswith("read_trimming_")]
+                    if trimming_keys:
+                        # Sort by number to get the latest
+                        latest_key = sorted(trimming_keys, key=lambda x: int(x.split("_")[-1]) if x.split("_")[-1].isdigit() else 0)[-1]
+                        trimmed_result = results.get(latest_key, {})
+                        if isinstance(trimmed_result, dict):
+                            actual_result = trimmed_result.get("result", trimmed_result)
+                            if isinstance(actual_result, dict):
+                                if "forward_reads" in actual_result:
+                                    forward_data = actual_result["forward_reads"]
+                                    if isinstance(forward_data, dict) and "trimmed_reads" in forward_data:
+                                        forward_reads = forward_data["trimmed_reads"]
+                                if "reverse_reads" in actual_result:
+                                    reverse_data = actual_result["reverse_reads"]
+                                    if isinstance(reverse_data, dict) and "trimmed_reads" in reverse_data:
+                                        reverse_reads = reverse_data["trimmed_reads"]
+            
+            # Extract minimum overlap
+            min_overlap = 12  # default
+            overlap_match = re.search(r'overlap\s+of\s+(\d+)', command, re.IGNORECASE)
+            if overlap_match:
+                min_overlap = int(overlap_match.group(1))
+            else:
+                # Look for "minimum overlap 12" pattern
+                min_overlap_match = re.search(r'minimum\s+overlap\s+(\d+)', command, re.IGNORECASE)
+                if min_overlap_match:
+                    min_overlap = int(min_overlap_match.group(1))
+            
+            return {
+                "forward_reads": forward_reads,
+                "reverse_reads": reverse_reads,
+                "min_overlap": min_overlap
+            }
+        
+        elif tool_name == "quality_assessment":
+            # Extract merged sequences from command or session context
+            merged_sequences = ""
+            
+            # Try to extract FASTA sequences from command
+            fasta_match = re.search(r'>(?:merged_|sequence_)[^\n]+\n[ATCGN\n]+', command, re.IGNORECASE | re.MULTILINE)
+            if fasta_match:
+                merged_sequences = fasta_match.group(0).strip()
+            
+            # If not found in command, try to get from session context (merged sequences from previous step)
+            if not merged_sequences:
+                # Look for the latest read_merging result in history
+                history = session_context.get("history", [])
+                for entry in reversed(history):  # Start from most recent
+                    if entry.get("tool") == "read_merging":
+                        result = entry.get("result", {})
+                        # Check for nested result structure
+                        if isinstance(result, dict):
+                            actual_result = result.get("result", result)
+                            if isinstance(actual_result, dict):
+                                if "merged_sequences" in actual_result:
+                                    merged_sequences = actual_result["merged_sequences"]
+                                elif "merged_reads" in actual_result:
+                                    merged_sequences = actual_result["merged_reads"]
+                        break  # Use the most recent merging result
+                
+                # Also check results dict
+                if not merged_sequences:
+                    results = session_context.get("results", {})
+                    # Find the latest read_merging result
+                    merging_keys = [k for k in results.keys() if k.startswith("read_merging_")]
+                    if merging_keys:
+                        # Sort by number to get the latest
+                        latest_key = sorted(merging_keys, key=lambda x: int(x.split("_")[-1]) if x.split("_")[-1].isdigit() else 0)[-1]
+                        merged_result = results.get(latest_key, {})
+                        if isinstance(merged_result, dict):
+                            actual_result = merged_result.get("result", merged_result)
+                            if isinstance(actual_result, dict):
+                                if "merged_sequences" in actual_result:
+                                    merged_sequences = actual_result["merged_sequences"]
+                                elif "merged_reads" in actual_result:
+                                    merged_sequences = actual_result["merged_reads"]
+            
+            print(f"🔧 [DEBUG] Quality assessment: extracted {len(merged_sequences)} characters of merged sequences")
+            
+            return {
+                "sequences": merged_sequences
             }
         
         else:

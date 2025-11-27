@@ -267,11 +267,97 @@ def convert_numpy_types(obj):
     else:
         return obj
 
+def cluster_sequences_from_similarity(aligned_sequences: List[Dict[str, str]], num_clusters: int = 5) -> Dict[str, Any]:
+    """Cluster sequences based on sequence similarity (fallback when ETE3 is not available)."""
+    try:
+        if len(aligned_sequences) < 2:
+            return {"error": "At least 2 sequences are required for clustering"}
+        
+        n_seqs = len(aligned_sequences)
+        num_clusters = min(num_clusters, n_seqs)
+        
+        # Calculate pairwise distance matrix based on sequence similarity
+        distance_matrix = np.zeros((n_seqs, n_seqs))
+        seq_names = [seq['name'] for seq in aligned_sequences]
+        
+        for i in range(n_seqs):
+            seq1 = aligned_sequences[i]['sequence']
+            for j in range(i + 1, n_seqs):
+                seq2 = aligned_sequences[j]['sequence']
+                # Calculate Hamming distance (excluding gaps)
+                matches = sum(1 for a, b in zip(seq1, seq2) if a == b and a != '-' and b != '-')
+                total = sum(1 for a, b in zip(seq1, seq2) if (a != '-' or b != '-'))
+                similarity = matches / total if total > 0 else 0
+                distance = 1.0 - similarity
+                distance_matrix[i][j] = distance
+                distance_matrix[j][i] = distance
+        
+        # Perform hierarchical clustering
+        try:
+            clustering = AgglomerativeClustering(
+                n_clusters=num_clusters,
+                metric='precomputed',
+                linkage='complete'
+            )
+            cluster_labels = clustering.fit_predict(distance_matrix)
+            
+            # Group sequences by cluster
+            clusters = {}
+            for i, label in enumerate(cluster_labels):
+                if label not in clusters:
+                    clusters[label] = []
+                clusters[label].append({
+                    'name': seq_names[i],
+                    'distance': float(distance_matrix[i].mean()),
+                    'index': i
+                })
+        except Exception as e:
+            print(f"⚠️ Clustering algorithm error: {e}")
+            return {"error": f"Clustering algorithm failed: {str(e)}"}
+        
+        # Select representative sequences from each cluster
+        representatives = []
+        cluster_info = []
+        
+        for cluster_id, cluster_sequences in clusters.items():
+            # Sort by average distance (closest to cluster center)
+            cluster_sequences.sort(key=lambda x: x['distance'])
+            
+            # Select the most representative sequence (closest to cluster center)
+            representative = cluster_sequences[0]
+            representatives.append(representative['name'])
+            
+            cluster_info.append({
+                'cluster_id': int(cluster_id),
+                'size': len(cluster_sequences),
+                'representative': representative['name'],
+                'sequences': [seq['name'] for seq in cluster_sequences],
+                'average_distance': float(representative['distance'])
+            })
+        
+        result = {
+            'clusters': cluster_info,
+            'representatives': representatives,
+            'distance_matrix': distance_matrix.tolist(),
+            'cluster_labels': cluster_labels.tolist() if hasattr(cluster_labels, 'tolist') else list(cluster_labels),
+            'total_sequences': n_seqs,
+            'num_clusters': len(clusters)
+        }
+        
+        # Convert any numpy types to Python types for JSON serialization
+        return convert_numpy_types(result)
+        
+    except Exception as e:
+        print(f"⚠️ Similarity-based clustering error: {e}")
+        return {"error": f"Similarity-based clustering failed: {str(e)}"}
+
 def cluster_sequences_from_tree(newick_str: str, aligned_sequences: List[Dict[str, str]], num_clusters: int = 5) -> Dict[str, Any]:
     """Cluster sequences based on phylogenetic tree structure."""
     try:
         if not ETE3_AVAILABLE:
-            return {"error": "ETE3 not available for clustering"}
+            # Fallback to similarity-based clustering
+            print("⚠️ ETE3 not available, using similarity-based clustering as fallback")
+            return cluster_sequences_from_similarity(aligned_sequences, num_clusters)
         
         # Clean the Newick string first
         cleaned_newick = re.sub(r'\)([A-Za-z0-9_]+):', r'):', newick_str)
@@ -449,7 +535,25 @@ def create_clustered_visualization(newick_str: str, aligned_sequences: List[Dict
     """Create visualization highlighting clustered sequences."""
     try:
         if not ETE3_AVAILABLE:
-            return {"error": "ETE3 not available for clustered visualization"}
+            # Return a simple text-based visualization when ETE3 is not available
+            print("⚠️ ETE3 not available, creating text-based clustered visualization")
+            viz_text = "Clustered Sequence Visualization\n"
+            viz_text += "=" * 50 + "\n\n"
+            
+            if "clusters" in cluster_result:
+                for cluster in cluster_result["clusters"]:
+                    viz_text += f"Cluster {cluster.get('cluster_id', 'N/A')}:\n"
+                    viz_text += f"  Size: {cluster.get('size', 0)} sequences\n"
+                    viz_text += f"  Representative: {cluster.get('representative', 'N/A')}\n"
+                    viz_text += f"  Sequences: {', '.join(cluster.get('sequences', [])[:5])}"
+                    if len(cluster.get('sequences', [])) > 5:
+                        viz_text += f" ... (+{len(cluster.get('sequences', [])) - 5} more)"
+                    viz_text += "\n\n"
+            
+            return {
+                "text": viz_text,
+                "format": "text"
+            }
         
         # Parse the tree with ETE3
         tree = Tree(newick_str)
@@ -504,7 +608,9 @@ def create_clustered_visualization(newick_str: str, aligned_sequences: List[Dict
 
 def run_clustering_from_tree(aligned_sequences: str, num_clusters: int = 5) -> Dict[str, Any]:
     """Run clustering analysis on phylogenetic tree."""
+    print(f"🔧 run_clustering_from_tree called with aligned_sequences length: {len(aligned_sequences)} chars")
     sequences = parse_aligned_sequences(aligned_sequences)
+    print(f"🔧 Parsed {len(sequences)} sequences from aligned_sequences")
     if len(sequences) < 2:
         return {"error": "At least 2 sequences are required for clustering"}
     
@@ -519,6 +625,14 @@ def run_clustering_from_tree(aligned_sequences: str, num_clusters: int = 5) -> D
         tree_result["aligned_sequences"], 
         num_clusters
     )
+    
+    # If clustering failed and it's due to ETE3, try similarity-based fallback
+    if "error" in cluster_result and "ETE3" in cluster_result["error"]:
+        print("⚠️ ETE3 clustering failed, trying similarity-based clustering fallback")
+        cluster_result = cluster_sequences_from_similarity(
+            tree_result["aligned_sequences"],
+            num_clusters
+        )
     
     if "error" in cluster_result:
         return cluster_result

@@ -172,17 +172,16 @@ function App() {
       console.log('Enhanced command:', finalCommand);
       console.log('Workflow context before sending:', workflowContext);
       
-      // If there's an uploaded file, append its content to the command
-      // Add all uploaded files to the command
+      // If there are uploaded files, append their content to the command
       if (uploadedFiles.length > 0) {
-        uploadedFiles.forEach((file, index) => {
-          // For paired-end reads, detect R1/R2 pattern
-          if (file.name.match(/[._-]R?1[._-]/i)) {
+        uploadedFiles.forEach((file) => {
+          // Detect R1/R2 pattern for paired-end FASTQ files
+          if (file.name.includes('R1') || file.name.includes('_1') || file.name.endsWith('_1.fastq') || file.name.includes('_R1')) {
             finalCommand = `${finalCommand}\n\nForward reads (${file.name}):\n${file.content}`;
-          } else if (file.name.match(/[._-]R?2[._-]/i)) {
+          } else if (file.name.includes('R2') || file.name.includes('_2') || file.name.endsWith('_2.fastq') || file.name.includes('_R2')) {
             finalCommand = `${finalCommand}\n\nReverse reads (${file.name}):\n${file.content}`;
           } else {
-            finalCommand = `${finalCommand}\n\nFile ${index + 1} (${file.name}):\n${file.content}`;
+            finalCommand = `${finalCommand}\n\nFile content (${file.name}):\n${file.content}`;
           }
         });
       }
@@ -345,10 +344,15 @@ function App() {
     try {
       let finalCommand = enhanceCommandWithContext(command);
 
-      // Add all uploaded files to the command
       if (uploadedFiles.length > 0) {
-        uploadedFiles.forEach((file, index) => {
-          finalCommand = `${finalCommand}\n\nFile ${index + 1} (${file.name}):\n${file.content}`;
+        uploadedFiles.forEach((file) => {
+          if (file.name.includes('R1') || file.name.includes('_1') || file.name.endsWith('_1.fastq') || file.name.includes('_R1')) {
+            finalCommand = `${finalCommand}\n\nForward reads (${file.name}):\n${file.content}`;
+          } else if (file.name.includes('R2') || file.name.includes('_2') || file.name.endsWith('_2.fastq') || file.name.includes('_R2')) {
+            finalCommand = `${finalCommand}\n\nReverse reads (${file.name}):\n${file.content}`;
+          } else {
+            finalCommand = `${finalCommand}\n\nFile content (${file.name}):\n${file.content}`;
+          }
         });
       }
 
@@ -429,12 +433,12 @@ function App() {
     fileInputRef.current?.click();
   };
 
-  const handleFileRemove = (index: number) => {
-    setUploadedFiles(prev => prev.filter((_, i) => i !== index));
-  };
-
-  const handleRemoveAllFiles = () => {
-    setUploadedFiles([]);
+  const handleFileRemove = (index?: number) => {
+    if (index !== undefined) {
+      setUploadedFiles(prev => prev.filter((_, i) => i !== index));
+    } else {
+      setUploadedFiles([]);
+    }
   };
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -457,9 +461,6 @@ function App() {
         };
         reader.readAsText(file);
       });
-      
-      // Reset input so same files can be selected again
-      e.target.value = '';
     }
   };
 
@@ -615,27 +616,412 @@ function App() {
     console.log('🔍 ETE3 SVG content:', output.ete_visualization?.svg ? 'PRESENT' : 'MISSING');
     
     // Check in result field if not found in output directly
-    const actualResult = output.result || output;
+    // Handle nested result structures: output.result.result or output.result
+    // IMPORTANT: For /execute endpoint, the structure is: {success: true, result: {...}, session_id: "..."}
+    // So output.result contains the actual data
+    const actualResult = (output.result && output.result.result) ? output.result.result : (output.result || output);
+    
+    console.log('🔍 [DEBUG] actualResult extraction:', {
+      hasOutputResult: !!output.result,
+      hasOutputResultResult: !!(output.result && output.result.result),
+      actualResultType: typeof actualResult,
+      actualResultIsObject: typeof actualResult === 'object' && actualResult !== null,
+      actualResultKeys: actualResult && typeof actualResult === 'object' ? Object.keys(actualResult) : []
+    });
+    
+    // Debug logging for read trimming/merging
+    console.log('🔍 [DEBUG] renderOutput - Checking for read trimming/merging results');
+    console.log('🔍 [DEBUG] output keys:', Object.keys(output));
+    console.log('🔍 [DEBUG] output.result keys:', output.result ? Object.keys(output.result) : 'No result');
+    console.log('🔍 [DEBUG] actualResult keys:', actualResult ? Object.keys(actualResult) : 'No actualResult');
+    console.log('🔍 [DEBUG] forward_reads:', actualResult?.forward_reads ? 'FOUND' : 'NOT FOUND');
+    console.log('🔍 [DEBUG] reverse_reads:', actualResult?.reverse_reads ? 'FOUND' : 'NOT FOUND');
+    console.log('🔍 [DEBUG] merged_sequences:', actualResult?.merged_sequences ? 'FOUND' : 'NOT FOUND');
+    console.log('🔍 [DEBUG] trimmed_reads:', actualResult?.trimmed_reads ? 'FOUND' : 'NOT FOUND');
+    console.log('🔍 [DEBUG] actualResult structure:', JSON.stringify(actualResult, null, 2).substring(0, 1000));
+    
+    // PRIORITY: Check for read trimming/merging FIRST (before phylogenetic trees)
+    // Handle read trimming results (paired-end)
+    const forwardData = actualResult?.forward_reads || 
+                       (output.result && output.result.forward_reads) ||
+                       (output.result && output.result.result && output.result.result.forward_reads);
+    const reverseData = actualResult?.reverse_reads || 
+                       (output.result && output.result.reverse_reads) ||
+                       (output.result && output.result.result && output.result.result.reverse_reads);
+    const trimmedReads = actualResult?.trimmed_reads ||
+                        (output.result && output.result.trimmed_reads) ||
+                        (output.result && output.result.result && output.result.result.trimmed_reads);
+    const trimmingResult = forwardData || reverseData || trimmedReads;
+    
+    // Handle read merging results
+    const mergedSequences = actualResult?.merged_sequences || 
+                           (output.result && output.result.merged_sequences) ||
+                           (output.result && output.result.result && output.result.result.merged_sequences);
+    
+    // Handle quality assessment results
+    const qualityMetrics = actualResult?.metrics || 
+                          (output.result && output.result.metrics) ||
+                          (output.result && output.result.result && output.result.result.metrics);
+    const qualityPlotData = actualResult?.plot_data || 
+                           (output.result && output.result.plot_data) ||
+                           (output.result && output.result.result && output.result.result.plot_data);
+    const qualitySummary = actualResult?.summary || 
+                          (output.result && output.result.summary) ||
+                          (output.result && output.result.result && output.result.result.summary);
+    const hasQualityAssessment = !!(qualityMetrics || qualityPlotData || qualitySummary);
+    
+    console.log('🔍 [DEBUG] Trimming check:', {
+      hasForwardData: !!forwardData,
+      hasReverseData: !!reverseData,
+      hasTrimmedReads: !!trimmedReads,
+      trimmingResult: !!trimmingResult,
+      hasMergedSequences: !!mergedSequences,
+      hasQualityAssessment: hasQualityAssessment,
+      actualResultKeys: actualResult ? Object.keys(actualResult) : [],
+      outputResultKeys: output.result ? Object.keys(output.result) : [],
+      forwardDataType: forwardData ? typeof forwardData : 'null',
+      reverseDataType: reverseData ? typeof reverseData : 'null',
+      forwardDataKeys: forwardData && typeof forwardData === 'object' ? Object.keys(forwardData) : [],
+      reverseDataKeys: reverseData && typeof reverseData === 'object' ? Object.keys(reverseData) : []
+    });
+    
+    if (trimmingResult) {
+      console.log('🔍 [DEBUG] ✅ ENTERING trimming result render block!');
+      console.log('🔍 [DEBUG] forwardData:', forwardData);
+      console.log('🔍 [DEBUG] reverseData:', reverseData);
+      console.log('🔍 [DEBUG] forwardData.trimmed_reads exists:', !!(forwardData && forwardData.trimmed_reads));
+      console.log('🔍 [DEBUG] reverseData.trimmed_reads exists:', !!(reverseData && reverseData.trimmed_reads));
+      const resultText = actualResult?.text || (output.result && output.result.text);
+      
+      console.log('🔍 [DEBUG] About to render trimming visualization with:', {
+        hasResultText: !!resultText,
+        hasForwardData: !!forwardData,
+        hasReverseData: !!reverseData,
+        forwardHasTrimmedReads: !!(forwardData && forwardData.trimmed_reads),
+        reverseHasTrimmedReads: !!(reverseData && reverseData.trimmed_reads)
+      });
+      
+      return (
+        <div>
+          {resultText && (
+            <div className="alert alert-success mb-3">
+              <strong>✓ {resultText}</strong>
+            </div>
+          )}
+          
+          {/* Summary Statistics */}
+          {(() => {
+            const summary = actualResult?.summary || 
+                           (output.result && output.result.summary) ||
+                           (output.result && output.result.result && output.result.result.summary);
+            return summary && (
+            <div className="bg-light p-3 border rounded mb-3">
+              <h6>📊 Summary Statistics</h6>
+              {summary.forward && (
+                <div className="mb-2">
+                  <strong>Forward Reads:</strong>
+                  <ul className="list-unstyled ms-3">
+                    <li>Total reads: {summary.forward.total_reads || 'N/A'}</li>
+                    <li>Total bases: {summary.forward.total_bases || 'N/A'}</li>
+                    <li>Trimmed bases: {summary.forward.trimmed_bases || 'N/A'}</li>
+                    <li>Quality threshold: {summary.forward.quality_threshold || 'N/A'}</li>
+                  </ul>
+                </div>
+              )}
+              {summary.reverse && (
+                <div className="mb-2">
+                  <strong>Reverse Reads:</strong>
+                  <ul className="list-unstyled ms-3">
+                    <li>Total reads: {summary.reverse.total_reads || 'N/A'}</li>
+                    <li>Total bases: {summary.reverse.total_bases || 'N/A'}</li>
+                    <li>Trimmed bases: {summary.reverse.trimmed_bases || 'N/A'}</li>
+                    <li>Quality threshold: {summary.reverse.quality_threshold || 'N/A'}</li>
+                  </ul>
+                </div>
+              )}
+              {!summary.forward && !summary.reverse && summary.total_reads && (
+                <div>
+                  <p><strong>Total reads:</strong> {summary.total_reads}</p>
+                  <p><strong>Total bases:</strong> {summary.total_bases}</p>
+                  <p><strong>Trimmed bases:</strong> {summary.trimmed_bases}</p>
+                  <p><strong>Quality threshold:</strong> {summary.quality_threshold}</p>
+                </div>
+              )}
+            </div>
+            );
+          })()}
+          
+          {/* Forward Reads */}
+          {(() => {
+            const hasForwardData = forwardData && forwardData.trimmed_reads;
+            console.log('🔍 [DEBUG] Rendering forward reads section:', { hasForwardData, forwardDataType: typeof forwardData });
+            return hasForwardData;
+          })() && (
+            <div className="bg-light p-3 border rounded mb-3">
+              <h6>📄 Forward Reads (R1) - Trimmed Sequences</h6>
+              <details>
+                <summary className="text-primary" style={{cursor: 'pointer'}}>
+                  View trimmed forward reads ({forwardData.trimmed_reads.split('\n').filter((l: string) => l.startsWith('@')).length} reads)
+                </summary>
+                <pre className="small mt-2 bg-white p-2 border rounded" style={{maxHeight: '400px', overflow: 'auto'}}>
+                  {forwardData.trimmed_reads}
+                </pre>
+              </details>
+              {forwardData.summary && (
+                <div className="mt-2 small text-muted">
+                  <strong>Forward Summary:</strong> {forwardData.summary.total_reads} reads, {forwardData.summary.total_bases} bases, {forwardData.summary.trimmed_bases} bases trimmed
+                </div>
+              )}
+            </div>
+          )}
+          
+          {/* Reverse Reads */}
+          {(() => {
+            const hasReverseData = reverseData && reverseData.trimmed_reads;
+            console.log('🔍 [DEBUG] Rendering reverse reads section:', { hasReverseData, reverseDataType: typeof reverseData });
+            return hasReverseData;
+          })() && (
+            <div className="bg-light p-3 border rounded mb-3">
+              <h6>📄 Reverse Reads (R2) - Trimmed Sequences</h6>
+              <details>
+                <summary className="text-primary" style={{cursor: 'pointer'}}>
+                  View trimmed reverse reads ({reverseData.trimmed_reads.split('\n').filter((l: string) => l.startsWith('@')).length} reads)
+                </summary>
+                <pre className="small mt-2 bg-white p-2 border rounded" style={{maxHeight: '400px', overflow: 'auto'}}>
+                  {reverseData.trimmed_reads}
+                </pre>
+              </details>
+              {reverseData.summary && (
+                <div className="mt-2 small text-muted">
+                  <strong>Reverse Summary:</strong> {reverseData.summary.total_reads} reads, {reverseData.summary.total_bases} bases, {reverseData.summary.trimmed_bases} bases trimmed
+                </div>
+              )}
+            </div>
+          )}
+          
+          {/* Single-end trimmed reads (fallback) */}
+          {!forwardData && !reverseData && trimmedReads && (
+            <div className="bg-light p-3 border rounded mb-3">
+              <h6>📄 Trimmed Sequences</h6>
+              <details>
+                <summary className="text-primary" style={{cursor: 'pointer'}}>
+                  View trimmed reads ({trimmedReads.split('\n').filter((l: string) => l.startsWith('@')).length} reads)
+                </summary>
+                <pre className="small mt-2 bg-white p-2 border rounded" style={{maxHeight: '400px', overflow: 'auto'}}>
+                  {trimmedReads}
+                </pre>
+              </details>
+            </div>
+          )}
+          
+          {/* Debug: Always show this to verify rendering */}
+          <div className="alert alert-info mt-3">
+            <strong>🔍 Debug Info:</strong> Trimming visualization is rendering. 
+            Forward data: {forwardData ? 'Present' : 'Missing'}, 
+            Reverse data: {reverseData ? 'Present' : 'Missing'}
+          </div>
+        </div>
+      );
+    }
+    
+    if (mergedSequences) {
+      console.log('🔍 [DEBUG] ✅ ENTERING merging result render block!');
+      const resultText = actualResult?.text || (output.result && output.result.text);
+      
+      return (
+        <div>
+          {resultText && (
+            <div className="alert alert-success mb-3">
+              <strong>✓ {resultText}</strong>
+            </div>
+          )}
+          
+          {/* Summary Statistics */}
+          {(() => {
+            const summary = actualResult?.summary || 
+                           (output.result && output.result.summary) ||
+                           (output.result && output.result.result && output.result.result.summary);
+            return summary && (
+            <div className="bg-light p-3 border rounded mb-3">
+              <h6>📊 Merging Statistics</h6>
+              <div className="row">
+                <div className="col-md-6">
+                  <p><strong>Total pairs:</strong> {summary.total_pairs}</p>
+                  <p><strong>Merged pairs:</strong> {summary.merged_pairs}</p>
+                </div>
+                <div className="col-md-6">
+                  <p><strong>Minimum overlap:</strong> {summary.min_overlap} bases</p>
+                  <p><strong>Average overlap:</strong> {summary.average_overlap?.toFixed(2) || 'N/A'} bases</p>
+                </div>
+              </div>
+            </div>
+            );
+          })()}
+          
+          {/* Merged Sequences */}
+          <div className="bg-light p-3 border rounded mb-3">
+            <h6>🧬 Merged Sequences</h6>
+            <details>
+              <summary className="text-primary" style={{cursor: 'pointer'}}>
+                View merged sequences ({mergedSequences.split('>').length - 1} sequences)
+              </summary>
+              <pre className="small mt-2 bg-white p-2 border rounded" style={{maxHeight: '400px', overflow: 'auto'}}>
+                {mergedSequences}
+              </pre>
+            </details>
+          </div>
+        </div>
+      );
+    }
+    
+    // Handle quality assessment results
+    if (hasQualityAssessment) {
+      console.log('🔍 [DEBUG] ✅ ENTERING quality assessment result render block!');
+      const resultText = actualResult?.text || (output.result && output.result.text);
+      
+      return (
+        <div>
+          {resultText && (
+            <div className="alert alert-success mb-3">
+              <strong>✓ {resultText}</strong>
+            </div>
+          )}
+          
+          {/* Summary Statistics */}
+          {qualitySummary && (
+            <div className="bg-light p-3 border rounded mb-3">
+              <h6>📊 Quality Assessment Summary</h6>
+              <div className="row">
+                <div className="col-md-6">
+                  <p><strong>Total sequences:</strong> {qualitySummary.total_sequences}</p>
+                  <p><strong>Total bases:</strong> {qualitySummary.total_bases?.toLocaleString()}</p>
+                  <p><strong>Average length:</strong> {qualitySummary.average_length} bp</p>
+                </div>
+                <div className="col-md-6">
+                  <p><strong>Length range:</strong> {qualitySummary.length_range}</p>
+                  <p><strong>Average GC content:</strong> {qualitySummary.average_gc_content}%</p>
+                </div>
+              </div>
+            </div>
+          )}
+          
+          {/* Detailed Metrics */}
+          {qualityMetrics && (
+            <div className="bg-light p-3 border rounded mb-3">
+              <h6>📈 Detailed Quality Metrics</h6>
+              <div className="row">
+                <div className="col-md-6">
+                  <h6>Length Statistics</h6>
+                  <ul className="list-unstyled">
+                    <li><strong>Min length:</strong> {qualityMetrics.min_length} bp</li>
+                    <li><strong>Max length:</strong> {qualityMetrics.max_length} bp</li>
+                    <li><strong>Median length:</strong> {qualityMetrics.median_length?.toFixed(2)} bp</li>
+                    <li><strong>Std deviation:</strong> {qualityMetrics.length_std_dev?.toFixed(2)} bp</li>
+                  </ul>
+                </div>
+                <div className="col-md-6">
+                  <h6>GC Content Statistics</h6>
+                  <ul className="list-unstyled">
+                    <li><strong>Average GC:</strong> {qualityMetrics.average_gc_content?.toFixed(2)}%</li>
+                    <li><strong>Std deviation:</strong> {qualityMetrics.gc_content_std_dev?.toFixed(2)}%</li>
+                  </ul>
+                  {qualityMetrics.base_percentages && (
+                    <div className="mt-2">
+                      <h6>Base Composition (%)</h6>
+                      <ul className="list-unstyled">
+                        {Object.entries(qualityMetrics.base_percentages).map(([base, percent]: [string, any]) => (
+                          <li key={base}><strong>{base}:</strong> {percent?.toFixed(2)}%</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+          
+          {/* Visualizations */}
+          {qualityPlotData && (
+            <div className="bg-light p-3 border rounded mb-3">
+              <h6>📊 Quality Assessment Charts</h6>
+              
+              {/* Length Distribution */}
+              {qualityPlotData.length_distribution && (
+                <div className="mb-4">
+                  <h6>Sequence Length Distribution</h6>
+                  <Plot
+                    data={[{
+                      x: qualityPlotData.length_distribution.x,
+                      y: qualityPlotData.length_distribution.y,
+                      type: 'bar',
+                      marker: { color: '#007bff' }
+                    }]}
+                    layout={{
+                      title: 'Sequence Length Distribution',
+                      xaxis: { title: 'Length (bp)' },
+                      yaxis: { title: 'Number of Sequences' },
+                      height: 400,
+                      margin: { l: 60, r: 20, t: 60, b: 60 }
+                    }}
+                    style={{ width: '100%' }}
+                  />
+                </div>
+              )}
+              
+              {/* GC Content Distribution */}
+              {qualityPlotData.gc_content_distribution && (
+                <div className="mb-4">
+                  <h6>GC Content Distribution</h6>
+                  <Plot
+                    data={[{
+                      x: qualityPlotData.gc_content_distribution.x,
+                      y: qualityPlotData.gc_content_distribution.y,
+                      type: 'bar',
+                      marker: { color: '#28a745' }
+                    }]}
+                    layout={{
+                      title: 'GC Content Distribution',
+                      xaxis: { title: 'GC Content Range (%)' },
+                      yaxis: { title: 'Number of Sequences' },
+                      height: 400,
+                      margin: { l: 60, r: 20, t: 60, b: 60 }
+                    }}
+                    style={{ width: '100%' }}
+                  />
+                </div>
+              )}
+              
+              {/* Base Composition */}
+              {qualityPlotData.base_composition && (
+                <div className="mb-4">
+                  <h6>Base Composition</h6>
+                  <Plot
+                    data={[{
+                      x: qualityPlotData.base_composition.x,
+                      y: qualityPlotData.base_composition.y,
+                      type: 'bar',
+                      marker: { color: '#ffc107' }
+                    }]}
+                    layout={{
+                      title: 'Base Composition',
+                      xaxis: { title: 'Base' },
+                      yaxis: { title: 'Count' },
+                      height: 400,
+                      margin: { l: 60, r: 20, t: 60, b: 60 }
+                    }}
+                    style={{ width: '100%' }}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      );
+    }
+    
     console.log('🔍 Checking for tree_newick in actualResult:', actualResult.tree_newick ? 'FOUND' : 'NOT FOUND');
     console.log('🔍 Checking for ete_visualization in actualResult:', actualResult.ete_visualization ? 'FOUND' : 'NOT FOUND');
     console.log('🔍 Checking for clustering_result in actualResult:', actualResult.clustering_result ? 'FOUND' : 'NOT FOUND');
-    
-          // Add visible debug info
-      if (actualResult.tree_newick) {
-        console.log('🔍 ETE3 Debug - Full actualResult:', actualResult);
-        // Show alert with debug info
-        // alert(`ETE3 Debug: ${actualResult.ete_visualization ? 'FOUND' : 'NOT FOUND'} | SVG: ${actualResult.ete_visualization?.svg ? 'FOUND' : 'NOT FOUND'}`);
-        
-        // Also show the ETE3 visualization if available
-        if (actualResult.ete_visualization?.svg) {
-          const eteDiv = document.createElement('div');
-          eteDiv.innerHTML = actualResult.ete_visualization.svg;
-          eteDiv.style.border = '2px solid red';
-          eteDiv.style.padding = '10px';
-          eteDiv.style.margin = '10px';
-          document.body.appendChild(eteDiv);
-        }
-      }
     
     // --- NEW: Render phylogenetic tree if present ---
     if (actualResult && actualResult.tree_newick) {
@@ -1188,164 +1574,6 @@ function App() {
           </div>
         );
       }
-      
-      // Handle read merging results FIRST - check nested structure (result.result contains the tool output)
-      const mergingResult = (result && result.result) ? result.result : (actualResult.result || actualResult);
-      
-      console.log('🔍 [FRONTEND] Merging result structure:', {
-        hasMergedSequences: !!mergingResult?.merged_sequences,
-        hasSummary: !!mergingResult?.summary,
-        totalPairs: mergingResult?.summary?.total_pairs,
-        keys: mergingResult ? Object.keys(mergingResult) : []
-      });
-      
-      // Check for merging results first (by looking for merged_sequences or total_pairs in summary)
-      if (mergingResult && (mergingResult.merged_sequences || (mergingResult.summary && mergingResult.summary.total_pairs !== undefined))) {
-        const summary = mergingResult.summary || {};
-        return (
-          <div>
-            {mergingResult.text && (
-              <div className="alert alert-success mb-3">{mergingResult.text}</div>
-            )}
-            <div className="bg-light p-3 border rounded mb-3">
-              <h5>📊 Read Merging Summary</h5>
-              <ul className="list-unstyled">
-                <li><strong>Total Pairs:</strong> {summary.total_pairs || 'N/A'}</li>
-                <li><strong>Merged Pairs:</strong> {summary.merged_pairs || 'N/A'}</li>
-                <li><strong>Average Overlap:</strong> {summary.average_overlap ? summary.average_overlap.toFixed(2) : 'N/A'} bases</li>
-                <li><strong>Minimum Overlap:</strong> {summary.min_overlap || 'N/A'} bases</li>
-              </ul>
-            </div>
-            {mergingResult.merged_sequences && (
-              <div className="bg-light p-3 border rounded">
-                <h6>Merged Sequences (FASTA)</h6>
-                <pre style={{ maxHeight: '400px', overflow: 'auto', fontSize: '0.85em' }}>
-                  {mergingResult.merged_sequences}
-                </pre>
-              </div>
-            )}
-          </div>
-        );
-      }
-      
-      // Handle read trimming results - check nested structure (result.result contains the tool output)
-      const trimmingResult = (result && result.result) ? result.result : (actualResult.result || actualResult);
-      
-      console.log('🔍 [FRONTEND] Trimming result structure:', {
-        hasTrimmedReads: !!trimmingResult?.trimmed_reads,
-        hasSummary: !!trimmingResult?.summary,
-        hasForwardReads: !!trimmingResult?.forward_reads,
-        hasReverseReads: !!trimmingResult?.reverse_reads,
-        fileType: trimmingResult?.file_type,
-        keys: trimmingResult ? Object.keys(trimmingResult) : []
-      });
-      
-      // Only match trimming results if they have trimmed_reads or forward_reads (not just any summary)
-      if (trimmingResult && (trimmingResult.trimmed_reads || trimmingResult.forward_reads)) {
-        const fileType = trimmingResult.file_type || 'single';
-        
-        console.log('🔍 [FRONTEND] File type:', fileType);
-        console.log('🔍 [FRONTEND] Has forward_reads:', !!trimmingResult.forward_reads);
-        console.log('🔍 [FRONTEND] Has reverse_reads:', !!trimmingResult.reverse_reads);
-        
-        // Handle paired-end reads
-        if (fileType === 'paired_end' && trimmingResult.forward_reads && trimmingResult.reverse_reads) {
-          console.log('🔍 [FRONTEND] Rendering paired-end view');
-          const combinedSummary = trimmingResult.summary || {};
-          const forwardSummary = trimmingResult.forward_reads.summary || {};
-          const reverseSummary = trimmingResult.reverse_reads.summary || {};
-          
-          return (
-            <div>
-              {trimmingResult.text && (
-                <div className="alert alert-success mb-3">{trimmingResult.text}</div>
-              )}
-              
-              {/* Combined Summary */}
-              <div className="bg-light p-3 border rounded mb-3">
-                <h5>📊 Read Trimming Summary (Paired-End)</h5>
-                <div className="row">
-                  <div className="col-md-6">
-                    <h6>Forward Reads (R1)</h6>
-                    <ul className="list-unstyled">
-                      <li><strong>Total Reads:</strong> {forwardSummary.total_reads || 'N/A'}</li>
-                      <li><strong>Total Bases:</strong> {forwardSummary.total_bases || 'N/A'}</li>
-                      <li><strong>Bases Trimmed:</strong> {forwardSummary.trimmed_bases || 'N/A'}</li>
-                    </ul>
-                  </div>
-                  <div className="col-md-6">
-                    <h6>Reverse Reads (R2)</h6>
-                    <ul className="list-unstyled">
-                      <li><strong>Total Reads:</strong> {reverseSummary.total_reads || 'N/A'}</li>
-                      <li><strong>Total Bases:</strong> {reverseSummary.total_bases || 'N/A'}</li>
-                      <li><strong>Bases Trimmed:</strong> {reverseSummary.trimmed_bases || 'N/A'}</li>
-                    </ul>
-                  </div>
-                </div>
-                <hr />
-                <ul className="list-unstyled mb-0">
-                  <li><strong>Quality Threshold:</strong> {combinedSummary.quality_threshold || 'N/A'}</li>
-                  {combinedSummary.adapter_removed && (
-                    <li><strong>Adapter Removed:</strong> Yes</li>
-                  )}
-                </ul>
-              </div>
-              
-              {/* Forward Reads Output */}
-              {trimmingResult.forward_reads.trimmed_reads && (
-                <div className="bg-light p-3 border rounded mb-3">
-                  <h6>📁 Forward Reads (R1) - Trimmed FASTQ</h6>
-                  <pre style={{ maxHeight: '300px', overflow: 'auto', fontSize: '0.85em' }}>
-                    {trimmingResult.forward_reads.trimmed_reads}
-                  </pre>
-                </div>
-              )}
-              
-              {/* Reverse Reads Output */}
-              {trimmingResult.reverse_reads.trimmed_reads && (
-                <div className="bg-light p-3 border rounded">
-                  <h6>📁 Reverse Reads (R2) - Trimmed FASTQ</h6>
-                  <pre style={{ maxHeight: '300px', overflow: 'auto', fontSize: '0.85em' }}>
-                    {trimmingResult.reverse_reads.trimmed_reads}
-                  </pre>
-                </div>
-              )}
-            </div>
-          );
-        }
-        
-        // Handle single file
-        else {
-          const summary = trimmingResult.summary || {};
-          return (
-            <div>
-              {trimmingResult.text && (
-                <div className="alert alert-success mb-3">{trimmingResult.text}</div>
-              )}
-              <div className="bg-light p-3 border rounded mb-3">
-                <h5>📊 Read Trimming Summary</h5>
-                <ul className="list-unstyled">
-                  <li><strong>Total Reads:</strong> {summary.total_reads || 'N/A'}</li>
-                  <li><strong>Total Bases:</strong> {summary.total_bases || 'N/A'}</li>
-                  <li><strong>Bases Trimmed:</strong> {summary.trimmed_bases || 'N/A'}</li>
-                  <li><strong>Quality Threshold:</strong> {summary.quality_threshold || 'N/A'}</li>
-                  {summary.adapter_removed && (
-                    <li><strong>Adapter Removed:</strong> Yes</li>
-                  )}
-                </ul>
-              </div>
-              {trimmingResult.trimmed_reads && (
-                <div className="bg-light p-3 border rounded">
-                  <h6>Trimmed Reads (FASTQ)</h6>
-                  <pre style={{ maxHeight: '400px', overflow: 'auto', fontSize: '0.85em' }}>
-                    {trimmingResult.trimmed_reads}
-                  </pre>
-                </div>
-              )}
-            </div>
-          );
-        }
-      }
       // --- END NEW ---
 
       // --- NEW: Handle alignment in ToolMessage for natural language commands ---
@@ -1802,8 +2030,14 @@ function App() {
       );
     }
     
-    // Handle legacy responses
-    if (output.text) {
+    // Handle legacy responses - only if we don't have special structures
+    const hasSpecialStructures = (actualResult?.forward_reads || actualResult?.reverse_reads || 
+                                  actualResult?.merged_sequences ||
+                                  (output.result && output.result.forward_reads) ||
+                                  (output.result && output.result.reverse_reads) ||
+                                  (output.result && output.result.merged_sequences));
+    
+    if (output.text && !hasSpecialStructures) {
       return (
         <pre className="bg-light p-3 border rounded mb-3">
           {output.text}
@@ -2205,7 +2439,6 @@ function App() {
     dragActive,
     uploadedFiles,
     onFileRemove: handleFileRemove,
-    onRemoveAllFiles: handleRemoveAllFiles,
     onDropZoneDragOver: handleDragOver,
     onDropZoneDragLeave: handleDragLeave,
     onDropZoneDrop: handleDrop,
@@ -2343,35 +2576,31 @@ function App() {
 
           {/* Uploaded Files Display */}
           {uploadedFiles.length > 0 && (
-            <div className="mb-3">
+            <div className="alert alert-info mb-3">
               <div className="d-flex justify-content-between align-items-center mb-2">
-                <strong>📁 Uploaded Files ({uploadedFiles.length}):</strong>
+                <strong>📁 Uploaded Files ({uploadedFiles.length})</strong>
                 <button 
                   className="btn btn-sm btn-outline-secondary"
-                  onClick={handleRemoveAllFiles}
+                  onClick={() => setUploadedFiles([])}
                 >
-                  Remove All
+                  Clear All
                 </button>
               </div>
               {uploadedFiles.map((file, index) => (
-                <div key={index} className="alert alert-info mb-2">
-                  <div className="d-flex justify-content-between align-items-center">
-                    <div>
-                      <strong>{file.name}</strong>
-                      {file.name.match(/[._-]R?1[._-]/i) && <span className="badge bg-primary ms-2">R1</span>}
-                      {file.name.match(/[._-]R?2[._-]/i) && <span className="badge bg-success ms-2">R2</span>}
-                      <br />
-                      <small className="text-muted">
-                        Content length: {file.content.length.toLocaleString()} characters
-                      </small>
-                    </div>
-                    <button 
-                      className="btn btn-sm btn-outline-secondary"
-                      onClick={() => handleFileRemove(index)}
-                    >
-                      ✕ Remove
-                    </button>
+                <div key={index} className="d-flex justify-content-between align-items-center mb-2 pb-2 border-bottom">
+                  <div>
+                    <strong>{file.name}</strong>
+                    <br />
+                    <small className="text-muted">
+                      Content length: {file.content.length.toLocaleString()} characters
+                    </small>
                   </div>
+                  <button 
+                    className="btn btn-sm btn-outline-secondary"
+                    onClick={() => handleFileRemove(index)}
+                  >
+                    ✕ Remove
+                  </button>
                 </div>
               ))}
             </div>

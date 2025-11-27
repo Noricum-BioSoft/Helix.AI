@@ -103,34 +103,7 @@ class CommandParser:
                 r'synthesis\s+quote',
                 r'order\s+sequences',
                 r'submit\s+sequences',
-            ],
-            'read_trimming': [
-                r'trim\s+.*reads?',
-                r'trim\s+.*fastq',
-                r'quality\s+trim',
-                r'remove\s+.*quality\s+.*bases?',
-                r'trim\s+.*low.*quality',
-                r'quality\s+.*trimming',
-                r'remove\s+adapter',
-                r'remove\s+adapter\s+sequences?',
-                r'adapter\s+removal',
-            ],
-            'read_merging': [
-                r'merge\s+.*reads?',
-                r'merge\s+.*paired.*end',
-                r'combine\s+.*reads?',
-                r'merge\s+.*r1.*r2',
-                r'merge\s+.*forward.*reverse',
-            ],
-            'quality_assessment': [
-                r'quality\s+report',  # "quality report"
-                r'quality\s+\w+\s+report',  # "quality a report" or "quality assessment report"
-                r'quality\s+assessment',
-                r'generate\s+\w+\s+quality\s+report',  # "generate a quality report"
-                r'generate\s+quality',
-                r'assess\s+quality',
-                r'quality\s+check',
-            ],
+            ]
         }
         
         self.parameter_patterns = {
@@ -150,21 +123,18 @@ class CommandParser:
     def parse_command(self, command: str, session_id: Optional[str] = None) -> ParsedCommand:
         """Parse a natural language command into structured parameters."""
         command_lower = command.lower().strip()
-        print(f"🔧 [PARSER] Parsing command: '{command[:100]}...'")  # Log first 100 chars
+        logger.info(f"Parsing command: '{command}'")
         
         # Try to match action patterns
         for action, patterns in self.action_patterns.items():
             for pattern in patterns:
                 match = re.search(pattern, command_lower, re.IGNORECASE)
                 if match:
-                    print(f"🔧 [PARSER] Matched action: {action} with pattern: {pattern}")
+                    logger.info(f"Matched action: {action}")
                     return self._build_parsed_command(action, command, match, session_id)
         
-        print("🔧 [PARSER] No specific action pattern matched, trying inference")
         # If no specific action found, try to infer from context
-        inferred = self._infer_command(command, session_id)
-        print(f"🔧 [PARSER] Inferred action: {inferred.action}, tool: {inferred.tool}, confidence: {inferred.confidence}")
-        return inferred
+        return self._infer_command(command, session_id)
     
     def _build_parsed_command(self, action: str, original_command: str, 
                              match: re.Match, session_id: Optional[str] = None) -> ParsedCommand:
@@ -325,82 +295,6 @@ class CommandParser:
                 confidence=0.8
             )
         
-        elif action == 'read_trimming':
-            # Extract FASTQ data and parameters - support multiple files
-            quality_threshold = self._extract_quality_threshold(original_command)
-            adapter = self._extract_adapter(original_command)
-            print(f"🔧 [PARSER] Extracted adapter: {adapter}")
-            
-            # Try to extract paired-end reads first
-            forward_reads, reverse_reads = self._extract_paired_reads(original_command)
-            
-            print(f"🔧 [PARSER] After extraction - forward: {len(forward_reads) if forward_reads else 0} chars, reverse: {len(reverse_reads) if reverse_reads else 0} chars")
-            
-            # If we have both forward and reverse, use them
-            if forward_reads and reverse_reads and len(forward_reads) > 10 and len(reverse_reads) > 10:
-                print(f"🔧 [PARSER] Using paired-end mode")
-                return ParsedCommand(
-                    action="read_trimming",
-                    tool="read_trimming",
-                    parameters={
-                        "forward_reads": forward_reads,
-                        "reverse_reads": reverse_reads,
-                        "quality_threshold": quality_threshold,
-                        "adapter": adapter,
-                        "file_type": "paired_end"
-                    },
-                    session_id=session_id,
-                    confidence=0.9
-                )
-            else:
-                # Fall back to single file extraction
-                print(f"🔧 [PARSER] Falling back to single file mode")
-                reads = self._extract_fastq_data(original_command)
-                return ParsedCommand(
-                    action="read_trimming",
-                    tool="read_trimming",
-                    parameters={
-                        "reads": reads,
-                        "quality_threshold": quality_threshold,
-                        "adapter": adapter,
-                        "file_type": "single"
-                    },
-                    session_id=session_id,
-                    confidence=0.9
-                )
-        
-        elif action == 'read_merging':
-            # Extract forward and reverse reads
-            forward_reads, reverse_reads = self._extract_paired_reads(original_command)
-            min_overlap = self._extract_min_overlap(original_command)
-            
-            print(f"🔧 [PARSER] After extraction for merging - forward: {len(forward_reads) if forward_reads else 0} chars, reverse: {len(reverse_reads) if reverse_reads else 0} chars")
-            
-            if not forward_reads or not reverse_reads:
-                print(f"🔧 [PARSER] WARNING: Missing paired reads for merging!")
-            
-            return ParsedCommand(
-                action="read_merging",
-                tool="read_merging",
-                parameters={
-                    "forward_reads": forward_reads,
-                    "reverse_reads": reverse_reads,
-                    "min_overlap": min_overlap
-                },
-                session_id=session_id,
-                confidence=0.9
-            )
-        
-        elif action == 'quality_assessment':
-            # Quality assessment - will retrieve merged sequences from history
-            return ParsedCommand(
-                action="quality_assessment",
-                tool="quality_assessment",
-                parameters={},
-                session_id=session_id,
-                confidence=0.9
-            )
-        
         else:
             # Default fallback
             return ParsedCommand(
@@ -465,24 +359,6 @@ class CommandParser:
                 },
                 session_id=session_id,
                 confidence=0.7
-            )
-        
-        # Check for read trimming keywords
-        elif any(word in command_lower for word in ['trim', 'quality', 'fastq', 'reads']):
-            reads = self._extract_fastq_data(command)
-            quality_threshold = self._extract_quality_threshold(command)
-            adapter = self._extract_adapter(command)
-            
-            return ParsedCommand(
-                action="read_trimming",
-                tool="read_trimming",
-                parameters={
-                    "reads": reads,
-                    "quality_threshold": quality_threshold,
-                    "adapter": adapter
-                },
-                session_id=session_id,
-                confidence=0.8
             )
         
         # Default fallback
@@ -612,214 +488,6 @@ class CommandParser:
                 return match.group(1)
         
         return "pUC19"  # Default vector
-    
-    def _extract_fastq_data(self, command: str) -> str:
-        """Extract FASTQ data from command (may include 'File content:', 'Forward reads:', 'Reverse reads:', or 'File N:' prefix)."""
-        print(f"🔧 [PARSER] Extracting FASTQ data from command (length: {len(command)})")
-        
-        # Look for "Forward reads:" or "Reverse reads:" (for paired-end)
-        if "Forward reads:" in command or "forward reads:" in command.lower():
-            parts = command.split("Forward reads:", 1) if "Forward reads:" in command else command.split("forward reads:", 1)
-            if len(parts) > 1:
-                # Extract until "Reverse reads:" or end
-                if "Reverse reads:" in parts[1] or "reverse reads:" in parts[1].lower():
-                    extracted = parts[1].split("Reverse reads:", 1)[0].split("reverse reads:", 1)[0].strip()
-                else:
-                    extracted = parts[1].strip()
-                print(f"🔧 [PARSER] Extracted forward FASTQ data (length: {len(extracted)})")
-                return extracted
-        
-        # Look for "Reverse reads:"
-        if "Reverse reads:" in command or "reverse reads:" in command.lower():
-            parts = command.split("Reverse reads:", 1) if "Reverse reads:" in command else command.split("reverse reads:", 1)
-            if len(parts) > 1:
-                extracted = parts[1].strip()
-                print(f"🔧 [PARSER] Extracted reverse FASTQ data (length: {len(extracted)})")
-                return extracted
-        
-        # Look for "File content:" followed by FASTQ data (legacy single file)
-        if "File content:" in command:
-            parts = command.split("File content:", 1)
-            if len(parts) > 1:
-                extracted = parts[1].strip()
-                print(f"🔧 [PARSER] Extracted FASTQ data from 'File content:' (length: {len(extracted)})")
-                return extracted
-        
-        # Look for "File 1:" or "File 2:" pattern
-        if re.search(r'File\s+\d+.*?:', command, re.IGNORECASE):
-            # Extract first file
-            match = re.search(r'File\s+\d+.*?:\s*\n(.*?)(?=File\s+\d+.*?:|$)', command, re.IGNORECASE | re.DOTALL)
-            if match:
-                extracted = match.group(1).strip()
-                print(f"🔧 [PARSER] Extracted FASTQ data from 'File N:' pattern (length: {len(extracted)})")
-                return extracted
-        
-        # Also check for FASTQ format directly (@ header lines)
-        if "@" in command and ("+" in command or len(command) > 100):
-            # Try to extract FASTQ block
-            lines = command.split('\n')
-            fastq_lines = []
-            in_fastq = False
-            for line in lines:
-                if line.startswith('@'):
-                    in_fastq = True
-                if in_fastq:
-                    fastq_lines.append(line)
-                    # FASTQ is 4 lines per read, stop after reasonable number
-                    if len(fastq_lines) > 40:
-                        break
-            if fastq_lines:
-                extracted = '\n'.join(fastq_lines)
-                print(f"🔧 [PARSER] Extracted FASTQ data from direct format (length: {len(extracted)})")
-                return extracted
-        
-        print(f"🔧 [PARSER] No FASTQ pattern found, returning empty string")
-        return ""  # Return empty string when no FASTQ data found - executor will retrieve from history  # Return full command if no FASTQ pattern found
-    
-    def _extract_quality_threshold(self, command: str) -> int:
-        """Extract quality threshold from command."""
-        # Look for patterns like "quality threshold 20", "threshold of 20", "Phred 20"
-        patterns = [
-            r'quality\s+threshold\s+(\d+)',
-            r'threshold\s+of\s+(\d+)',
-            r'phred\s+(\d+)',
-            r'threshold\s+(\d+)',
-            r'quality\s+(\d+)',
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, command, re.IGNORECASE)
-            if match:
-                try:
-                    return int(match.group(1))
-                except (ValueError, IndexError):
-                    continue
-        
-        return 20  # Default quality threshold
-    
-    def _extract_adapter(self, command: str) -> Optional[str]:
-        """Extract adapter sequence from command."""
-        # Look for patterns like "adapter AGATCGGAAGAGC", "remove adapter sequences AGATCGGAAGAGC", etc.
-        adapter_patterns = [
-            r'adapter\s+sequences?\s+([ATCGN]{6,})',  # "adapter sequences AGATCGGAAGAGC" or "adapter sequence AGATCGGAAGAGC"
-            r'remove\s+adapter\s+sequences?\s+([ATCGN]{6,})',  # "remove adapter sequences AGATCGGAAGAGC"
-            r'adapter\s+([ATCGN]{6,})',  # "adapter AGATCGGAAGAGC"
-            r'remove\s+adapter\s+([ATCGN]{6,})',  # "remove adapter AGATCGGAAGAGC"
-        ]
-        
-        for pattern in adapter_patterns:
-            match = re.search(pattern, command, re.IGNORECASE)
-            if match:
-                adapter = match.group(1).upper()
-                print(f"🔧 [PARSER] Found adapter: {adapter}")
-                return adapter
-        
-        print(f"🔧 [PARSER] No adapter found in command")
-        return None
-    
-    def _extract_paired_reads(self, command: str) -> Tuple[str, str]:
-        """Extract forward and reverse reads from command."""
-        forward_reads = ""
-        reverse_reads = ""
-        
-        print(f"🔧 [PARSER] Extracting paired reads from command (length: {len(command)})")
-        
-        # Split command by "Forward reads" and "Reverse reads" markers to find both sections
-        # Handle both orders: Forward first or Reverse first
-        
-        # Find all occurrences of "Forward reads" and "Reverse reads"
-        forward_markers = list(re.finditer(r'Forward\s+reads\s*(?:\([^)]+\))?:\s*\n', command, re.IGNORECASE))
-        reverse_markers = list(re.finditer(r'Reverse\s+reads\s*(?:\([^)]+\))?:\s*\n', command, re.IGNORECASE))
-        
-        print(f"🔧 [PARSER] Found {len(forward_markers)} forward markers, {len(reverse_markers)} reverse markers")
-        
-        # Extract forward reads
-        if forward_markers:
-            forward_start = forward_markers[0].end()
-            # Find where forward reads end (either at reverse reads marker or end of command)
-            forward_end = len(command)
-            if reverse_markers:
-                # Find the reverse marker that comes after this forward marker
-                for rev_marker in reverse_markers:
-                    if rev_marker.start() > forward_start:
-                        forward_end = rev_marker.start()
-                        break
-            forward_reads = command[forward_start:forward_end].strip()
-            print(f"🔧 [PARSER] Extracted forward reads: {len(forward_reads)} chars")
-            if len(forward_reads) > 0:
-                print(f"🔧 [PARSER] Forward reads preview: {forward_reads[:100]}...")
-        
-        # Extract reverse reads
-        if reverse_markers:
-            reverse_start = reverse_markers[0].end()
-            # Find where reverse reads end (either at forward reads marker or end of command)
-            reverse_end = len(command)
-            if forward_markers:
-                # Find the forward marker that comes after this reverse marker
-                for fwd_marker in forward_markers:
-                    if fwd_marker.start() > reverse_start:
-                        reverse_end = fwd_marker.start()
-                        break
-            reverse_reads = command[reverse_start:reverse_end].strip()
-            print(f"🔧 [PARSER] Extracted reverse reads: {len(reverse_reads)} chars")
-            if len(reverse_reads) > 0:
-                print(f"🔧 [PARSER] Reverse reads preview: {reverse_reads[:100]}...")
-        
-        # Also check for "File 1:" and "File 2:" with R1/R2 in filename (fallback)
-        if not forward_reads or not reverse_reads:
-            file_pattern = re.compile(r'(?:Forward\s+reads|Reverse\s+reads|File\s+\d+)\s*\(([^)]+)\):\s*\n(.*?)(?=(?:Forward\s+reads|Reverse\s+reads|File\s+\d+)|$)', re.IGNORECASE | re.DOTALL)
-            matches = list(file_pattern.finditer(command))
-            
-            print(f"🔧 [PARSER] Found {len(matches)} file patterns (fallback)")
-            for match in matches:
-                filename = match.group(1)
-                content = match.group(2).strip()
-                print(f"🔧 [PARSER] Checking file: {filename} ({len(content)} chars)")
-                
-                if re.search(r'[._-]R?1[._-]', filename, re.IGNORECASE) or filename.upper().endswith('_R1') or filename.upper().endswith('.R1'):
-                    if not forward_reads:
-                        forward_reads = content
-                        print(f"🔧 [PARSER] Identified as forward (R1): {filename}")
-                elif re.search(r'[._-]R?2[._-]', filename, re.IGNORECASE) or filename.upper().endswith('_R2') or filename.upper().endswith('.R2'):
-                    if not reverse_reads:
-                        reverse_reads = content
-                        print(f"🔧 [PARSER] Identified as reverse (R2): {filename}")
-        
-        # If we still don't have both, try to get them by order (first file = forward, second = reverse)
-        if not forward_reads or not reverse_reads:
-            # Try to find any file patterns
-            file_pattern = re.compile(r'(?:Forward\s+reads|Reverse\s+reads|File\s+\d+)\s*\(([^)]+)\):\s*\n(.*?)(?=(?:Forward\s+reads|Reverse\s+reads|File\s+\d+)|$)', re.IGNORECASE | re.DOTALL)
-            matches = list(file_pattern.finditer(command))
-            
-            if len(matches) >= 2:
-                if not forward_reads:
-                    forward_reads = matches[0].group(2).strip()
-                    print(f"🔧 [PARSER] Using first file as forward: {matches[0].group(1)}")
-                if not reverse_reads:
-                    reverse_reads = matches[1].group(2).strip()
-                    print(f"🔧 [PARSER] Using second file as reverse: {matches[1].group(1)}")
-        
-        print(f"🔧 [PARSER] Final extraction - forward: {len(forward_reads)} chars, reverse: {len(reverse_reads)} chars")
-        return forward_reads, reverse_reads
-    
-    def _extract_min_overlap(self, command: str) -> int:
-        """Extract minimum overlap from command."""
-        patterns = [
-            r'overlap\s+of\s+(\d+)',
-            r'minimum\s+overlap\s+(\d+)',
-            r'min\s+overlap\s+(\d+)',
-            r'overlap\s+(\d+)',
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, command, re.IGNORECASE)
-            if match:
-                try:
-                    return int(match.group(1))
-                except (ValueError, IndexError):
-                    continue
-        
-        return 12  # Default minimum overlap
 
 def parse_command_raw(command: str, session_id: Optional[str] = None) -> Dict[str, Any]:
     """Raw function for command parsing (for direct calls)."""

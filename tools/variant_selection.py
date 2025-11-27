@@ -50,13 +50,30 @@ def select_variants_from_history(session_id: str,
                 "session_id": session_id
             }
         
+        # DEBUG: Print mutation result structure
+        logger.info(f"🔧 [DEBUG] Mutation result keys: {list(mutation_results.keys()) if isinstance(mutation_results, dict) else 'Not a dict'}")
+        if isinstance(mutation_results, dict) and "statistics" in mutation_results:
+            logger.info(f"🔧 [DEBUG] Statistics keys: {list(mutation_results['statistics'].keys()) if isinstance(mutation_results['statistics'], dict) else 'Not a dict'}")
+            if isinstance(mutation_results['statistics'], dict) and "variants" in mutation_results['statistics']:
+                variants_list = mutation_results['statistics']['variants']
+                logger.info(f"🔧 [DEBUG] Found {len(variants_list) if isinstance(variants_list, list) else 'N/A'} variants in statistics.variants")
+        
         # Extract variants from the result
         variants = extract_variants_from_result(mutation_results)
+        
+        logger.info(f"🔧 [DEBUG] Extracted {len(variants)} variants from mutation result")
         
         if not variants:
             return {
                 "status": "error", 
                 "message": "No variants found in previous mutation results",
+                "session_id": session_id
+            }
+        
+        if len(variants) < 2:
+            return {
+                "status": "error",
+                "message": f"At least 2 variants are required for variant selection, but only {len(variants)} were found",
                 "session_id": session_id
             }
         

@@ -261,41 +261,12 @@ async def execute(req: CommandRequest, request: Request):
         if hasattr(history_manager, 'sessions') and req.session_id in history_manager.sessions:
             session_context = history_manager.sessions[req.session_id]
         
-        # Ensure session_id is in session_context for the router
-        session_context["session_id"] = req.session_id
-        
-        # Populate session_context with aligned sequences from history if not present
-        # This helps tools like phylogenetic_tree retrieve aligned sequences from previous steps
-        if "aligned_sequences" not in session_context or not session_context["aligned_sequences"]:
-            alignment_result = history_manager.get_latest_result(req.session_id, "sequence_alignment", skip_errors=True)
-            if alignment_result and isinstance(alignment_result, dict):
-                # Check for nested result structure
-                result_data = alignment_result
-                if isinstance(result_data, dict) and "result" in result_data:
-                    result_data = result_data["result"]
-                
-                # Extract aligned sequences from alignment result
-                if "alignment" in result_data and isinstance(result_data["alignment"], list):
-                    # Convert alignment list to FASTA format
-                    fasta_lines = []
-                    for seq in result_data["alignment"]:
-                        name = seq.get("name", "seq")
-                        sequence = seq.get("sequence", "")
-                        fasta_lines.append(f">{name}")
-                        fasta_lines.append(sequence)
-                    session_context["aligned_sequences"] = "\n".join(fasta_lines)
-                    print(f"🔧 [EXECUTE] Retrieved aligned sequences from history: {len(session_context['aligned_sequences'])} chars")
-        
         # Use command router with session context
         from command_router import CommandRouter
         command_router = CommandRouter()
         
         # Route the command to the appropriate tool
         tool_name, parameters = command_router.route_command(req.command, session_context)
-        
-        # Ensure session_id is in parameters for handle_natural_command
-        if tool_name == "handle_natural_command":
-            parameters["session_id"] = req.session_id
         print(f"🔧 Routed command '{req.command}' to tool '{tool_name}' with parameters: {parameters}")
         
         # DEBUG: Print session context before tool call
@@ -309,24 +280,71 @@ async def execute(req: CommandRequest, request: Request):
         
         # Call the appropriate MCP tool
         try:
+            # Add session_id to parameters for tools that need it (like variant_selection)
+            if tool_name == "variant_selection" and "session_id" not in parameters:
+                parameters["session_id"] = req.session_id
+            
             result = await call_mcp_tool(tool_name, parameters)
             
             # Track in history with the correct tool name
-            # If handle_natural_command was used, the executor already saved to history with the actual tool name
-            # So we don't need to save again. For other tools, save to history.
-            if tool_name != "handle_natural_command":
-                # Extract the actual tool name from the result if available
-                actual_tool = tool_name
-                if isinstance(result, dict) and "tool" in result:
-                    actual_tool = result.get("tool", tool_name)
+            history_manager.add_history_entry(
+                req.session_id,
+                req.command,
+                tool_name,  # Use the actual tool name instead of "general_command"
+                result
+            )
+            
+            # Store mutated sequences in session context for downstream steps (if mutation)
+            if tool_name == "mutate_sequence":
+                variants = None
+                if isinstance(result, dict):
+                    # Check statistics.variants first (current format)
+                    if "statistics" in result and isinstance(result["statistics"], dict) and "variants" in result["statistics"]:
+                        variants = result["statistics"]["variants"]
+                    # Fallback to direct variants key
+                    elif "variants" in result:
+                        variants = result["variants"]
+                    # Fallback to output.variants
+                    elif "output" in result and isinstance(result["output"], dict) and "variants" in result["output"]:
+                        variants = result["output"]["variants"]
                 
-                history_manager.add_history_entry(
-                    req.session_id,
-                    req.command,
-                    actual_tool,
-                    result
-                )
-            # For handle_natural_command, the executor already saved with the correct tool name (e.g., "read_trimming")
+                if variants and hasattr(history_manager, 'sessions') and req.session_id in history_manager.sessions:
+                    history_manager.sessions[req.session_id]["mutated_sequences"] = variants
+                    # Also store as mutation_results for select_variants
+                    history_manager.sessions[req.session_id]["mutation_results"] = variants
+                    
+                    # DEBUG: Print session contents after mutation
+                    print(f"🔧 [DEBUG] After mutation via /execute - Session {req.session_id} contents:")
+                    session_data = history_manager.sessions[req.session_id]
+                    if "mutated_sequences" in session_data:
+                        print(f"  mutated_sequences: {len(session_data['mutated_sequences'])} items")
+                        if len(session_data['mutated_sequences']) > 0:
+                            print(f"    First item: {session_data['mutated_sequences'][0][:60]}...")
+            
+            # Store aligned sequences in session context for downstream steps (if alignment)
+            if tool_name == "sequence_alignment":
+                aligned_seqs = None
+                if isinstance(result, dict):
+                    # Check alignment key first (current format)
+                    if "alignment" in result and isinstance(result["alignment"], list):
+                        aligned_seqs = result["alignment"]
+                    # Fallback to output.alignment
+                    elif "output" in result and isinstance(result["output"], list):
+                        aligned_seqs = result["output"]
+                
+                if aligned_seqs and hasattr(history_manager, 'sessions') and req.session_id in history_manager.sessions:
+                    # Convert alignment list to FASTA format string
+                    fasta_lines = []
+                    for seq in aligned_seqs:
+                        if isinstance(seq, dict):
+                            name = seq.get("name", "sequence")
+                            sequence = seq.get("sequence", "")
+                            fasta_lines.append(f">{name}")
+                            fasta_lines.append(sequence)
+                    aligned_sequences_fasta = "\n".join(fasta_lines)
+                    
+                    history_manager.sessions[req.session_id]["aligned_sequences"] = aligned_sequences_fasta
+                    print(f"🔧 [DEBUG] After alignment via /execute - Stored {len(aligned_seqs)} aligned sequences in session context")
             
             return CustomJSONResponse({
                 "success": True,
@@ -472,8 +490,13 @@ async def mutate_sequence_mcp(req: MutationRequest):
         # Try to extract variants from result
         variants = None
         if isinstance(result, dict):
-            if "variants" in result:
+            # Check statistics.variants first (current format)
+            if "statistics" in result and isinstance(result["statistics"], dict) and "variants" in result["statistics"]:
+                variants = result["statistics"]["variants"]
+            # Fallback to direct variants key
+            elif "variants" in result:
                 variants = result["variants"]
+            # Fallback to output.variants
             elif "output" in result and isinstance(result["output"], dict) and "variants" in result["output"]:
                 variants = result["output"]["variants"]
         if variants:
@@ -659,14 +682,6 @@ async def handle_natural_command_mcp(req: NaturalCommandRequest):
         import command_handler
         
         result = command_handler.handle_command_raw(req.command, req.session_id)
-        
-        print(f"🔧 [DEBUG] handle_natural_command result type: {type(result)}")
-        print(f"🔧 [DEBUG] handle_natural_command result keys: {result.keys() if isinstance(result, dict) else 'Not a dict'}")
-        if isinstance(result, dict):
-            print(f"🔧 [DEBUG] handle_natural_command result status: {result.get('status', 'No status')}")
-            print(f"🔧 [DEBUG] handle_natural_command result tool: {result.get('tool', 'No tool')}")
-            if 'result' in result:
-                print(f"🔧 [DEBUG] handle_natural_command nested result keys: {result['result'].keys() if isinstance(result['result'], dict) else 'Not a dict'}")
         
         return CustomJSONResponse({
             "success": True,
@@ -1013,11 +1028,61 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
 
     elif tool_name == "read_trimming":
         import read_trimming
-        return read_trimming.run_read_trimming_raw(
-            arguments.get("reads", ""),
-            arguments.get("adapter"),
-            arguments.get("quality_threshold", 20),
-        )
+        
+        # Check if we have separate forward and reverse reads
+        forward_reads = arguments.get("forward_reads", "")
+        reverse_reads = arguments.get("reverse_reads", "")
+        reads = arguments.get("reads", "")
+        
+        adapter = arguments.get("adapter")
+        quality_threshold = arguments.get("quality_threshold", 20)
+        
+        print(f"🔧 [DEBUG] read_trimming tool called with:")
+        print(f"  adapter: {adapter}")
+        print(f"  quality_threshold: {quality_threshold}")
+        print(f"  has_forward_reads: {bool(forward_reads)}")
+        print(f"  has_reverse_reads: {bool(reverse_reads)}")
+        print(f"  has_reads: {bool(reads)}")
+        if forward_reads:
+            print(f"  forward_reads length: {len(forward_reads)}")
+        if reverse_reads:
+            print(f"  reverse_reads length: {len(reverse_reads)}")
+        
+        # If we have separate forward/reverse reads, process them separately
+        if forward_reads and reverse_reads:
+            forward_result = read_trimming.run_read_trimming_raw(
+                forward_reads,
+                adapter,
+                quality_threshold,
+            )
+            reverse_result = read_trimming.run_read_trimming_raw(
+                reverse_reads,
+                adapter,
+                quality_threshold,
+            )
+            
+            # Combine results for paired-end format
+            return {
+                "text": "Paired-end read trimming completed successfully.",
+                "forward_reads": forward_result,
+                "reverse_reads": reverse_result,
+                "summary": {
+                    "forward": forward_result.get("summary", {}),
+                    "reverse": reverse_result.get("summary", {}),
+                }
+            }
+        elif reads:
+            # Single-end or combined reads
+            return read_trimming.run_read_trimming_raw(
+                reads,
+                adapter,
+                quality_threshold,
+            )
+        else:
+            return {
+                "status": "error",
+                "message": "No reads provided for trimming"
+            }
 
     elif tool_name == "read_merging":
         import read_merging
@@ -1027,16 +1092,18 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
             arguments.get("min_overlap", 12),
         )
     
+    elif tool_name == "quality_assessment":
+        import quality_assessment
+        sequences = arguments.get("sequences", "")
+        print(f"🔧 [DEBUG] Quality assessment tool called with {len(sequences)} characters of sequences")
+        return quality_assessment.run_quality_assessment_raw(sequences)
+    
     elif tool_name == "handle_natural_command":
         # Use the natural command handler
         import command_handler
         command = arguments.get("command", "")
         session_id = arguments.get("session_id", "")
-        print(f"🔧 [MCP] handle_natural_command called with session_id: {session_id}")
-        result = command_handler.handle_command_raw(command, session_id)
-        print(f"🔧 [MCP] handle_natural_command result keys: {result.keys() if isinstance(result, dict) else 'Not a dict'}")
-        print(f"🔧 [MCP] handle_natural_command result session_id: {result.get('session_id', 'NOT FOUND')}")
-        return result
+        return command_handler.handle_command_raw(command, session_id)
     
     elif tool_name == "phylogenetic_tree":
         # Handle phylogenetic tree analysis
@@ -1052,28 +1119,26 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
         return phylogenetic_tree.run_clustering_from_tree(aligned_sequences, num_clusters)
     
     elif tool_name == "variant_selection":
-        # Handle variant selection - use regular variant selection from mutation history
+        # Handle variant selection - use session-based selection instead of phylogenetic tree
         import variant_selection
+        # Get session_id from arguments
         session_id = arguments.get("session_id", "")
+        
+        if not session_id:
+            return {
+                "status": "error",
+                "message": "Session ID required for variant selection. Variant selection works with session history from previous mutation operations."
+            }
+        
         selection_criteria = arguments.get("selection_criteria", "diversity")
         num_variants = arguments.get("num_variants", 10)
         custom_filters = arguments.get("custom_filters", None)
         
-        # If session_id is not provided, try to get it from arguments
-        if not session_id:
-            # Try to extract from aligned_sequences if it's actually a session context
-            aligned_sequences = arguments.get("aligned_sequences", "")
-            if not aligned_sequences:
-                return {
-                    "status": "error",
-                    "message": "Session ID required for variant selection from mutation history"
-                }
-        
         return variant_selection.run_variant_selection_raw(
-            session_id=session_id,
-            selection_criteria=selection_criteria,
-            num_variants=num_variants,
-            custom_filters=custom_filters
+            session_id,
+            selection_criteria,
+            num_variants,
+            custom_filters
         )
     
     else:
