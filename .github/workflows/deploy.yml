@@ -2,7 +2,7 @@ name: Deploy to AWS (ECR + S3/CloudFront)
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "version_2.0" ]
   workflow_dispatch:
 
 permissions:
@@ -48,13 +48,13 @@ jobs:
           echo "Image pushed: ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
 
       - name: Update ECS Service (if configured)
-        if: ${{ secrets.ECS_CLUSTER_NAME }}
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           ECS_CLUSTER_NAME: ${{ secrets.ECS_CLUSTER_NAME }}
           ECS_SERVICE_NAME: ${{ secrets.ECS_SERVICE_NAME }}
           ECS_TASK_DEFINITION_FAMILY: ${{ secrets.ECS_TASK_DEFINITION_FAMILY }}
         run: |
+          # Skip if ECS secrets are not configured
           if [ -z "$ECS_CLUSTER_NAME" ] || [ -z "$ECS_SERVICE_NAME" ] || [ -z "$ECS_TASK_DEFINITION_FAMILY" ]; then
             echo "ECS configuration not complete, skipping ECS service update"
             exit 0
