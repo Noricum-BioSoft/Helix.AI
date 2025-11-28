@@ -135,13 +135,16 @@ jobs:
 
       - name: Sync to S3 (static assets)
         run: |
-          echo "Syncing files to S3 bucket: ${S3_BUCKET}"
-          aws s3 sync frontend/dist s3://${S3_BUCKET} --delete --cache-control "public,max-age=31536000,immutable"
+          # Trim any whitespace from bucket name (GitHub secrets sometimes have trailing spaces)
+          BUCKET=$(echo "${S3_BUCKET}" | xargs)
+          echo "Syncing files to S3 bucket: ${BUCKET}"
+          aws s3 sync frontend/dist "s3://${BUCKET}" --delete --cache-control "public,max-age=31536000,immutable"
           
       - name: Upload index.html with no-cache headers
         run: |
-          echo "Uploading index.html to S3: ${S3_BUCKET}"
-          BUCKET="${S3_BUCKET}"
+          # Trim any whitespace from bucket name
+          BUCKET=$(echo "${S3_BUCKET}" | xargs)
+          echo "Uploading index.html to S3 bucket: ${BUCKET}"
           aws s3 cp frontend/dist/index.html "s3://${BUCKET}/index.html" --cache-control "no-cache" --content-type "text/html"
 
       - name: Invalidate CloudFront (optional)
