@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import OverlayTrigger from 'react-bootstrap/OverlayTrigger';
 import Tooltip from 'react-bootstrap/Tooltip';
 import Button from 'react-bootstrap/Button';
+import { getRecommendedButton } from '../../utils/buttonRecommendation';
 
 interface PromptInputProps {
   command: string;
@@ -38,6 +39,9 @@ export const PromptInput: React.FC<PromptInputProps> = ({
       onSubmit();
     }
   };
+
+  // Determine which button to recommend based on command
+  const recommendedButton = useMemo(() => getRecommendedButton(command), [command]);
 
   return (
     <div className="prompt-shell">
@@ -84,8 +88,8 @@ export const PromptInput: React.FC<PromptInputProps> = ({
           >
             <span className="d-inline-flex">
               <Button
-                variant="outline-secondary"
-                className="prompt-agent-button"
+                variant={recommendedButton === 'agent' ? 'primary' : 'outline-secondary'}
+                className={`prompt-agent-button ${recommendedButton === 'agent' ? 'recommended-button' : ''}`}
                 onClick={onAgentSubmit}
                 disabled={agentLoading || loading || !command.trim()}
                 aria-label={agentLoading ? 'Contacting agent' : 'Send to agent'}
@@ -108,8 +112,8 @@ export const PromptInput: React.FC<PromptInputProps> = ({
           >
             <span className="d-inline-flex">
               <Button
-                variant="primary"
-                className="prompt-submit-button"
+                variant={recommendedButton === 'direct' ? 'primary' : recommendedButton === 'agent' ? 'outline-primary' : 'primary'}
+                className={`prompt-submit-button ${recommendedButton === 'direct' ? 'recommended-button' : ''}`}
                 onClick={onSubmit}
                 disabled={loading || agentLoading || !command.trim()}
                 aria-label={loading ? 'Processing' : 'Send command'}

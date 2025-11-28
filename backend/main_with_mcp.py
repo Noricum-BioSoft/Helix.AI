@@ -173,9 +173,11 @@ def _validate_files(files: Optional[List[Dict[str, Any]]]) -> None:
                 )
 
 class PlasmidVisualizationRequest(BaseModel):
-    vector_name: str
-    cloning_sites: str
-    insert_sequence: str
+    vector_name: Optional[str] = None
+    cloning_sites: str = ""
+    insert_sequence: str = ""
+    full_plasmid_sequence: Optional[str] = None
+    insert_position: Optional[int] = None
     session_id: Optional[str] = None
 
 class PlasmidForRepresentativesRequest(BaseModel):
@@ -730,21 +732,30 @@ async def plasmid_visualization_mcp(req: PlasmidVisualizationRequest):
         import plasmid_visualizer
         
         result = plasmid_visualizer.run_plasmid_visualization_raw(
-            req.vector_name,
-            req.cloning_sites,
-            req.insert_sequence
+            vector_name=req.vector_name,
+            cloning_sites=req.cloning_sites,
+            insert_sequence=req.insert_sequence,
+            full_plasmid_sequence=req.full_plasmid_sequence,
+            insert_position=req.insert_position
         )
         
         # Track in history
+        if req.full_plasmid_sequence:
+            history_entry = f"Visualize complete plasmid sequence ({len(req.full_plasmid_sequence)} bp)"
+        else:
+            history_entry = f"Visualize plasmid {req.vector_name or 'pUC19'} with {req.cloning_sites} and insert {req.insert_sequence}"
+        
         history_manager.add_history_entry(
             req.session_id,
-            f"Visualize plasmid {req.vector_name} with {req.cloning_sites} and insert {req.insert_sequence}",
+            history_entry,
             "plasmid_visualization",
             result,
             {
                 "vector_name": req.vector_name,
                 "cloning_sites": req.cloning_sites,
-                "insert_sequence": req.insert_sequence
+                "insert_sequence": req.insert_sequence,
+                "full_plasmid_sequence": req.full_plasmid_sequence,
+                "insert_position": req.insert_position
             }
         )
         
@@ -1012,9 +1023,11 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
     elif tool_name == "plasmid_visualization":
         import plasmid_visualizer
         return plasmid_visualizer.run_plasmid_visualization_raw(
-            arguments.get("vector_name", ""),
-            arguments.get("cloning_sites", ""),
-            arguments.get("insert_sequence", "")
+            vector_name=arguments.get("vector_name"),
+            cloning_sites=arguments.get("cloning_sites", ""),
+            insert_sequence=arguments.get("insert_sequence", ""),
+            full_plasmid_sequence=arguments.get("full_plasmid_sequence"),
+            insert_position=arguments.get("insert_position")
         )
     
     elif tool_name == "plasmid_for_representatives":
@@ -1140,6 +1153,53 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
             num_variants,
             custom_filters
         )
+    
+    elif tool_name == "single_cell_analysis":
+        # Handle single-cell RNA-seq analysis using scPipeline
+        import single_cell_analysis
+        
+        data_file = arguments.get("data_file")
+        data_format = arguments.get("data_format", "10x")
+        steps = arguments.get("steps", ["all"])
+        resolution = arguments.get("resolution", 0.5)
+        nfeatures = arguments.get("nfeatures", 2000)
+        
+        # Get session context if available
+        session_context = arguments.get("session_context", {})
+        
+        # Run analysis
+        result = single_cell_analysis.analyze_single_cell_data(
+            data_file=data_file,
+            data_format=data_format,
+            steps=steps,
+            resolution=resolution,
+            nfeatures=nfeatures,
+            **{k: v for k, v in arguments.items() if k not in ["data_file", "data_format", "steps", "resolution", "nfeatures", "session_context"]}
+        )
+        
+        return {
+            "status": result.get("status", "success"),
+            "result": result,
+            "text": f"Single-cell analysis completed. Steps: {', '.join(steps) if isinstance(steps, list) else steps}"
+        }
+    
+    elif tool_name == "dna_vendor_research":
+        # Handle DNA vendor research
+        import dna_vendor_research
+        
+        command = arguments.get("command", "")
+        sequence_length = arguments.get("sequence_length")
+        quantity = arguments.get("quantity", "standard")
+        
+        result = dna_vendor_research.run_dna_vendor_research_raw(command, sequence_length, quantity)
+        
+        return {
+            "status": result.get("status", "success"),
+            "result": result,
+            "text": result.get("message", "DNA vendor research completed"),
+            "total_vendors": result.get("total_vendors", 0),
+            "total_testing_options": result.get("total_testing_options", 0)
+        }
     
     else:
         raise ValueError(f"Unknown tool: {tool_name}")

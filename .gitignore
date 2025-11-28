@@ -398,6 +398,11 @@ dist/
 .env.test
 .env.production
 
+# AWS Deployment Configuration (contains sensitive AWS details)
+scripts/aws/deploy.config
+infrastructure/cdk.context.json
+*.deploy.config
+
 # Lock files (keep package-lock.json but ignore others)
 yarn.lock
 pnpm-lock.yaml

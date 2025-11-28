@@ -1,6 +1,8 @@
 import axios from 'axios';
 
-const API_BASE_URL = 'http://localhost:8001';
+// Use VITE_API_BASE_URL from environment for production builds
+// Falls back to localhost for local development
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8001';
 
 export const mcpApi = {
   // Health check

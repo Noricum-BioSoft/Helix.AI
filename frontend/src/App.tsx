@@ -595,6 +595,42 @@ function App() {
   };
 
 
+  // Helper function to render consistent Debug Info section
+  const renderDebugInfo = (output: any, actualResult?: any) => {
+    const outputKeys = output && typeof output === 'object' ? Object.keys(output) : [];
+    const resultKeys = output?.result && typeof output.result === 'object' ? Object.keys(output.result) : [];
+    const actualResultKeys = actualResult && typeof actualResult === 'object' ? Object.keys(actualResult) : [];
+    
+    return (
+      <details className="bg-light p-2 border rounded mb-3">
+        <summary className="text-muted" style={{cursor: 'pointer'}}>
+          🔍 Debug Info (click to expand)
+        </summary>
+        <div className="mt-2">
+          <p><strong>Output keys:</strong> {outputKeys.length > 0 ? outputKeys.join(', ') : 'No output'}</p>
+          <p><strong>Result keys:</strong> {resultKeys.length > 0 ? resultKeys.join(', ') : 'No result'}</p>
+          {actualResultKeys.length > 0 && (
+            <p><strong>ActualResult keys:</strong> {actualResultKeys.join(', ')}</p>
+          )}
+          <details className="mt-2">
+            <summary className="text-muted small" style={{cursor: 'pointer'}}>Full Output (JSON)</summary>
+            <pre className="small mt-2 bg-white p-2 border rounded" style={{maxHeight: '400px', overflow: 'auto'}}>
+              {JSON.stringify(output, null, 2)}
+            </pre>
+          </details>
+          {actualResult && (
+            <details className="mt-2">
+              <summary className="text-muted small" style={{cursor: 'pointer'}}>Full ActualResult (JSON)</summary>
+              <pre className="small mt-2 bg-white p-2 border rounded" style={{maxHeight: '400px', overflow: 'auto'}}>
+                {JSON.stringify(actualResult, null, 2)}
+              </pre>
+            </details>
+          )}
+        </div>
+      </details>
+    );
+  };
+
   const renderOutput = (item: HistoryItem) => {
     const { output, type } = item;
 
@@ -814,12 +850,8 @@ function App() {
             </div>
           )}
           
-          {/* Debug: Always show this to verify rendering */}
-          <div className="alert alert-info mt-3">
-            <strong>🔍 Debug Info:</strong> Trimming visualization is rendering. 
-            Forward data: {forwardData ? 'Present' : 'Missing'}, 
-            Reverse data: {reverseData ? 'Present' : 'Missing'}
-          </div>
+          {/* Debug Section - Consistent across all commands */}
+          {renderDebugInfo(output, actualResult)}
         </div>
       );
     }
@@ -870,6 +902,9 @@ function App() {
               </pre>
             </details>
           </div>
+          
+          {/* Debug Section - Consistent across all commands */}
+          {renderDebugInfo(output, actualResult)}
         </div>
       );
     }
@@ -1015,6 +1050,9 @@ function App() {
               )}
             </div>
           )}
+          
+          {/* Debug Section - Consistent across all commands */}
+          {renderDebugInfo(output, actualResult)}
         </div>
       );
     }
@@ -1033,20 +1071,8 @@ function App() {
             <pre className="bg-light p-3 border rounded mb-3">{output.text}</pre>
           )}
           
-          {/* Debug Section - Hidden by default, expandable */}
-          <details className="bg-light p-2 border rounded mb-3">
-            <summary className="text-muted" style={{cursor: 'pointer'}}>
-              🔍 Debug Info (click to expand)
-            </summary>
-            <div className="mt-2">
-              <p>Output keys: {Object.keys(output).join(', ')}</p>
-              <p>Result keys: {output.result ? Object.keys(output.result).join(', ') : 'No result'}</p>
-              <p>Tree in output: {output.tree_newick ? 'YES' : 'NO'}</p>
-              <p>Tree in result: {output.result?.tree_newick ? 'YES' : 'NO'}</p>
-              <p>ETE3 in output: {output.ete_visualization ? 'YES' : 'NO'}</p>
-              <p>ETE3 in result: {output.result?.ete_visualization ? 'YES' : 'NO'}</p>
-            </div>
-          </details>
+          {/* Debug Section - Consistent across all commands */}
+          {renderDebugInfo(output, actualResult)}
           
           {actualResult.text && (
             <pre className="bg-light p-3 border rounded mb-3">{actualResult.text}</pre>
@@ -1124,9 +1150,27 @@ function App() {
     }
 
     // --- NEW: Render vendor research results if present ---
+    // Check multiple possible paths for vendor data
+    let vendors = null;
+    let recommendations = [];
+    
+    // Path 1: output.output.result.vendors (nested structure)
     if (output && output.output && output.output.result && output.output.result.vendors) {
-      const vendors = output.output.result.vendors;
-      const recommendations = output.output.result.recommendations || [];
+      vendors = output.output.result.vendors;
+      recommendations = output.output.result.recommendations || [];
+    }
+    // Path 2: output.result.vendors (direct structure)
+    else if (output && output.result && output.result.vendors) {
+      vendors = output.result.vendors;
+      recommendations = output.result.recommendations || [];
+    }
+    // Path 3: output.result.result.vendors (double nested result)
+    else if (output && output.result && output.result.result && output.result.result.vendors) {
+      vendors = output.result.result.vendors;
+      recommendations = output.result.result.recommendations || [];
+    }
+    
+    if (vendors) {
       
       return (
         <div>
@@ -1260,6 +1304,9 @@ function App() {
                     </div>
                   </div>
                 )}
+                
+                {/* Debug Section - Consistent across all commands */}
+                {renderDebugInfo({ result: toolResult }, toolResult)}
               </div>
             );
           }
@@ -1310,7 +1357,75 @@ function App() {
                       )}
                     </div>
                   </div>
+                  
+                  {/* Download and View All Variants */}
+                  <div className="mt-3">
+                    <div className="d-flex gap-2 flex-wrap">
+                      <button
+                        className="btn btn-primary btn-sm"
+                        onClick={() => {
+                          // Download all variants as FASTA file
+                          const fastaContent = toolResult.output.variants
+                            .map((variant: string, index: number) => `>variant_${index + 1}\n${variant}`)
+                            .join('\n');
+                          const blob = new Blob([fastaContent], { type: 'text/plain' });
+                          const url = URL.createObjectURL(blob);
+                          const a = document.createElement('a');
+                          a.href = url;
+                          a.download = `mutants_${toolResult.output.total_variants}_variants.fasta`;
+                          document.body.appendChild(a);
+                          a.click();
+                          document.body.removeChild(a);
+                          URL.revokeObjectURL(url);
+                        }}
+                      >
+                        📥 Download All Variants (FASTA)
+                      </button>
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => {
+                          // Toggle view all variants
+                          const details = document.getElementById('all-variants-details');
+                          if (details) {
+                            details.style.display = details.style.display === 'none' ? 'block' : 'none';
+                          }
+                        }}
+                      >
+                        👁️ View All Variants
+                      </button>
+                    </div>
+                    
+                    {/* All Variants Section (initially hidden) */}
+                    <div id="all-variants-details" style={{ display: 'none' }} className="mt-3">
+                      <div className="bg-light p-3 border rounded">
+                        <h6>All {toolResult.output.variants.length} Variants</h6>
+                        <div className="table-responsive" style={{ maxHeight: '400px', overflowY: 'auto' }}>
+                          <table className="table table-sm table-striped">
+                            <thead className="table-light sticky-top">
+                              <tr>
+                                <th>#</th>
+                                <th>Sequence</th>
+                                <th>Length</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {toolResult.output.variants.map((variant: string, index: number) => (
+                                <tr key={index}>
+                                  <td>{index + 1}</td>
+                                  <td className="font-monospace small">{variant}</td>
+                                  <td>{variant.length} bp</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
+                
+                {/* Debug Section - Consistent across all commands */}
+                {renderDebugInfo({ result: toolResult }, toolResult)}
               </div>
             );
           }
@@ -1356,6 +1471,9 @@ function App() {
                     </div>
                   </div>
                 )}
+                
+                {/* Debug Section - Consistent across all commands */}
+                {renderDebugInfo({ result: toolResult }, toolResult)}
               </div>
             );
           }
@@ -1429,6 +1547,9 @@ function App() {
                     Click the button above to open the interactive plasmid viewer
                   </p>
                 </div>
+                
+                {/* Debug Section - Consistent across all commands */}
+                {renderDebugInfo({ result: toolResult }, toolResult)}
               </div>
             );
           }
@@ -1437,7 +1558,9 @@ function App() {
           if (toolResult.text) {
             return (
               <div>
-                <pre className="bg-light p-3 border rounded">{toolResult.text}</pre>
+                <pre className="bg-light p-3 border rounded mb-3">{toolResult.text}</pre>
+                {/* Debug Section - Consistent across all commands */}
+                {renderDebugInfo({ result: toolResult }, toolResult)}
               </div>
             );
           }
@@ -1539,6 +1662,9 @@ function App() {
                 </div>
               </div>
             )}
+            
+            {/* Debug Section - Consistent across all commands */}
+            {renderDebugInfo(output, actualResult)}
           </div>
         );
       }
@@ -1555,6 +1681,9 @@ function App() {
               <h5>🧬 Plasmid Visualization</h5>
               <PlasmidDataVisualizer data={actualResult.plasmid_data} />
             </div>
+            
+            {/* Debug Section - Consistent across all commands */}
+            {renderDebugInfo(output, actualResult)}
           </div>
         );
       }
@@ -1571,6 +1700,9 @@ function App() {
               vectorName={actualResult.vector_name || "pUC19"}
               cloningSites={actualResult.cloning_sites || "EcoRI, BamHI, HindIII"}
             />
+            
+            {/* Debug Section - Consistent across all commands */}
+            {renderDebugInfo(output, actualResult)}
           </div>
         );
       }
@@ -1648,6 +1780,9 @@ function App() {
                       </div>
                     </div>
                   )}
+                  
+                  {/* Debug Section - Consistent across all commands */}
+                  {renderDebugInfo({ result: toolResult }, toolResult)}
                 </div>
               );
             }
@@ -1698,7 +1833,75 @@ function App() {
                         )}
                       </div>
                     </div>
+                    
+                    {/* Download and View All Variants */}
+                    <div className="mt-3">
+                      <div className="d-flex gap-2 flex-wrap">
+                        <button
+                          className="btn btn-primary btn-sm"
+                          onClick={() => {
+                            // Download all variants as FASTA file
+                            const fastaContent = toolResult.output.variants
+                              .map((variant: string, index: number) => `>variant_${index + 1}\n${variant}`)
+                              .join('\n');
+                            const blob = new Blob([fastaContent], { type: 'text/plain' });
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = `mutants_${toolResult.output.total_variants}_variants.fasta`;
+                            document.body.appendChild(a);
+                            a.click();
+                            document.body.removeChild(a);
+                            URL.revokeObjectURL(url);
+                          }}
+                        >
+                          📥 Download All Variants (FASTA)
+                        </button>
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => {
+                            // Toggle view all variants
+                            const details = document.getElementById('all-variants-details-mcp');
+                            if (details) {
+                              details.style.display = details.style.display === 'none' ? 'block' : 'none';
+                            }
+                          }}
+                        >
+                          👁️ View All Variants
+                        </button>
+                      </div>
+                      
+                      {/* All Variants Section (initially hidden) */}
+                      <div id="all-variants-details-mcp" style={{ display: 'none' }} className="mt-3">
+                        <div className="bg-light p-3 border rounded">
+                          <h6>All {toolResult.output.variants.length} Variants</h6>
+                          <div className="table-responsive" style={{ maxHeight: '400px', overflowY: 'auto' }}>
+                            <table className="table table-sm table-striped">
+                              <thead className="table-light sticky-top">
+                                <tr>
+                                  <th>#</th>
+                                  <th>Sequence</th>
+                                  <th>Length</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {toolResult.output.variants.map((variant: string, index: number) => (
+                                  <tr key={index}>
+                                    <td>{index + 1}</td>
+                                    <td className="font-monospace small">{variant}</td>
+                                    <td>{variant.length} bp</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
                   </div>
+                  
+                  {/* Debug Section - Consistent across all commands */}
+                  {renderDebugInfo({ result: toolResult }, toolResult)}
                 </div>
               );
             }
@@ -1744,8 +1947,91 @@ function App() {
                       </div>
                     </div>
                   )}
+                  
+                  {/* Debug Section - Consistent across all commands */}
+                  {renderDebugInfo({ result: toolResult }, toolResult)}
                 </div>
               );
+            }
+            
+            // Handle vendor research results
+            if (lastToolMsg.name === 'dna_vendor_research') {
+              // Check multiple paths for vendor data
+              let vendors = null;
+              let recommendations = [];
+              
+              if (toolResult.output && toolResult.output.result && toolResult.output.result.vendors) {
+                vendors = toolResult.output.result.vendors;
+                recommendations = toolResult.output.result.recommendations || [];
+              } else if (toolResult.output && toolResult.output.vendors) {
+                vendors = toolResult.output.vendors;
+                recommendations = toolResult.output.recommendations || [];
+              } else if (toolResult.result && toolResult.result.vendors) {
+                vendors = toolResult.result.vendors;
+                recommendations = toolResult.result.recommendations || [];
+              }
+              
+              if (vendors) {
+                return (
+                  <div>
+                    {toolResult.text && (
+                      <pre className="bg-light p-3 border rounded mb-3">{toolResult.text}</pre>
+                    )}
+                    
+                    <div className="bg-light p-3 border rounded mb-3">
+                      <h5>DNA Synthesis Vendors</h5>
+                      <div className="row">
+                        {Object.entries(vendors).map(([vendorId, vendor]: [string, any]) => (
+                          <div key={vendorId} className="col-md-6 mb-3">
+                            <div className="card h-100">
+                              <div className="card-body">
+                                <h6 className="card-title">{vendor.name}</h6>
+                                <p className="card-text">
+                                  <strong>Services:</strong> {vendor.services?.join(', ') || 'N/A'}
+                                </p>
+                                <p className="card-text">
+                                  <strong>Pricing:</strong> {vendor.pricing_range || 'N/A'}
+                                </p>
+                                <p className="card-text">
+                                  <strong>Turnaround:</strong> {vendor.turnaround_time || 'N/A'}
+                                </p>
+                                <p className="card-text">
+                                  <strong>Max Length:</strong> {vendor.max_length || 'N/A'}
+                                </p>
+                                <p className="card-text">
+                                  <strong>Specialties:</strong> {vendor.specialties?.join(', ') || 'N/A'}
+                                </p>
+                                {vendor.website && (
+                                  <a href={vendor.website} target="_blank" rel="noopener noreferrer" className="btn btn-sm btn-outline-primary">
+                                    Visit Website
+                                  </a>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    
+                    {recommendations.length > 0 && (
+                      <div className="bg-light p-3 border rounded mb-3">
+                        <h5>Recommendations</h5>
+                        <ul className="list-unstyled">
+                          {recommendations.map((rec: string, index: number) => (
+                            <li key={index} className="mb-2">
+                              <i className="bi bi-lightbulb text-warning me-2"></i>
+                              {rec}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    
+                    {/* Debug Section - Consistent across all commands */}
+                    {renderDebugInfo({ result: toolResult }, toolResult)}
+                  </div>
+                );
+              }
             }
             
             // Handle plasmid visualization results
@@ -1807,7 +2093,9 @@ function App() {
             if (toolResult.text) {
               return (
                 <div>
-                  <pre className="bg-light p-3 border rounded">{toolResult.text}</pre>
+                  <pre className="bg-light p-3 border rounded mb-3">{toolResult.text}</pre>
+                  {/* Debug Section - Consistent across all commands */}
+                  {renderDebugInfo({ result: toolResult }, toolResult)}
                 </div>
               );
             }
@@ -2026,6 +2314,9 @@ function App() {
             </div>
           )}
           {/* --- END NEW --- */}
+          
+          {/* Debug Section - Consistent across all commands */}
+          {renderDebugInfo(output, actualResult)}
         </div>
       );
     }
@@ -2047,10 +2338,29 @@ function App() {
     
     if (output.plot) {
       return (
-        <Plot
-          data={output.plot.data}
-          layout={output.plot.layout}
-        />
+        <div>
+          {output.text && (
+            <pre className="bg-light p-3 border rounded mb-3">{output.text}</pre>
+          )}
+          {output.statistics && (
+            <div className="bg-light p-3 border rounded mb-3">
+              <h6>Statistics</h6>
+              <div className="row">
+                {Object.entries(output.statistics).map(([key, value]) => (
+                  <div key={key} className="col-md-6 mb-2">
+                    <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          <Plot
+            data={output.plot.data}
+            layout={output.plot.layout}
+          />
+          {/* Debug Section - Consistent across all commands */}
+          {renderDebugInfo(output, actualResult)}
+        </div>
       );
     }
 
@@ -2089,6 +2399,9 @@ function App() {
               </div>
             </div>
           )}
+          
+          {/* Debug Section - Consistent across all commands */}
+          {renderDebugInfo(output, actualResult)}
         </div>
       );
     }
@@ -2435,7 +2748,7 @@ function App() {
     loading,
     agentLoading,
     onAgentSubmit: handleAgentSubmit,
-    placeholder: 'visualize the phylogenetic tree',
+    placeholder: 'Ask anything or upload a FASTA file...',
     dragActive,
     uploadedFiles,
     onFileRemove: handleFileRemove,
@@ -2632,7 +2945,7 @@ function App() {
               handleSubmit();
             }
           }}
-          placeholder="visualize the phylogenetic tree"
+          placeholder="Ask anything or upload a FASTA file..."
         />
         <div className="text-center">
           <button 

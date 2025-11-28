@@ -38,8 +38,8 @@ export const ExampleCommandsPanel: React.FC<ExampleCommandsPanelProps> = ({
           description: "Get a short explanation of sequence alignments and when to use them"
         },
         {
-          command: "How do you choose a DNA sequencing workflow?",
-          description: "Request a suggested workflow for a sequencing or analysis question"
+          command: "What are common bioinformatics challenges and how can AI help overcome them?",
+          description: "Learn about typical problems in bioinformatics workflows and how AI can solve them"
         }
       ]
     },
@@ -52,12 +52,8 @@ export const ExampleCommandsPanel: React.FC<ExampleCommandsPanelProps> = ({
           description: "Align multiple sequences (requires sequences in command or uploaded file)" 
         },
         { 
-          command: "select 10 representative sequences", 
+          command: "select 2 representative sequences", 
           description: "Choose representative sequences from alignment (requires previous alignment step)" 
-        },
-        { 
-          command: "select 5 sequences with the highest mutation rate", 
-          description: "Select sequences based on criteria (requires previous analysis)" 
         }
       ]
     },
@@ -66,12 +62,8 @@ export const ExampleCommandsPanel: React.FC<ExampleCommandsPanelProps> = ({
       icon: "🧬",
       commands: [
         { 
-          command: getExampleWithSequences("create 96 variants", "single"), 
+          command: `create 96 variants Sequence: ${sampleSequences.single}`, 
           description: "Generate 96 sequence variants from a sample sequence" 
-        },
-        { 
-          command: getExampleWithSequences("mutate sequence with 0.1 mutation rate", "single"), 
-          description: "Create mutations with specific rate (includes full sample sequence)" 
         }
       ]
     },
@@ -84,30 +76,8 @@ export const ExampleCommandsPanel: React.FC<ExampleCommandsPanelProps> = ({
           description: "Display phylogenetic tree with sample sequences" 
         },
         { 
-          command: `show me the plasmid visualization with insert ${sampleSequences.plasmidInsert}`, 
-          description: "Visualize plasmid with sample insert sequence" 
-        },
-        { 
-          command: "insert each of the sequences into pUC19", 
-          description: "Create plasmid visualizations (requires sequences from previous step or uploaded file)" 
-        }
-      ]
-    },
-    {
-      category: "Vendor Research",
-      icon: "🔬",
-      commands: [
-        { 
-          command: "research DNA synthesis vendors for 1000bp sequences", 
-          description: "Find DNA synthesis vendors (no sequences needed - uses length parameter)" 
-        },
-        { 
-          command: "find testing options for protein expression", 
-          description: "Research testing options (no sequences needed)" 
-        },
-        { 
-          command: "compare DNA synthesis vendors for large quantities", 
-          description: "Compare vendor options (no sequences needed)" 
+          command: `visualize the plasmid sequence ${sampleSequences.plasmidInsert}`, 
+          description: "Visualize complete plasmid from full sequence" 
         }
       ]
     },
@@ -116,12 +86,8 @@ export const ExampleCommandsPanel: React.FC<ExampleCommandsPanelProps> = ({
       icon: "🧪",
       commands: [
         { 
-          command: "insert each of the sequences into pUC19", 
-          description: "Insert sequences into plasmid (requires sequences from previous step)" 
-        },
-        { 
-          command: `visualize plasmid pUC19 with insert ${sampleSequences.plasmidInsert}`, 
-          description: "Visualize specific plasmid with sample insert sequence" 
+          command: `insert sequence ${sampleSequences.plasmidInsert} into pUC19 at position 1500`, 
+          description: "Insert sequence into plasmid at specific position" 
         }
       ]
     }

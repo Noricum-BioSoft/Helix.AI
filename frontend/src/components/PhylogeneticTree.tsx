@@ -123,13 +123,31 @@ export const PhylogeneticTree: React.FC<PhylogeneticTreeProps> = ({ newick }) =>
       // Create hierarchy
       const hierarchy = d3.hierarchy(treeData);
       
-      // Set up the tree layout with fixed dimensions
-      const width = 600;
+      // Calculate max label length from hierarchy data
+      const getAllNames = (node: any): string[] => {
+        const names = [node.data.name || ''];
+        if (node.children) {
+          node.children.forEach((child: any) => {
+            names.push(...getAllNames(child));
+          });
+        }
+        return names;
+      };
+      const allNames = getAllNames(hierarchy);
+      const maxLabelLength = Math.max(...allNames.map(name => name.length), 10);
+      
+      // Set up the tree layout with dynamic dimensions based on label length
+      const baseWidth = 600;
+      const labelWidth = Math.max(maxLabelLength * 8, 200); // 8px per character, minimum 200px
+      const width = baseWidth + labelWidth;
       const height = 400;
       const treeLayout = d3.tree()
-        .size([height, width - 100]); // Swap width/height for horizontal layout
+        .size([height, width - labelWidth - 50]); // Leave room for labels on the right
       
       const tree = treeLayout(hierarchy as any);
+      
+      // Update SVG width to accommodate labels
+      svgRef.current!.setAttribute('width', String(width + 100));
       
       // Create SVG
       const svg = d3.select(svgRef.current);
@@ -176,18 +194,19 @@ export const PhylogeneticTree: React.FC<PhylogeneticTreeProps> = ({ newick }) =>
         .attr('r', 3)
         .attr('fill', (d: any) => d.children ? '#555' : '#69b3a2');
       
-      // Add labels with clipping for long names
-      node.append('text')
+      // Add labels - show full names, no truncation
+      const labels = node.append('text')
         .attr('dy', '.31em')
         .attr('x', (d: any) => d.children ? -8 : 8)
         .attr('text-anchor', (d: any) => d.children ? 'end' : 'start')
-        .text((d: any) => {
-          const name = d.data.name;
-          // Truncate long names
-          return name.length > 10 ? name.substring(0, 10) + '...' : name;
-        })
-        .style('font-size', '10px')
-        .style('font-family', 'monospace');
+        .text((d: any) => d.data.name || '')
+        .style('font-size', '11px')
+        .style('font-family', 'monospace')
+        .style('cursor', 'pointer');
+      
+      // Add tooltips to show full names on hover (helpful for very long names)
+      labels.append('title')
+        .text((d: any) => d.data.name || '');
         
           } catch (error) {
         console.error('Error rendering phylogenetic tree:', error);
@@ -207,9 +226,9 @@ export const PhylogeneticTree: React.FC<PhylogeneticTreeProps> = ({ newick }) =>
       <div style={{ height: '500px', width: '100%', overflow: 'auto' }}>
         <svg
           ref={svgRef}
-          width="700"
+          width="800"
           height="500"
-          style={{ border: '1px solid #ccc' }}
+          style={{ border: '1px solid #ccc', minWidth: '800px' }}
         />
       </div>
     </div>

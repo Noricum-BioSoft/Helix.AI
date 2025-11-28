@@ -40,17 +40,53 @@ def parse_cloning_sites(sites_str: str) -> List[Dict[str, Any]]:
     
     return sites
 
-def create_plasmid_data(vector_name: str, cloning_sites: str, insert_sequence: str) -> PlasmidData:
-    """Create plasmid data from user inputs."""
+def create_plasmid_data(vector_name: Optional[str] = None, cloning_sites: str = "", insert_sequence: str = "", 
+                        full_plasmid_sequence: Optional[str] = None, insert_position: Optional[int] = None) -> PlasmidData:
+    """Create plasmid data from user inputs.
     
+    Supports two modes:
+    1. Full plasmid: When full_plasmid_sequence is provided, treat it as the complete plasmid
+    2. Insert mode: When vector_name and insert_sequence are provided, create plasmid with insert
+    """
+    
+    # If full plasmid sequence is provided, use it directly
+    if full_plasmid_sequence:
+        full_plasmid_sequence = full_plasmid_sequence.strip().upper().replace(" ", "")
+        
+        # Validate sequence
+        valid_bases = set("ATCG")
+        if not all(base in valid_bases for base in full_plasmid_sequence):
+            raise ValueError(f"Invalid plasmid sequence. Only A, T, C, G allowed.")
+        
+        # Create minimal features for full plasmid (user can add more later)
+        features = [
+            PlasmidFeature(
+                name="Plasmid Sequence",
+                start=0,
+                end=len(full_plasmid_sequence) - 1,
+                type="plasmid",
+                color="#69b3a2",
+                description=f"Complete plasmid sequence ({len(full_plasmid_sequence)} bp)"
+            )
+        ]
+        
+        return PlasmidData(
+            name=vector_name or "Custom Plasmid",
+            sequence=full_plasmid_sequence,
+            features=features,
+            size=len(full_plasmid_sequence),
+            description=f"Complete plasmid sequence ({len(full_plasmid_sequence)} bp)"
+        )
+    
+    # Insert mode: Create plasmid with insert sequence
     # Clean inputs
-    vector_name = vector_name.strip()
+    vector_name = (vector_name or "pUC19").strip()
     cloning_sites = cloning_sites.strip()
-    insert_sequence = insert_sequence.strip().upper()
+    insert_sequence = insert_sequence.strip().upper().replace(" ", "")
     
     # Validate insert sequence
     valid_bases = set("ATCG")
-    if not all(base in valid_bases for base in insert_sequence):
+    if insert_sequence and not all(base in valid_bases for base in insert_sequence):
         raise ValueError(f"Invalid insert sequence '{insert_sequence}'. Only A, T, C, G allowed.")
     
     # Parse cloning sites
@@ -100,8 +136,11 @@ def create_plasmid_data(vector_name: str, cloning_sites: str, insert_sequence: s
     
     # Add insert sequence as a feature
     if insert_sequence:
-        # Place insert after the last cloning site or at position 1401
-        insert_start = max([site["end"] for site in sites]) if sites else 1401
+        # Use specified position, or place after the last cloning site, or at position 1401
+        if insert_position is not None:
+            insert_start = insert_position
+        else:
+            insert_start = max([site["end"] for site in sites]) if sites else 1401
         insert_end = insert_start + len(insert_sequence) - 1
         
         features.append(PlasmidFeature(
@@ -131,12 +170,25 @@ def create_plasmid_data(vector_name: str, cloning_sites: str, insert_sequence: s
         description=f"Plasmid {vector_name} with {len(sites)} cloning sites and {len(insert_sequence)}bp insert"
     )
 
-def run_plasmid_visualization_raw(vector_name: str, cloning_sites: str, insert_sequence: str) -> Dict[str, Any]:
-    """Generate plasmid visualization data from user inputs."""
+def run_plasmid_visualization_raw(vector_name: Optional[str] = None, cloning_sites: str = "", 
+                                   insert_sequence: str = "", full_plasmid_sequence: Optional[str] = None,
+                                   insert_position: Optional[int] = None) -> Dict[str, Any]:
+    """Generate plasmid visualization data from user inputs.
+    
+    Supports two modes:
+    1. Full plasmid: When full_plasmid_sequence is provided
+    2. Insert mode: When vector_name and insert_sequence are provided
+    """
     
     try:
         # Create plasmid data
-        plasmid_data = create_plasmid_data(vector_name, cloning_sites, insert_sequence)
+        plasmid_data = create_plasmid_data(
+            vector_name=vector_name,
+            cloning_sites=cloning_sites,
+            insert_sequence=insert_sequence,
+            full_plasmid_sequence=full_plasmid_sequence,
+            insert_position=insert_position
+        )
         
         # Convert to dictionary format for API response
         features_dict = []
@@ -164,7 +216,10 @@ def run_plasmid_visualization_raw(vector_name: str, cloning_sites: str, insert_s
                 "vector_name": vector_name,
                 "cloning_sites": cloning_sites,
                 "insert_sequence": insert_sequence,
-                "feature_count": len(plasmid_data.features)
+                "full_plasmid_sequence": full_plasmid_sequence,
+                "insert_position": insert_position,
+                "feature_count": len(plasmid_data.features),
+                "mode": "full_plasmid" if full_plasmid_sequence else "insert"
             }
         }
         

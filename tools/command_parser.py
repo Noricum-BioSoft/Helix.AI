@@ -83,6 +83,7 @@ class CommandParser:
             'phylogenetic_tree': [
                 r'create\s+phylogenetic\s+tree',
                 r'build\s+phylogenetic\s+tree',
+                r'visualize\s+.*phylogenetic\s+tree',
                 r'phylogenetic\s+tree',
                 r'evolutionary\s+tree',
                 r'tree\s+from\s+alignment',
@@ -279,21 +280,48 @@ class CommandParser:
         
         elif action == 'plasmid_visualization':
             # Extract plasmid parameters from command
-            vector_name = self._extract_vector_name(original_command)
-            cloning_sites = self._extract_cloning_sites(original_command)
-            insert_sequence = self._extract_sequence_from_command(original_command)
+            # Check if this is a full plasmid (no "into" or "insert" keywords) or an insert
+            is_full_plasmid = not re.search(r'\b(?:into|insert|in)\s+', original_command, re.IGNORECASE)
             
-            return ParsedCommand(
-                action="plasmid_visualization",
-                tool="plasmid_visualization",
-                parameters={
-                    "vector_name": vector_name,
-                    "cloning_sites": cloning_sites,
-                    "insert_sequence": insert_sequence
-                },
-                session_id=session_id,
-                confidence=0.8
-            )
+            # Extract sequence
+            sequence = self._extract_sequence_from_command(original_command)
+            
+            # Extract vector name if specified
+            vector_name = self._extract_vector_name(original_command)
+            
+            # Extract position if specified
+            position_match = re.search(r'\bat\s+position\s+(\d+)', original_command, re.IGNORECASE)
+            insert_position = int(position_match.group(1)) if position_match else None
+            
+            if is_full_plasmid and sequence:
+                # Full plasmid sequence provided
+                return ParsedCommand(
+                    action="plasmid_visualization",
+                    tool="plasmid_visualization",
+                    parameters={
+                        "full_plasmid_sequence": sequence,
+                        "vector_name": None,
+                        "cloning_sites": "",
+                        "insert_sequence": ""
+                    },
+                    session_id=session_id,
+                    confidence=0.8
+                )
+            else:
+                # Insert mode
+                cloning_sites = self._extract_cloning_sites(original_command)
+                return ParsedCommand(
+                    action="plasmid_visualization",
+                    tool="plasmid_visualization",
+                    parameters={
+                        "vector_name": vector_name,
+                        "cloning_sites": cloning_sites,
+                        "insert_sequence": sequence,
+                        "insert_position": insert_position
+                    },
+                    session_id=session_id,
+                    confidence=0.8
+                )
         
         else:
             # Default fallback

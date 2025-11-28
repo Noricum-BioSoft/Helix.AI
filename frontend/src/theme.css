@@ -189,7 +189,7 @@ a:hover {
 .prompt-input-wrapper {
   position: relative;
   display: flex;
-  align-items: stretch;
+  align-items: center;
   gap: 1rem;
   padding: 0.75rem 1rem;
   border: 1px solid var(--border-color);
@@ -216,8 +216,7 @@ a:hover {
   line-height: 1.5;
   min-height: 2.5rem;
   max-height: calc(1.5em * 15);
-  padding-top: 0.4rem;
-  padding-bottom: 0.4rem;
+  padding: 0.75rem 0;
   white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: anywhere;
@@ -241,7 +240,7 @@ a:hover {
 
 .prompt-input-wrapper > .prompt-icon-button,
 .prompt-input-wrapper .prompt-actions {
-  align-self: flex-end;
+  flex-shrink: 0;
 }
 
 .prompt-input-wrapper .prompt-actions {
@@ -378,7 +377,7 @@ a:hover {
   align-items: center;
   justify-content: center;
   font-size: 1.1rem;
-  transition: transform 0.2s ease, background 0.2s ease;
+  transition: transform 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
 }
 
 .prompt-agent-button:hover:not(:disabled) {
@@ -388,6 +387,11 @@ a:hover {
 .prompt-agent-button:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.prompt-agent-button.recommended-button {
+  box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.25);
+  animation: pulse-recommendation 2s ease-in-out infinite;
 }
 
 .prompt-submit-button {
@@ -400,11 +404,25 @@ a:hover {
   align-items: center;
   justify-content: center;
   font-size: 1.15rem;
-  transition: transform 0.2s ease;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
 .prompt-submit-button:hover:not(:disabled) {
   transform: translateY(-1px);
+}
+
+.prompt-submit-button.recommended-button {
+  box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.25);
+  animation: pulse-recommendation 2s ease-in-out infinite;
+}
+
+@keyframes pulse-recommendation {
+  0%, 100% {
+    box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.25);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(13, 110, 253, 0.15);
+  }
 }
 
 .prompt-submit-button .spinner-border {

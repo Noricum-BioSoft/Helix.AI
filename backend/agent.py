@@ -228,8 +228,14 @@ def create_session() -> Dict:
 
 
 @tool
-def plasmid_visualization(vector_name: str, cloning_sites: str, insert_sequence: str) -> Dict:
-    """Generate plasmid visualization data from vector name, cloning sites, and insert sequence."""
+def plasmid_visualization(vector_name: str = None, cloning_sites: str = "", insert_sequence: str = "", 
+                          full_plasmid_sequence: str = None, insert_position: int = None) -> Dict:
+    """Generate plasmid visualization data.
+    
+    Supports two modes:
+    1. Full plasmid: When full_plasmid_sequence is provided, visualize the complete plasmid
+    2. Insert mode: When vector_name and insert_sequence are provided, create plasmid with insert
+    """
     
     # Import the plasmid visualization function
     import sys
@@ -237,14 +243,22 @@ def plasmid_visualization(vector_name: str, cloning_sites: str, insert_sequence:
     sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'tools'))
     from plasmid_visualizer import run_plasmid_visualization_raw
     
-    result = run_plasmid_visualization_raw(vector_name, cloning_sites, insert_sequence)
+    result = run_plasmid_visualization_raw(
+        vector_name=vector_name,
+        cloning_sites=cloning_sites,
+        insert_sequence=insert_sequence,
+        full_plasmid_sequence=full_plasmid_sequence,
+        insert_position=insert_position
+    )
     
     return {
         "text": result.get("text", "Plasmid visualization created successfully."),
         "input": {
             "vector_name": vector_name,
             "cloning_sites": cloning_sites,
-            "insert_sequence": insert_sequence
+            "insert_sequence": insert_sequence,
+            "full_plasmid_sequence": full_plasmid_sequence,
+            "insert_position": insert_position
         },
         "output": result.get("plasmid_data", {}),
         "visualization_type": result.get("visualization_type", "circular_plasmid"),

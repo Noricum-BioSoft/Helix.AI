@@ -4,7 +4,7 @@ import re
 from typing import List, Dict, Any
 from Bio import AlignIO, SeqIO
 from Bio.Align import AlignInfo
-from Bio.Align.Applications import ClustalwCommandline, MuscleCommandline
+from Bio.Align.Applications import ClustalwCommandline
 import subprocess
 import tempfile
 import os
@@ -17,7 +17,34 @@ def parse_fasta_string(fasta_string: str) -> List[Dict[str, str]]:
     current_name = ""
     current_sequence = ""
     
-    # Split by lines and process each line
+    # Check if this is inline FASTA format (multiple >seq on same line)
+    # Pattern: >seq1 ATGC >seq2 ATGC >seq3 ATGC
+    if fasta_string.count('>') > 1 and '\n' not in fasta_string.strip():
+        # Inline FASTA format - split by > and parse each
+        print(f"🔍 Detected inline FASTA format")
+        parts = fasta_string.strip().split('>')
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+            # Split on whitespace - first part is name, rest is sequence
+            parts_split = part.split(None, 1)
+            if len(parts_split) == 2:
+                name, sequence = parts_split
+                sequences.append({
+                    "name": name,
+                    "sequence": sequence
+                })
+                print(f"🔍 Parsed inline sequence: name='{name}', sequence='{sequence}'")
+            elif len(parts_split) == 1:
+                # Just a name, sequence might be on next iteration or empty
+                current_name = parts_split[0]
+                current_sequence = ""
+        if sequences:
+            print(f"🔍 Final parsed sequences from inline format: {sequences}")
+            return sequences
+    
+    # Standard FASTA format - split by lines
     lines = fasta_string.strip().split('\n')
     
     for line in lines:
@@ -137,8 +164,14 @@ def run_alignment(sequences: str):
         except (subprocess.CalledProcessError, FileNotFoundError):
             # Fallback to Muscle if ClustalW is not available
             try:
-                muscle_cline = MuscleCommandline(input=temp_fasta_path, out=temp_output_path)
-                stdout, stderr = muscle_cline()
+                # Use Muscle directly with subprocess (matching command line: muscle -align input.fasta -output output.fasta)
+                # BioPython's MuscleCommandline is deprecated and doesn't support -align/-output flags
+                result = subprocess.run(
+                    ["muscle", "-align", temp_fasta_path, "-output", temp_output_path],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
                 
                 # Read the alignment
                 alignment = AlignIO.read(temp_output_path, "fasta")
@@ -227,32 +260,76 @@ Aligned sequences:
             pass
 
 def perform_manual_alignment(sequences: List[Dict[str, str]]) -> Any:
-    """Perform a simple manual alignment as fallback."""
-    from Bio.Align import MultipleSeqAlignment
+    """Perform alignment using BioPython's PairwiseAligner with star alignment."""
+    from Bio.Align import MultipleSeqAlignment, PairwiseAligner
     from Bio.Seq import Seq
     from Bio.SeqRecord import SeqRecord
     
-    # This is a very basic alignment - in practice, you'd want a more sophisticated algorithm
-    max_length = max(len(seq["sequence"]) for seq in sequences)
+    if len(sequences) < 2:
+        # If only one sequence, just return it
+        seq_data = sequences[0]
+        seq_record = SeqRecord(Seq(seq_data["sequence"]), id=seq_data["name"], description="")
+        return MultipleSeqAlignment([seq_record])
     
-    # Create SeqRecord objects for the alignment
-    seq_records = []
-    for seq_data in sequences:
-        sequence = seq_data["sequence"]
-        # Pad with gaps to match the longest sequence
-        padded_sequence = sequence + "-" * (max_length - len(sequence))
+    # Use BioPython's PairwiseAligner for better alignment
+    aligner = PairwiseAligner()
+    aligner.mode = 'global'  # Global alignment
+    aligner.match_score = 2.0
+    aligner.mismatch_score = -1.0
+    aligner.open_gap_score = -1.0
+    aligner.extend_gap_score = -0.5
+    
+    # Convert sequences to Seq objects
+    seq_objects = [(Seq(seq_data["sequence"]), seq_data["name"]) for seq_data in sequences]
+    
+    # Star alignment: use the longest sequence as reference
+    ref_idx = max(range(len(seq_objects)), key=lambda i: len(seq_objects[i][0]))
+    ref_seq, ref_name = seq_objects[ref_idx]
+    
+    # Align all sequences to the reference and collect alignments
+    alignments_to_ref = []
+    for i, (seq, name) in enumerate(seq_objects):
+        if i == ref_idx:
+            # Reference sequence - no gaps
+            alignments_to_ref.append((str(ref_seq), name, []))
+            continue
         
-        # Create SeqRecord with proper id and seq attributes
-        seq_record = SeqRecord(
-            Seq(padded_sequence),
-            id=seq_data["name"],
-            description=""
-        )
-        seq_records.append(seq_record)
+        alignments = aligner.align(ref_seq, seq)
+        
+        if alignments:
+            best = alignments[0]
+            # best[0] is aligned reference (with gaps), best[1] is aligned query
+            aligned_ref = str(best[0])
+            aligned_query = str(best[1])
+            
+            # Find gap positions in the aligned reference
+            gap_positions = [j for j, char in enumerate(aligned_ref) if char == '-']
+            alignments_to_ref.append((aligned_query, name, gap_positions))
+        else:
+            # Fallback: pad to reference length
+            padded = str(seq) + "-" * (len(ref_seq) - len(seq))
+            alignments_to_ref.append((padded, name, []))
     
-    # Create MultipleSeqAlignment object
-    alignment = MultipleSeqAlignment(seq_records)
-    return alignment
+    # Merge all gap positions - we need to insert gaps into all sequences at all gap positions
+    all_gap_positions = set()
+    for _, _, gaps in alignments_to_ref:
+        all_gap_positions.update(gaps)
+    
+    # Build final aligned sequences
+    final_seqs = []
+    for aligned_seq, name, gaps in alignments_to_ref:
+        # Insert gaps at all positions where any sequence has gaps
+        seq_list = list(aligned_seq)
+        for gap_pos in sorted(all_gap_positions, reverse=True):
+            if gap_pos < len(seq_list):
+                if seq_list[gap_pos] != '-':  # Don't double-insert
+                    seq_list.insert(gap_pos, '-')
+            elif gap_pos >= len(seq_list):
+                # Gap is beyond current sequence - add at end
+                seq_list.append('-')
+        final_seqs.append(SeqRecord(Seq(''.join(seq_list)), id=name, description=""))
+    
+    return MultipleSeqAlignment(final_seqs)
 
 from langchain.agents import tool
 

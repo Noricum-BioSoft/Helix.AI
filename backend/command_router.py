@@ -50,6 +50,10 @@ class CommandRouter:
             'directed_evolution': {
                 'keywords': ['directed evolution', 'evolution', 'protein engineering', 'dbtl', 'design build test learn'],
                 'description': 'Directed evolution for protein engineering'
+            },
+            'single_cell_analysis': {
+                'keywords': ['single cell', 'scRNA-seq', 'scRNAseq', 'single-cell', 'cell type', 'marker genes', 'differential expression', 'pathway analysis', 'batch correction', 'seurat', 'scpipeline'],
+                'description': 'Single-cell RNA-seq analysis using scPipeline'
             }
         }
         
@@ -72,6 +76,10 @@ class CommandRouter:
             return 'clustering_analysis', self._extract_parameters(command, 'clustering_analysis', session_context)
         
         # Check for variant selection (HIGH PRIORITY - before phylogenetic tree)
+        # Check for "select X sequences" patterns (but not representative sequences from clustering)
+        if re.search(r'select\s+\d+\s+sequences?', command_lower) and 'representative sequences' not in command_lower:
+            print(f"🔧 Command router: Matched 'select sequences' -> variant_selection")
+            return 'variant_selection', self._extract_parameters(command, 'variant_selection', session_context)
         if any(phrase in command_lower for phrase in ['select variants', 'top variants', 'representative variants', 'diverse variants', 'select top']):
             print(f"🔧 Command router: Matched 'variant selection' -> variant_selection")
             return 'variant_selection', self._extract_parameters(command, 'variant_selection', session_context)
@@ -87,7 +95,7 @@ class CommandRouter:
             return 'mutate_sequence', self._extract_parameters(command, 'mutate_sequence', session_context)
         
         # Check for sequence alignment (more specific to avoid false matches)
-        if any(phrase in command_lower for phrase in ['align sequences', 'sequence alignment', 'compare sequences', 'multiple sequence alignment', 'perform alignment']):
+        if any(phrase in command_lower for phrase in ['align sequences', 'sequence alignment', 'compare sequences', 'multiple sequence alignment', 'perform alignment', 'perform multiple sequence alignment']):
             print(f"🔧 Command router: Matched 'alignment' -> sequence_alignment")
             return 'sequence_alignment', self._extract_parameters(command, 'sequence_alignment', session_context)
         
@@ -115,6 +123,11 @@ class CommandRouter:
         if any(phrase in command_lower for phrase in ['create session', 'new session', 'start session', 'initialize session']):
             print(f"🔧 Command router: Matched 'session creation' -> session_creation")
             return 'session_creation', {"command": command}
+        
+        # Check for single-cell analysis (HIGH PRIORITY - before other checks)
+        if any(phrase in command_lower for phrase in ['single cell', 'scrna-seq', 'scrnaseq', 'single-cell', 'cell type', 'marker genes', 'differential expression', 'pathway analysis', 'batch correction', 'seurat', 'scpipeline']):
+            print(f"🔧 Command router: Matched 'single-cell analysis' -> single_cell_analysis")
+            return 'single_cell_analysis', self._extract_parameters(command, 'single_cell_analysis', session_context)
         
         # Check for directed evolution
         if any(phrase in command_lower for phrase in ['directed evolution', 'evolution', 'protein engineering', 'dbtl', 'design build test learn']):
@@ -150,10 +163,36 @@ class CommandRouter:
         
         if tool_name == "mutate_sequence":
             # Extract sequence and number of variants
-            sequence_match = re.search(r'sequence\s+([ATCG]+)', command, re.IGNORECASE)
-            variants_match = re.search(r'(\d+)\s+variants?', command)
+            # Try multiple patterns to extract the full sequence
+            sequence = None
             
-            sequence = sequence_match.group(1) if sequence_match else "ATGCGATCG"
+            # Pattern 1: "Sequence: ATGCGATCG..." (with colon) - allow spaces in sequence
+            sequence_match = re.search(r'sequence\s*:\s*([ATCG\s]+?)(?:\s|$|\.|,|;|variants|variant)', command, re.IGNORECASE)
+            if sequence_match:
+                sequence = sequence_match.group(1).strip()
+            
+            # Pattern 2: "sequence ATGCGATCG..." (without colon, but with space) - allow spaces
+            if not sequence:
+                sequence_match = re.search(r'sequence\s+([ATCG\s]+?)(?:\s|$|\.|,|;|variants|variant)', command, re.IGNORECASE)
+                if sequence_match:
+                    sequence = sequence_match.group(1).strip()
+            
+            # Pattern 3: Look for long DNA sequences anywhere in the command (no spaces, for fallback)
+            if not sequence:
+                # Find the longest DNA sequence in the command
+                sequences = re.findall(r'[ATCG]{10,}', command.upper())
+                if sequences:
+                    # Use the longest sequence found
+                    sequence = max(sequences, key=len)
+            
+            # Fallback to default if nothing found
+            if not sequence:
+                sequence = "ATGCGATCG"
+            
+            # Clean the sequence (remove spaces) before returning
+            sequence = sequence.replace(" ", "").upper()
+            
+            variants_match = re.search(r'(\d+)\s+variants?', command)
             num_variants = int(variants_match.group(1)) if variants_match else 96
             
             return {
@@ -177,10 +216,20 @@ class CommandRouter:
                 # Try multiple patterns to extract sequences
                 sequences = None
                 
-                # Pattern 1: Extract FASTA format sequences
-                fasta_match = re.search(r'sequences?[:\s]+(>[\w\s\n>]+)', command, re.IGNORECASE | re.DOTALL)
+                # Pattern 1: Extract FASTA format sequences (handles blank lines)
+                # Match from first > to end, including blank lines and DNA sequences
+                # Try to find FASTA content anywhere in the command
+                fasta_match = re.search(r'(>[\w\s\n>ATCGUatcgu]+)', command, re.DOTALL)
                 if fasta_match:
                     sequences = fasta_match.group(1).strip()
+                    # Clean up blank lines - remove blank lines between headers and sequences
+                    lines = sequences.split('\n')
+                    cleaned_lines = []
+                    for line in lines:
+                        stripped = line.strip()
+                        if stripped:  # Only keep non-empty lines
+                            cleaned_lines.append(stripped)
+                    sequences = '\n'.join(cleaned_lines)
                     print(f"🔧 Extracted FASTA sequences: {sequences}")
                 
                 # Pattern 2: Extract simple sequences without headers
@@ -194,17 +243,34 @@ class CommandRouter:
                             sequences = "\n".join([f">seq{i+1}\n{seq}" for i, seq in enumerate(seq_list)])
                         print(f"🔧 Converted simple sequences to FASTA: {sequences}")
                 
-                # Pattern 3: Extract sequences after "align" keyword
+                # Pattern 3: Extract sequences after "align" or "perform" keywords
                 if not sequences:
-                    align_match = re.search(r'align[^:]*[:\s]+([ATCG\s\n>]+)', command, re.IGNORECASE | re.DOTALL)
-                    if align_match:
-                        sequences = align_match.group(1).strip()
-                        # If not in FASTA format, convert it
-                        if not sequences.startswith('>'):
-                            seq_list = sequences.split()
-                            if len(seq_list) >= 2:
-                                sequences = "\n".join([f">seq{i+1}\n{seq}" for i, seq in enumerate(seq_list)])
-                        print(f"🔧 Extracted sequences after align: {sequences}")
+                    # Try pattern for "perform multiple sequence alignment" followed by sequences
+                    perform_match = re.search(r'perform[^>]*(>[\w\s\n>ATCGUatcgu]+)', command, re.IGNORECASE | re.DOTALL)
+                    if perform_match:
+                        sequences = perform_match.group(1).strip()
+                        # Clean up blank lines
+                        lines = sequences.split('\n')
+                        cleaned_lines = [line.strip() for line in lines if line.strip()]
+                        sequences = '\n'.join(cleaned_lines)
+                        print(f"🔧 Extracted sequences after 'perform': {sequences}")
+                    
+                    # Also try pattern for "align" keyword
+                    if not sequences:
+                        align_match = re.search(r'align[^:]*[:\s]+([ATCG\s\n>]+)', command, re.IGNORECASE | re.DOTALL)
+                        if align_match:
+                            sequences = align_match.group(1).strip()
+                            # If not in FASTA format, convert it
+                            if not sequences.startswith('>'):
+                                seq_list = sequences.split()
+                                if len(seq_list) >= 2:
+                                    sequences = "\n".join([f">seq{i+1}\n{seq}" for i, seq in enumerate(seq_list)])
+                            else:
+                                # Clean up blank lines in FASTA format
+                                lines = sequences.split('\n')
+                                cleaned_lines = [line.strip() for line in lines if line.strip()]
+                                sequences = '\n'.join(cleaned_lines)
+                            print(f"🔧 Extracted sequences after align: {sequences}")
                 
                 # Pattern 4: Extract sequences with target/reference format
                 if not sequences:
@@ -473,11 +539,40 @@ class CommandRouter:
             }
         
         elif tool_name == "plasmid_visualization":
-            return {
-                "vector_name": "pUC19",
-                "cloning_sites": "EcoRI, BamHI, HindIII",
-                "insert_sequence": session_context.get("selected_sequences", ["ATGCGATCG"])[0] if session_context.get("selected_sequences") else "ATGCGATCG"
-            }
+            # Extract sequence from command
+            sequence_match = re.search(r'sequence\s+([ATCG\s]+)', command, re.IGNORECASE)
+            sequence = sequence_match.group(1).replace(" ", "").upper() if sequence_match else None
+            
+            # Check if this is a full plasmid (no "into" or "insert" keywords) or an insert
+            is_full_plasmid = not re.search(r'\b(?:into|insert|in)\s+', command, re.IGNORECASE)
+            
+            # Extract vector name if specified
+            vector_match = re.search(r'\b(?:into|in)\s+(\w+)', command, re.IGNORECASE)
+            vector_name = vector_match.group(1) if vector_match else None
+            
+            # Extract position if specified
+            position_match = re.search(r'\bat\s+position\s+(\d+)', command, re.IGNORECASE)
+            insert_position = int(position_match.group(1)) if position_match else None
+            
+            if is_full_plasmid and sequence:
+                # Full plasmid sequence provided
+                return {
+                    "full_plasmid_sequence": sequence,
+                    "vector_name": None,
+                    "cloning_sites": "",
+                    "insert_sequence": ""
+                }
+            else:
+                # Insert sequence into vector
+                if not sequence:
+                    sequence = session_context.get("selected_sequences", ["ATGCGATCG"])[0] if session_context.get("selected_sequences") else "ATGCGATCG"
+                
+                return {
+                    "vector_name": vector_name or "pUC19",
+                    "cloning_sites": "EcoRI, BamHI, HindIII",
+                    "insert_sequence": sequence,
+                    "insert_position": insert_position
+                }
         
         elif tool_name == "plasmid_for_representatives":
             # Extract representatives from session context (from clustering results)
@@ -796,6 +891,75 @@ class CommandRouter:
             
             return {
                 "sequences": merged_sequences
+            }
+        
+        elif tool_name == "single_cell_analysis":
+            # Extract single-cell analysis parameters
+            command_lower = command.lower()
+            
+            # Determine analysis steps
+            steps = []
+            if "marker" in command_lower or "markers" in command_lower:
+                steps.append("markers")
+            if "differential" in command_lower or "deg" in command_lower:
+                steps.append("differential")
+            if "pathway" in command_lower or "enrichment" in command_lower:
+                steps.append("pathways")
+            if "annotate" in command_lower or "cell type" in command_lower:
+                steps.append("annotation")
+            if "batch" in command_lower or "correct" in command_lower:
+                steps.append("batch_correction")
+            if not steps or "all" in command_lower or "complete" in command_lower or "full" in command_lower:
+                steps = ["all"]
+            
+            # Extract data file from command or session context
+            data_file = None
+            data_format = "10x"  # default
+            
+            # Check for file references in command
+            file_match = re.search(r'(?:file|data|input)[:\s]+([^\s]+\.(?:h5|rds|csv|h5ad|mtx))', command, re.IGNORECASE)
+            if file_match:
+                data_file = file_match.group(1)
+                if data_file.endswith('.h5') or data_file.endswith('.h5ad'):
+                    data_format = "h5"
+                elif data_file.endswith('.rds'):
+                    data_format = "seurat"
+                elif data_file.endswith('.csv'):
+                    data_format = "csv"
+            
+            # Check session context for uploaded files
+            if not data_file and session_context:
+                uploaded_files = session_context.get("uploaded_files", [])
+                for file_info in uploaded_files:
+                    file_name = file_info.get("name", "")
+                    if any(ext in file_name.lower() for ext in [".h5", ".h5ad", ".rds", "matrix.mtx", ".csv"]):
+                        data_file = file_name
+                        if file_name.endswith('.h5') or file_name.endswith('.h5ad'):
+                            data_format = "h5"
+                        elif file_name.endswith('.rds'):
+                            data_format = "seurat"
+                        elif file_name.endswith('.csv'):
+                            data_format = "csv"
+                        break
+            
+            # Extract additional parameters
+            resolution = 0.5
+            resolution_match = re.search(r'resolution[:\s]+([\d.]+)', command, re.IGNORECASE)
+            if resolution_match:
+                resolution = float(resolution_match.group(1))
+            
+            nfeatures = 2000
+            nfeatures_match = re.search(r'(?:nfeatures|features|variable features)[:\s]+(\d+)', command, re.IGNORECASE)
+            if nfeatures_match:
+                nfeatures = int(nfeatures_match.group(1))
+            
+            return {
+                "data_file": data_file,
+                "data_format": data_format,
+                "steps": steps,
+                "resolution": resolution,
+                "nfeatures": nfeatures,
+                "command": command
             }
         
         else:

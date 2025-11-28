@@ -1,0 +1,35 @@
+# Helix.AI AWS Deployment Configuration
+# Copy this file to deploy.config and update with your values
+# cp deploy.config.example deploy.config
+
+# AWS Configuration
+AWS_REGION=us-east-1
+AWS_ACCOUNT_ID=your-account-id-here
+
+# ECR Configuration
+ECR_REPOSITORY=helix-backend
+IMAGE_TAG=latest
+
+# S3 Configuration
+S3_BUCKET=helix-frontend-bucket
+
+# CloudFront Configuration (optional - leave empty if not using CloudFront)
+CLOUDFRONT_DISTRIBUTION_ID=
+
+# ECS Configuration (optional - for automatic service updates)
+# Leave empty if you want to manually update ECS after deployment
+ECS_CLUSTER_NAME=
+ECS_SERVICE_NAME=
+ECS_TASK_DEFINITION_FAMILY=
+
+# Frontend Configuration
+# This should point to your backend ALB or API Gateway URL
+VITE_API_BASE_URL=https://your-backend-alb-url.region.elb.amazonaws.com
+
+# Deployment Options
+# Set to "true" to skip a deployment step
+SKIP_BACKEND=false
+SKIP_FRONTEND=false
+SKIP_CLOUDFRONT_INVALIDATION=false
+SKIP_ECS_UPDATE=false
+

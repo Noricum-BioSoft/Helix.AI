@@ -45,6 +45,51 @@ jobs:
           docker tag ${ECR_REPOSITORY}:${IMAGE_TAG} ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
           echo "Pushing image to ECR..."
           docker push ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
+          echo "Image pushed: ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+
+      - name: Update ECS Service (if configured)
+        if: ${{ secrets.ECS_CLUSTER_NAME != '' && secrets.ECS_SERVICE_NAME != '' && secrets.ECS_TASK_DEFINITION_FAMILY != '' }}
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          echo "Updating ECS service with new image..."
+          # Get current task definition
+          TASK_DEF=$(aws ecs describe-task-definition \
+            --task-definition "${{ secrets.ECS_TASK_DEFINITION_FAMILY }}" \
+            --query 'taskDefinition' \
+            --region "${{ env.AWS_REGION }}" \
+            --output json)
+          
+          # Create new task definition with updated image
+          NEW_TASK_DEF=$(echo "$TASK_DEF" | jq --arg IMAGE "${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}" \
+            '.containerDefinitions[0].image = $IMAGE | del(.taskDefinitionArn) | del(.revision) | del(.status) | del(.requiresAttributes) | del(.compatibilities) | del(.registeredAt) | del(.registeredBy)')
+          
+          # Register new task definition
+          NEW_TASK_DEF_ARN=$(aws ecs register-task-definition \
+            --cli-input-json "$NEW_TASK_DEF" \
+            --region "${{ env.AWS_REGION }}" \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+          
+          echo "New task definition registered: ${NEW_TASK_DEF_ARN}"
+          
+          # Update ECS service
+          aws ecs update-service \
+            --cluster "${{ secrets.ECS_CLUSTER_NAME }}" \
+            --service "${{ secrets.ECS_SERVICE_NAME }}" \
+            --task-definition "${NEW_TASK_DEF_ARN}" \
+            --force-new-deployment \
+            --region "${{ env.AWS_REGION }}"
+          
+          echo "ECS service update initiated. Waiting for deployment to stabilize..."
+          
+          # Wait for service to stabilize (optional - uncomment if desired)
+          # aws ecs wait services-stable \
+          #   --cluster "${{ secrets.ECS_CLUSTER_NAME }}" \
+          #   --services "${{ secrets.ECS_SERVICE_NAME }}" \
+          #   --region "${{ env.AWS_REGION }}"
+          
+          echo "ECS service update complete!"
 
   frontend:
     name: Build and Deploy Frontend to S3/CloudFront

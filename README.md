@@ -205,36 +205,72 @@ Examples:
 
 ## ☁️ Deployment (AWS)
 
-1. Backend (FastAPI)
-   - Package with Docker (multi-stage build). Expose `:8001`.
-   - Store `.env`/secrets in AWS SSM Parameter Store or Secrets Manager.
-   - Run on ECS/Fargate or EC2 with an ALB. Enable health check `/health`.
-   - Persist sessions to EFS or S3 if needed; or point to Redis/ElastiCache for scalable session storage.
+### Quick Start
 
-2. Frontend (Vite/React)
-   - Build static assets: `npm run build`.
-   - Host on S3 + CloudFront (recommended) or serve via NGINX on ECS/EC2.
-   - Set `VITE_API_BASE_URL` to the backend load balancer URL.
+**Fully automated deployment** is available with our deployment scripts:
 
-3. Observability
-   - Enable CloudWatch logs for backend container.
-   - Add ALB access logs to S3.
-   - Optional: push client telemetry events (dispatch route, tool, latency) to CloudWatch or OpenTelemetry.
+1. **Set up deployment configuration**:
+   ```bash
+   cd scripts/aws
+   ./setup-deployment.sh
+   ```
 
-4. CI/CD
-   - GitHub Actions: build + push Docker image, run tests, deploy to ECS.
-   - Invalidate CloudFront after frontend deploy.
+2. **Deploy infrastructure** (first time only):
+   ```bash
+   cd infrastructure
+   pip install -r requirements.txt
+   cdk bootstrap
+   cdk deploy
+   ```
+
+3. **Deploy application**:
+   ```bash
+   cd scripts/aws
+   ./deploy.sh
+   ```
+
+### Architecture Overview
+
+The deployment includes:
+- **Backend**: FastAPI application running on ECS Fargate with ALB
+- **Frontend**: React application hosted on S3 with CloudFront CDN
+- **Container Registry**: ECR for Docker images
+- **Infrastructure as Code**: AWS CDK for complete infrastructure automation
+
+### Deployment Options
+
+1. **Automated Scripts** (Recommended): Use `scripts/aws/deploy.sh` for complete automation
+2. **Infrastructure as Code**: AWS CDK in `infrastructure/` directory
+3. **CI/CD**: GitHub Actions workflow (`.github/workflows/deploy.yml`)
+
+### Detailed Documentation
+
+For comprehensive deployment instructions, see:
+- **[AWS Deployment Guide](docs/AWS_DEPLOYMENT_GUIDE.md)**: Complete step-by-step deployment guide
+- **[Infrastructure README](infrastructure/README.md)**: AWS CDK setup and configuration
+- **[Deployment Scripts README](scripts/aws/README.md)**: Script usage and options
 
 ### GitHub Actions (CI/CD) Setup
-- Add the following repository secrets:
-  - `AWS_REGION` (e.g., us-east-1)
-  - `AWS_ACCOUNT_ID`
-  - `AWS_OIDC_ROLE_ARN` (IAM role for GitHub OIDC with ECR/S3/CloudFront permissions)
-  - `ECR_REPOSITORY` (e.g., helix-backend)
-  - `S3_BUCKET` (S3 bucket for frontend)
-  - `CLOUDFRONT_DISTRIBUTION_ID` (optional)
-  - `VITE_API_BASE_URL` (frontend build-time API base URL)
-- Workflow: `.github/workflows/deploy.yml` builds and pushes the backend image to ECR and syncs frontend assets to S3 (with optional CloudFront invalidation) on push to `main`.
+
+The project includes automated CI/CD via GitHub Actions. To enable:
+
+1. **Add GitHub Secrets**:
+   - `AWS_REGION` (e.g., us-east-1)
+   - `AWS_ACCOUNT_ID`
+   - `AWS_OIDC_ROLE_ARN` (IAM role for GitHub OIDC)
+   - `ECR_REPOSITORY` (e.g., helix-backend)
+   - `S3_BUCKET` (S3 bucket for frontend)
+   - `CLOUDFRONT_DISTRIBUTION_ID` (optional)
+   - `VITE_API_BASE_URL` (frontend build-time API base URL)
+   - `ECS_CLUSTER_NAME`, `ECS_SERVICE_NAME`, `ECS_TASK_DEFINITION_FAMILY` (optional - for auto ECS updates)
+
+2. **Workflow**: `.github/workflows/deploy.yml` automatically:
+   - Builds and pushes backend Docker image to ECR
+   - Updates ECS service with new image (if configured)
+   - Builds and deploys frontend to S3
+   - Invalidates CloudFront cache (if configured)
+
+   Triggers on: push to `main` branch or manual workflow dispatch
 
 ## 🧪 Testing
 

@@ -16,6 +16,9 @@ def run_mutation_raw(sequence: str, num_variants: int = 96):
             }
         }
     
+    # Store original sequence for display (before cleaning)
+    original_sequence = sequence
+    
     # Clean the sequence (remove spaces, convert to uppercase)
     sequence = sequence.replace(" ", "").upper()
     
@@ -105,8 +108,9 @@ def run_mutation_raw(sequence: str, num_variants: int = 96):
         }
     ]
     
-    # Create result text
-    result_text = f"""Generated {num_variants} mutated variants from sequence '{sequence}'.
+    # Create result text - use original sequence for display, but truncate if too long
+    display_sequence = original_sequence if len(original_sequence) <= 50 else original_sequence[:47] + "..."
+    result_text = f"""Generated {num_variants} mutated variants from sequence '{display_sequence}'.
     
 Statistics:
 - Total mutations: {total_mutations}
