@@ -32,6 +32,9 @@ jobs:
           role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
@@ -40,15 +43,12 @@ jobs:
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
-          echo "Building backend Docker image..."
-          docker build -f backend/Dockerfile -t ${ECR_REPOSITORY}:${IMAGE_TAG} .
-          docker tag ${ECR_REPOSITORY}:${IMAGE_TAG} ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
-          echo "Pushing image to ECR..."
-          docker push ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
+          echo "Building and pushing backend Docker image for linux/amd64..."
+          docker buildx build --platform linux/amd64 -f backend/Dockerfile -t ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG} --push .
           echo "Image pushed: ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
 
       - name: Update ECS Service (if configured)
-        if: ${{ secrets.ECS_CLUSTER_NAME != '' && secrets.ECS_SERVICE_NAME != '' && secrets.ECS_TASK_DEFINITION_FAMILY != '' }}
+        if: ${{ secrets.ECS_CLUSTER_NAME && secrets.ECS_SERVICE_NAME && secrets.ECS_TASK_DEFINITION_FAMILY }}
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
@@ -130,7 +130,7 @@ jobs:
           aws s3 cp frontend/dist/index.html s3://${S3_BUCKET}/index.html --acl public-read --cache-control "no-cache, no-store, must-revalidate" --content-type "text/html"
 
       - name: Invalidate CloudFront (optional)
-        if: ${{ env.CLOUDFRONT_DISTRIBUTION_ID != '' }}
+        if: ${{ env.CLOUDFRONT_DISTRIBUTION_ID }}
         run: |
           aws cloudfront create-invalidation --distribution-id ${CLOUDFRONT_DISTRIBUTION_ID} --paths "/*"
 
