@@ -8,6 +8,14 @@
 
 An AI-powered web application for managing biotechnology workflows via natural language commands, featuring interactive phylogenetic tree visualization, simulated DNA synthesis vendor research, and comprehensive bioinformatics tools with session management and history tracking.
 
+## 📌 Current Status (as of Phase 1 rollout)
+
+- **Execution architecture**: ✅ **Phase 1 complete** — centralized `ExecutionBroker`, routing policy v1, input discovery/size estimation, generalized jobs.
+- **Sync execution**: ✅ Supported (local / EC2 depending on deployment & environment).
+- **Async execution**: ✅ Supported for **FastQC on EMR** (returns `job_id` immediately).
+- **Jobs API**: ✅ `/jobs/{job_id}` + `/jobs/{job_id}/results` working (and additional job helpers exist).
+- **Testing**: ✅ Unit tests run in **mock mode** by default; integration tests are **opt-in**.
+
 ## 🚀 Features
 
 ### 🧭 Tool‑first Dispatch (not just an LLM wrapper)
@@ -17,6 +25,18 @@ An AI-powered web application for managing biotechnology workflows via natural l
 - **Validation before execution**: Required parameters (e.g., sequences for alignment) are checked up front.
 - **Provenance & reproducibility**: Each run records tool name, version, parameters, inputs, and outputs.
 - **Explainability**: When using the agent, the final answer is rendered in Markdown; intermediate planner chatter is hidden.
+
+### 🧱 Execution Broker + Routing Policy (Phase 1)
+- **Single execution entrypoint**: `/execute` routes tool runs through a central **ExecutionBroker**.
+- **Consistent execution envelope**: Results include a stable wrapper with `routing`, discovered `inputs`, `artifacts`, and the original tool output preserved under `result`.
+- **Routing policy v1 (sync vs async)**:
+  - **Bytes threshold** (default **100MB**) with env override: `HELIX_ASYNC_BYTES_THRESHOLD`
+  - **Tool overrides** (curated list; currently forces FastQC async)
+  - **Timeout promotion hook**: present as a stub for later phases
+- **Input discovery + size estimation**:
+  - Detects **S3 URIs** (`s3://bucket/key`) and **local paths** in tool arguments
+  - Incorporates **session uploads** and **dataset references** from session metadata (when available)
+  - Best-effort sizing via S3 `head_object(ContentLength)` and local `stat()`
 
 ### 🌳 **Interactive Phylogenetic Tree Visualization**
 - **ETE3 Integration**: High-quality phylogenetic tree visualization with SVG rendering
@@ -52,12 +72,20 @@ An AI-powered web application for managing biotechnology workflows via natural l
 - **Variant Selection**: Smart selection based on diversity, length, or custom criteria
 - **Plasmid Visualization**: Interactive plasmid and vector visualization with circular/linear views
 - **Clustering Analysis**: Hierarchical clustering with representative sequence selection
+- **Toolbox inventory**: Ask “what tools do you have?” to see a full list of registered tools, discovered `@tool` functions, and detected local/EC2 CLI tools.
 
 ### 🔄 **Session Management**
 - **Persistent Sessions**: Track your workflow across multiple commands
 - **History Tracking**: Complete audit trail of all operations
 - **Context Preservation**: Maintain state between commands
 - **Workflow Context**: Pass data between different analysis steps
+
+### 🧾 Job Management (Async)
+- **FastQC jobs on EMR** return immediately with a `job_id`
+- **Core job endpoints**:
+  - `GET /jobs/{job_id}` — status + metadata
+  - `GET /jobs/{job_id}/results` — results pointer(s) for completed jobs
+  - Additional helpers exist (e.g., logs/cancel/retry/copy-to-session) depending on deployment configuration
 
 ### 🎯 **User Experience**
 - **Drag-and-Drop File Upload**: Upload FASTA/CSV files directly (no auto-population)
@@ -129,6 +157,7 @@ Helix.AI/
 - Node.js 16+
 - npm or yarn
 - [uv](https://github.com/astral-sh/uv) (optional, recommended for faster installs)
+- AWS credentials configured (for FastQC EMR jobs)
 
 ### Installation
 
@@ -165,7 +194,17 @@ cd Helix.AI
    cd ..
    ```
 
-4. **Start the unified system**
+4. **Configure environment variables** (optional)
+   
+   The startup script automatically sets the EMR cluster ID (`EMR_CLUSTER_ID=j-12QYDE51Q9LDP`) for FastQC jobs. If you need to use a different cluster or set additional variables, create a `.env` file in the project root:
+   ```bash
+   # .env file
+   EMR_CLUSTER_ID=j-12QYDE51Q9LDP
+   OPENAI_API_KEY=your_openai_api_key_here
+   DEEPSEEK_API_KEY=your_deepseek_api_key_here
+   ```
+
+5. **Start the unified system**
    ```bash
    ./start.sh
    ```
@@ -173,6 +212,20 @@ cd Helix.AI
 The application will be available at:
 - **Frontend**: http://localhost:5173
 - **Backend API**: http://localhost:8001
+
+### Environment Variables
+
+The startup script automatically sets the following environment variables:
+
+- **EMR_CLUSTER_ID**: Set to `j-12QYDE51Q9LDP` for FastQC job submissions to AWS EMR
+- **REDIS_URL**: Automatically configured if Redis is available
+- **PYTHONPATH**: Configured to include the tools directory
+
+Common optional variables:
+- **HELIX_ASYNC_BYTES_THRESHOLD**: Bytes threshold for routing sync → async (default 100MB)
+- **HELIX_MOCK_MODE**: Set `1` to run without real LLM/cloud dependencies (used by unit tests)
+
+You can override these by setting them in a `.env` file in the project root or backend directory.
 
 ## 🧭 How Dispatch Works (Agent vs Submit)
 
@@ -277,14 +330,17 @@ The project includes automated CI/CD via GitHub Actions. To enable:
 Run the comprehensive test suite:
 
 ```bash
-# Backend tests
-python -m pytest tests/backend/
+# Unit tests (default; integration tests are deselected)
+pytest
+
+# Opt-in integration tests (requires backend running locally and network access)
+pytest -m integration
 
 # Frontend tests
 cd frontend && npm test
 
-# Integration tests
-python -m pytest tests/integration/
+# (Optional) run backend-only tests explicitly
+pytest tests/backend/
 ```
 
 ## 📚 Documentation
