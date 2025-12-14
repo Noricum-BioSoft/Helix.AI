@@ -305,6 +305,183 @@ class JobManager:
         logger.info(f"Job {job_id} submitted successfully with step_id {step_id}")
         return job_id
 
+    def submit_universal_emr_job(
+        self,
+        tool_name: str,
+        tool_args: Dict,
+        session_id: Optional[str] = None,
+        output_path: Optional[str] = None,
+        tools_bundle_s3: Optional[str] = None,
+        python_code_s3: Optional[str] = None,
+    ) -> str:
+        """
+        Submit a generic (non-FastQC) job to EMR using the universal runner.
+
+        The universal runner reads a payload from S3 and writes:
+        - results.json
+        - runner.log
+        to the output prefix.
+        """
+        if not tool_name:
+            raise ValueError("tool_name is required")
+
+        job_id = str(uuid.uuid4())
+
+        # Determine output path: session/job S3 prefix when possible
+        if not output_path and session_id:
+            try:
+                from history_manager import history_manager
+                session = history_manager.get_session(session_id)
+                if session:
+                    s3_bucket = session.get("metadata", {}).get("s3_bucket")
+                    s3_path = session.get("metadata", {}).get("s3_path")
+                    if s3_bucket and s3_path:
+                        output_path = f"s3://{s3_bucket}/{s3_path}{job_id}/"
+            except Exception as e:
+                logger.warning(f"Failed to derive session output_path: {e}")
+
+        # Fallback output path
+        if not output_path:
+            s3_bucket = os.getenv("S3_DATASET_BUCKET", "noricum-ngs-data")
+            output_path = f"s3://{s3_bucket}/emr-results/{job_id}/"
+
+        # Choose where to store payload/tools bundle (script bucket)
+        script_bucket = os.getenv("S3_SCRIPT_BUCKET") or os.getenv("S3_DATASET_BUCKET", "noricum-ngs-data")
+        payload_s3_uri = f"s3://{script_bucket}/emr-payloads/{job_id}.json"
+
+        # If tools bundle not provided, create + upload one from local tools/ directory
+        if not tools_bundle_s3:
+            tools_bundle_s3 = f"s3://{script_bucket}/emr-scripts/tools_bundle_{job_id}.zip"
+            try:
+                tools_dir = self.project_root / "tools"
+                if not tools_dir.exists():
+                    raise FileNotFoundError(f"tools directory not found at {tools_dir}")
+                import tempfile
+                with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
+                    tmp_zip_path = Path(tmp.name)
+                try:
+                    import zipfile
+                    with zipfile.ZipFile(tmp_zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                        for p in tools_dir.rglob("*.py"):
+                            # store as flat modules (no tools/ prefix)
+                            zf.write(p, arcname=p.name)
+                    # Upload bundle
+                    subprocess.run(
+                        ["aws", "s3", "cp", str(tmp_zip_path), tools_bundle_s3],
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                        check=True,
+                    )
+                finally:
+                    try:
+                        tmp_zip_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.warning(f"Failed to create tools bundle: {e}")
+                # runner can still execute python_code path if provided
+
+        payload = {
+            "tool_name": tool_name,
+            "arguments": tool_args or {},
+            "output_s3_prefix": output_path,
+            "tools_bundle_s3": tools_bundle_s3,
+            "python_code_s3": python_code_s3,
+        }
+
+        # Upload payload JSON
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tmpf:
+            tmpf.write(json.dumps(payload, indent=2))
+            tmp_payload_path = tmpf.name
+        try:
+            subprocess.run(
+                ["aws", "s3", "cp", tmp_payload_path, payload_s3_uri],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=True,
+            )
+        finally:
+            try:
+                os.unlink(tmp_payload_path)
+            except Exception:
+                pass
+
+        # Submit EMR step via script
+        cluster_id = os.getenv("EMR_CLUSTER_ID")
+        if not cluster_id:
+            raise ValueError("EMR_CLUSTER_ID environment variable not set.")
+
+        cluster_state = self._check_cluster_state(cluster_id)
+        if not cluster_state or cluster_state not in ("WAITING", "RUNNING"):
+            active_cluster_id = self._find_active_cluster()
+            if active_cluster_id:
+                cluster_id = active_cluster_id
+                os.environ["EMR_CLUSTER_ID"] = cluster_id
+            else:
+                new_cluster_id = self._create_emr_cluster()
+                if not new_cluster_id:
+                    raise RuntimeError(
+                        "Failed to create new EMR cluster. Please create a cluster manually using ./scripts/aws/setup-emr-cluster.sh"
+                    )
+                if not self._wait_for_cluster_ready(new_cluster_id, max_wait_minutes=15):
+                    raise RuntimeError(
+                        f"New EMR cluster {new_cluster_id} did not become ready within 15 minutes."
+                    )
+                cluster_id = new_cluster_id
+                os.environ["EMR_CLUSTER_ID"] = cluster_id
+
+        submit_script = self.project_root / "scripts" / "emr" / "submit-universal-job.sh"
+        if not submit_script.exists():
+            raise FileNotFoundError(f"Universal submit script not found at {submit_script}")
+
+        try:
+            result = subprocess.run(
+                [str(submit_script), payload_s3_uri, output_path],
+                env=os.environ.copy(),
+                cwd=str(self.project_root),
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            if result.returncode != 0:
+                err = result.stderr or result.stdout or "Unknown error"
+                raise RuntimeError(err)
+            step_id = self._extract_step_id(result.stdout)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("Universal job submission timed out after 60 seconds")
+
+        # Store job record
+        self.jobs[job_id] = {
+            "job_id": job_id,
+            "status": STATUS_SUBMITTED,
+            "type": "emr_universal",
+            "job_type": "tool",
+            "tool_name": tool_name,
+            "args": tool_args or {},
+            "infra": {
+                "provider": "aws",
+                "service": "emr",
+                "cluster_id": cluster_id,
+                "step_id": step_id,
+            },
+            "results": {},
+            "cluster_id": cluster_id,
+            "step_id": step_id,
+            "output_path": output_path,
+            "payload_s3_uri": payload_s3_uri,
+            "tools_bundle_s3": tools_bundle_s3,
+            "python_code_s3": python_code_s3,
+            "session_id": session_id,
+            "submitted_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "error": None,
+        }
+        self._save_job_metadata_to_local(job_id)
+        return job_id
+
     def _extract_step_id(self, output: str) -> Optional[str]:
         """
         Extract EMR step ID from script output.

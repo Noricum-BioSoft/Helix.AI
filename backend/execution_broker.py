@@ -82,8 +82,17 @@ class ExecutionBroker:
         )
 
         if decision.mode == "async" and req.tool_name == "fastqc_quality_analysis":
-            # Phase 1: only FastQC is wired for async (EMR job submission).
             result = await self._submit_fastqc_job(req)
+            return self._wrap_result(
+                tool_name=req.tool_name,
+                mode="async",
+                decision=decision,
+                inputs=inputs,
+                output=result,
+            )
+
+        if decision.mode == "async":
+            result = await self._submit_universal_emr_job(req)
             return self._wrap_result(
                 tool_name=req.tool_name,
                 mode="async",
@@ -311,6 +320,37 @@ class ExecutionBroker:
             "input_r1": input_r1,
             "input_r2": input_r2,
             "output": output,
+        }
+
+    async def _submit_universal_emr_job(self, req: ExecutionRequest) -> Dict[str, Any]:
+        """
+        Phase 2: generic EMR runner submission for non-FastQC tools.
+        """
+        from job_manager import get_job_manager
+
+        jm = get_job_manager()
+        tool_args = req.arguments or {}
+        session_id = tool_args.get("session_id") or req.session_id
+
+        if hasattr(asyncio, "to_thread"):
+            job_id = await asyncio.to_thread(
+                jm.submit_universal_emr_job,
+                req.tool_name,
+                tool_args,
+                session_id,
+            )
+        else:
+            loop = asyncio.get_event_loop()
+            job_id = await loop.run_in_executor(
+                None,
+                lambda: jm.submit_universal_emr_job(req.tool_name, tool_args, session_id),
+            )
+
+        return {
+            "type": "job",
+            "status": "submitted",
+            "job_id": job_id,
+            "message": f"EMR job submitted for tool '{req.tool_name}'.",
         }
 
     def _iter_strings(self, obj: Any) -> List[str]:

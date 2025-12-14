@@ -16,6 +16,12 @@ async def test_policy_threshold_env_var_promotes_to_async(monkeypatch):
     broker = ExecutionBroker(tool_executor=dummy_executor)
 
     # fake input asset discovery via local path size mock
+    # also stub submission so this test only exercises policy/decision logic
+    async def fake_submit(req):
+        return {"type": "job", "status": "submitted", "job_id": "job-async"}
+
+    monkeypatch.setattr(broker, "_submit_universal_emr_job", fake_submit)
+
     with patch.object(broker, "_try_get_local_size", return_value=11):
         out = await broker.execute_tool(
             ExecutionRequest(

@@ -53,12 +53,12 @@ Legend:
 ---
 
 ## Phase 2 — General-purpose async runner on EMR
-- [ ] Add a universal EMR runner entrypoint that:
-  - [ ] reads a payload (plan/tool + args) from S3 or step args
-  - [ ] fetches inputs from S3
-  - [ ] runs steps (initially single-step v1)
-  - [ ] writes `results.json` + logs + artifacts to S3
-- [ ] Add “EMR submitter” path for non-FastQC jobs
+- [x] Add a universal EMR runner entrypoint that:
+  - [x] reads a payload (plan/tool + args) from S3 or step args
+  - [x] fetches inputs from S3
+  - [x] runs steps (initially single-step v1)
+  - [x] writes `results.json` + logs + artifacts to S3
+- [x] Add “EMR submitter” path for non-FastQC jobs
 
 ---
 
