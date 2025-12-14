@@ -6,10 +6,10 @@ python-dotenv
 # Data processing
 pandas
 numpy
-requests
+requests>=2.31.0
 
 # Bioinformatics
-biopython
+biopython>=1.81
 plotly
 ete3
 seaborn
@@ -24,7 +24,11 @@ langgraph
 # Utilities
 markdownify
 tabulate
+boto3
+paramiko  # For SSH/EC2 execution
 
 # Testing
 pytest
 pytest-asyncio
+playwright>=1.40.0
+pytest-playwright>=0.4.3

@@ -32,7 +32,7 @@ class CommandRouter:
                 'description': 'Create phylogenetic tree'
             },
             'dna_vendor_research': {
-                'keywords': ['order', 'vendor', 'synthesis', 'test', 'assay', 'expression', 'function', 'binding'],
+                'keywords': ['order', 'vendor', 'synthesis', 'test', 'assay', 'function', 'binding'],
                 'description': 'Research DNA vendors and testing'
             },
             'synthesis_submission': {
@@ -54,6 +54,22 @@ class CommandRouter:
             'single_cell_analysis': {
                 'keywords': ['single cell', 'scRNA-seq', 'scRNAseq', 'single-cell', 'cell type', 'marker genes', 'differential expression', 'pathway analysis', 'batch correction', 'seurat', 'scpipeline'],
                 'description': 'Single-cell RNA-seq analysis using scPipeline'
+            },
+            'fetch_ncbi_sequence': {
+                'keywords': ['fetch sequence', 'get sequence', 'ncbi', 'accession', 'genbank', 'refseq', 'download sequence'],
+                'description': 'Fetch sequences from NCBI by accession'
+            },
+            'query_uniprot': {
+                'keywords': ['uniprot', 'protein database', 'query protein', 'get protein'],
+                'description': 'Query UniProt for protein sequences'
+            },
+            'lookup_go_term': {
+                'keywords': ['go term', 'gene ontology', 'lookup go', 'go:'],
+                'description': 'Lookup Gene Ontology terms'
+            },
+            'bulk_rnaseq_analysis': {
+                'keywords': ['bulk rna-seq', 'deseq2', 'differential expression', 'rna-seq analysis', 'transcriptomics'],
+                'description': 'Run bulk RNA-seq differential expression analysis'
             }
         }
         
@@ -67,6 +83,23 @@ class CommandRouter:
         """
         command_lower = command.lower()
         
+        # Tool inventory / "what tools do you have?" (HIGHEST PRIORITY)
+        if any(
+            phrase in command_lower
+            for phrase in [
+                "what tools do you have",
+                "what tools are available",
+                "list tools",
+                "show tools",
+                "your toolbox",
+                "toolbox",
+                "capabilities",
+                "what can you do",
+            ]
+        ):
+            print("🔧 Command router: Matched 'toolbox inventory' -> toolbox_inventory")
+            return "toolbox_inventory", {}
+
         # Priority-based matching to avoid conflicts
         # Check for specific phrases first, then general keywords
         
@@ -99,8 +132,27 @@ class CommandRouter:
             print(f"🔧 Command router: Matched 'alignment' -> sequence_alignment")
             return 'sequence_alignment', self._extract_parameters(command, 'sequence_alignment', session_context)
         
-        # Check for vendor research
-        if any(phrase in command_lower for phrase in ['order', 'vendor', 'synthesis', 'test', 'assay', 'expression', 'function', 'binding']):
+        # Check for bulk RNA-seq analysis (HIGH PRIORITY to avoid misrouting to vendor due to 'expression')
+        if any(phrase in command_lower for phrase in ['bulk rna-seq', 'deseq2', 'differential expression', 'rna-seq analysis', 'transcriptomics']):
+            print(f"🔧 Command router: Matched 'bulk RNA-seq' -> bulk_rnaseq_analysis")
+            return 'bulk_rnaseq_analysis', self._extract_parameters(command, 'bulk_rnaseq_analysis', session_context)
+        
+        # Check for FastQC analysis (HIGH PRIORITY - before vendor check to avoid false matches with "test" in paths)
+        if any(phrase in command_lower for phrase in ['fastqc', 'fastqc analysis', 'quality control analysis', 'perform fastqc', 'run fastqc']):
+            print(f"🔧 Command router: Matched 'FastQC' -> fastqc_quality_analysis")
+            return 'fastqc_quality_analysis', self._extract_parameters(command, 'fastqc_quality_analysis', session_context)
+        
+        # Check for vendor research (exclude "test" if it's in a file path)
+        # Check if "test" appears in an S3 path or file path context
+        is_test_in_path = bool(re.search(r's3://[^/]+/[^/]*test[^/]*/', command_lower) or 
+                               re.search(r'[/\\][^/\\]*test[^/\\]*[/\\]', command_lower))
+        
+        vendor_keywords = ['order', 'vendor', 'synthesis', 'assay', 'function', 'binding']
+        # Only include "test" if it's not in a file path
+        if not is_test_in_path:
+            vendor_keywords.append('test')
+        
+        if any(phrase in command_lower for phrase in vendor_keywords):
             print(f"🔧 Command router: Matched 'vendor' -> dna_vendor_research")
             return 'dna_vendor_research', self._extract_parameters(command, 'dna_vendor_research', session_context)
         
@@ -128,6 +180,21 @@ class CommandRouter:
         if any(phrase in command_lower for phrase in ['single cell', 'scrna-seq', 'scrnaseq', 'single-cell', 'cell type', 'marker genes', 'differential expression', 'pathway analysis', 'batch correction', 'seurat', 'scpipeline']):
             print(f"🔧 Command router: Matched 'single-cell analysis' -> single_cell_analysis")
             return 'single_cell_analysis', self._extract_parameters(command, 'single_cell_analysis', session_context)
+        
+        # Check for NCBI sequence fetch (HIGH PRIORITY)
+        if any(phrase in command_lower for phrase in ['fetch sequence', 'get sequence', 'ncbi', 'accession', 'genbank', 'refseq', 'download sequence']):
+            print(f"🔧 Command router: Matched 'NCBI sequence fetch' -> fetch_ncbi_sequence")
+            return 'fetch_ncbi_sequence', self._extract_parameters(command, 'fetch_ncbi_sequence', session_context)
+        
+        # Check for UniProt queries
+        if any(phrase in command_lower for phrase in ['uniprot', 'protein database', 'query protein', 'get protein']):
+            print(f"🔧 Command router: Matched 'UniProt query' -> query_uniprot")
+            return 'query_uniprot', self._extract_parameters(command, 'query_uniprot', session_context)
+        
+        # Check for GO term lookups
+        if any(phrase in command_lower for phrase in ['go term', 'gene ontology', 'go:', 'lookup go']):
+            print(f"🔧 Command router: Matched 'GO term lookup' -> lookup_go_term")
+            return 'lookup_go_term', self._extract_parameters(command, 'lookup_go_term', session_context)
         
         # Check for directed evolution
         if any(phrase in command_lower for phrase in ['directed evolution', 'evolution', 'protein engineering', 'dbtl', 'design build test learn']):
@@ -160,6 +227,7 @@ class CommandRouter:
     
     def _extract_parameters(self, command: str, tool_name: str, session_context: Dict[str, Any]) -> Dict[str, Any]:
         """Extract parameters for the specific tool."""
+        command_lower = command.lower()
         
         if tool_name == "mutate_sequence":
             # Extract sequence and number of variants
@@ -209,7 +277,7 @@ class CommandRouter:
                     fasta_sequences.append(f">seq_{i+1}")
                     fasta_sequences.append(seq)
                 sequences = "\n".join(fasta_sequences)
-                print(f"[DEBUG] FASTA string sent to alignment tool:\n{sequences}")
+                print(f"[DEBUG] FASTA string sent to alignment tool: {len(sequences)} chars, {len(session_context['mutated_sequences'])} sequences")
                 return {"sequences": sequences}
             else:
                 # Extract sequences from command - improved pattern to handle FASTA format
@@ -230,7 +298,7 @@ class CommandRouter:
                         if stripped:  # Only keep non-empty lines
                             cleaned_lines.append(stripped)
                     sequences = '\n'.join(cleaned_lines)
-                    print(f"🔧 Extracted FASTA sequences: {sequences}")
+                    print(f"🔧 Extracted FASTA sequences: {len(sequences)} chars, {sequences.count('>')} sequences")
                 
                 # Pattern 2: Extract simple sequences without headers
                 if not sequences:
@@ -241,7 +309,7 @@ class CommandRouter:
                         seq_list = sequences.split()
                         if len(seq_list) >= 2:
                             sequences = "\n".join([f">seq{i+1}\n{seq}" for i, seq in enumerate(seq_list)])
-                        print(f"🔧 Converted simple sequences to FASTA: {sequences}")
+                        print(f"🔧 Converted simple sequences to FASTA: {len(sequences)} chars, {len(seq_list)} sequences")
                 
                 # Pattern 3: Extract sequences after "align" or "perform" keywords
                 if not sequences:
@@ -253,7 +321,7 @@ class CommandRouter:
                         lines = sequences.split('\n')
                         cleaned_lines = [line.strip() for line in lines if line.strip()]
                         sequences = '\n'.join(cleaned_lines)
-                        print(f"🔧 Extracted sequences after 'perform': {sequences}")
+                        print(f"🔧 Extracted sequences after 'perform': {len(sequences)} chars, {sequences.count('>')} sequences")
                     
                     # Also try pattern for "align" keyword
                     if not sequences:
@@ -270,7 +338,7 @@ class CommandRouter:
                                 lines = sequences.split('\n')
                                 cleaned_lines = [line.strip() for line in lines if line.strip()]
                                 sequences = '\n'.join(cleaned_lines)
-                            print(f"🔧 Extracted sequences after align: {sequences}")
+                            print(f"🔧 Extracted sequences after align: {len(sequences)} chars, {sequences.count('>')} sequences")
                 
                 # Pattern 4: Extract sequences with target/reference format
                 if not sequences:
@@ -279,7 +347,7 @@ class CommandRouter:
                         seq1 = target_ref_match.group(1)
                         seq2 = target_ref_match.group(2)
                         sequences = f">target\n{seq1}\n>reference\n{seq2}"
-                        print(f"🔧 Extracted target/reference sequences: {sequences}")
+                        print(f"🔧 Extracted target/reference sequences: {len(sequences)} chars, 2 sequences")
                 
                 # Pattern 5: Extract inline FASTA format and convert to proper format
                 if not sequences:
@@ -298,7 +366,7 @@ class CommandRouter:
                                     name, seq = name_seq
                                     sequences.append(f">{name}\n{seq}")
                         sequences = "\n".join(sequences)
-                        print(f"🔧 Converted inline FASTA to proper format: {sequences}")
+                        print(f"🔧 Converted inline FASTA to proper format: {len(sequences)} chars, {len(parts)} sequences")
                 
                 if sequences:
                     return {"sequences": sequences}
@@ -337,14 +405,14 @@ class CommandRouter:
             sequences_match = re.search(r'(?:sequences?|File content?)[:\s]+([^"]+)', command, re.IGNORECASE | re.DOTALL)
             if sequences_match:
                 sequences_text = sequences_match.group(1).strip()
-                print(f"🔧 Extracted sequences for phylogenetic tree: '{sequences_text}'")
+                print(f"🔧 Extracted sequences for phylogenetic tree: {len(sequences_text)} chars, {sequences_text.count('>')} sequences")
             
             # Pattern 2: Extract FASTA content directly (if no sequences: prefix)
             if not sequences_text:
                 fasta_match = re.search(r'(>[\w\s\n>]+)', command, re.DOTALL)
                 if fasta_match:
                     sequences_text = fasta_match.group(1).strip()
-                    print(f"🔧 Extracted FASTA content directly: '{sequences_text}'")
+                    print(f"🔧 Extracted FASTA content directly: {len(sequences_text)} chars, {sequences_text.count('>')} sequences")
             
             if sequences_text:
                 # Convert simple space-separated sequences to FASTA format
@@ -352,17 +420,18 @@ class CommandRouter:
                     seq_list = sequences_text.split()
                     if len(seq_list) >= 2:
                         sequences_text = "\n".join([f">seq{i+1}\n{seq}" for i, seq in enumerate(seq_list)])
-                        print(f"🔧 Converted to FASTA format: '{sequences_text}'")
+                        print(f"🔧 Converted to FASTA format: {len(sequences_text)} chars, {len(seq_list)} sequences")
                 
                 # Convert inline FASTA format to proper format
                 elif '\n' not in sequences_text:
-                    print(f"🔧 Converting inline FASTA format: '{sequences_text}'")
+                    seq_count = sequences_text.count('>')
+                    print(f"🔧 Converting inline FASTA format: {len(sequences_text)} chars, {seq_count} sequences")
                     # Convert inline format to proper FASTA format
                     sequences_text = re.sub(r'>([^\s]+)\s+([^>]+)', r'>\1\n\2', sequences_text)
-                    print(f"🔧 After conversion: '{sequences_text}'")
+                    print(f"🔧 After conversion: {len(sequences_text)} chars")
                     # Clean up any remaining inline sequences
                     sequences_text = re.sub(r'>([^\s]+)\s+([^>]+)', r'>\1\n\2', sequences_text)
-                    print(f"🔧 Final result: '{sequences_text}'")
+                    print(f"🔧 Final result: {len(sequences_text)} chars, {sequences_text.count('>')} sequences")
                 
                 return {"aligned_sequences": sequences_text}
             
@@ -418,14 +487,14 @@ class CommandRouter:
             sequences_match = re.search(r'(?:sequences?|File content?)[:\s]+([^"]+)', command, re.IGNORECASE | re.DOTALL)
             if sequences_match:
                 sequences_text = sequences_match.group(1).strip()
-                print(f"🔧 Extracted sequences for clustering: '{sequences_text}'")
+                print(f"🔧 Extracted sequences for clustering: {len(sequences_text)} chars, {sequences_text.count('>')} sequences")
             
             # Pattern 2: Extract FASTA content directly
             if not sequences_text:
                 fasta_match = re.search(r'(>[\w\s\n>]+)', command, re.DOTALL)
                 if fasta_match:
                     sequences_text = fasta_match.group(1).strip()
-                    print(f"🔧 Extracted FASTA content for clustering: '{sequences_text}'")
+                    print(f"🔧 Extracted FASTA content for clustering: {len(sequences_text)} chars, {sequences_text.count('>')} sequences")
             
             if sequences_text:
                 # Convert simple space-separated sequences to FASTA format
@@ -433,7 +502,7 @@ class CommandRouter:
                     seq_list = sequences_text.split()
                     if len(seq_list) >= 2:
                         sequences_text = "\n".join([f">seq{i+1}\n{seq}" for i, seq in enumerate(seq_list)])
-                        print(f"🔧 Converted to FASTA format for clustering: '{sequences_text}'")
+                        print(f"🔧 Converted to FASTA format for clustering: {len(sequences_text)} chars, {len(seq_list)} sequences")
                 
                 # Convert inline FASTA format to proper format
                 elif '\n' not in sequences_text:
@@ -492,14 +561,14 @@ class CommandRouter:
             sequences_match = re.search(r'(?:sequences?|File content?)[:\s]+([^"]+)', command, re.IGNORECASE | re.DOTALL)
             if sequences_match:
                 sequences_text = sequences_match.group(1).strip()
-                print(f"🔧 Extracted sequences for variant selection: '{sequences_text}'")
+                print(f"🔧 Extracted sequences for variant selection: {len(sequences_text)} chars, {sequences_text.count('>')} sequences")
             
             # Pattern 2: Extract FASTA content directly
             if not sequences_text:
                 fasta_match = re.search(r'(>[\w\s\n>]+)', command, re.DOTALL)
                 if fasta_match:
                     sequences_text = fasta_match.group(1).strip()
-                    print(f"🔧 Extracted FASTA content for variant selection: '{sequences_text}'")
+                    print(f"🔧 Extracted FASTA content for variant selection: {len(sequences_text)} chars, {sequences_text.count('>')} sequences")
             
             if sequences_text:
                 # Convert simple space-separated sequences to FASTA format
@@ -507,7 +576,7 @@ class CommandRouter:
                     seq_list = sequences_text.split()
                     if len(seq_list) >= 2:
                         sequences_text = "\n".join([f">seq{i+1}\n{seq}" for i, seq in enumerate(seq_list)])
-                        print(f"🔧 Converted to FASTA format for variant selection: '{sequences_text}'")
+                        print(f"🔧 Converted to FASTA format for variant selection: {len(sequences_text)} chars, {len(seq_list)} sequences")
                 
                 # Convert inline FASTA format to proper format
                 elif '\n' not in sequences_text:
@@ -522,6 +591,45 @@ class CommandRouter:
                 aligned_sequences = "\n".join([f">mutant_{i+1}\n{seq}" for i, seq in enumerate(session_context["mutated_sequences"])])
             
             return {"aligned_sequences": aligned_sequences, "num_variants": num_variants}
+        
+        elif tool_name == "fastqc_quality_analysis":
+            # Extract R1 and R2 paths from command
+            # Look for S3 paths or file paths
+            r1_path = None
+            r2_path = None
+            output_path = None
+            
+            # Pattern 1: "forward reads are available here: s3://..."
+            r1_match = re.search(r'(?:forward|r1|read\s*1)[^:]*:\s*(s3://[^\s]+|/[^\s]+)', command, re.IGNORECASE)
+            if r1_match:
+                r1_path = r1_match.group(1).strip()
+            
+            # Pattern 2: "reverse reads are available here: s3://..."
+            r2_match = re.search(r'(?:reverse|r2|read\s*2)[^:]*:\s*(s3://[^\s]+|/[^\s]+)', command, re.IGNORECASE)
+            if r2_match:
+                r2_path = r2_match.group(1).strip()
+            
+            # Pattern 3: Look for any S3 paths containing R1 or R2
+            if not r1_path:
+                r1_match = re.search(r's3://[^\s]*(?:R1|r1|_1\.fq|mate_R1)[^\s]*', command, re.IGNORECASE)
+                if r1_match:
+                    r1_path = r1_match.group(0).strip()
+            
+            if not r2_path:
+                r2_match = re.search(r's3://[^\s]*(?:R2|r2|_2\.fq|mate_R2)[^\s]*', command, re.IGNORECASE)
+                if r2_match:
+                    r2_path = r2_match.group(0).strip()
+            
+            # Extract output path if mentioned
+            output_match = re.search(r'(?:output|results|save)[^:]*:\s*(s3://[^\s]+)', command, re.IGNORECASE)
+            if output_match:
+                output_path = output_match.group(1).strip()
+            
+            return {
+                "input_r1": r1_path or "",
+                "input_r2": r2_path or "",
+                "output": output_path
+            }
         
         elif tool_name == "dna_vendor_research":
             return {
@@ -762,27 +870,50 @@ class CommandRouter:
         
         elif tool_name == "read_merging":
             # Extract forward and reverse reads
-            # Pattern 1: Extract from "Forward reads (filename):\n{content}" and "Reverse reads (filename):\n{content}"
+            # Pattern 1: Extract S3 paths or file paths from "R1: s3://..." or "R2: s3://..."
             forward_reads = ""
             reverse_reads = ""
             
-            forward_section = re.search(r'Forward reads\s*\([^)]+\):\s*\n', command, re.IGNORECASE)
-            if forward_section:
-                start_pos = forward_section.end()
-                next_section = re.search(r'\n\n(?:Reverse reads|Forward reads|File content)', command[start_pos:], re.IGNORECASE)
-                if next_section:
-                    forward_reads = command[start_pos:start_pos + next_section.start()].strip()
-                else:
-                    forward_reads = command[start_pos:].strip()
+            # Pattern 1a: Extract S3 paths from "R1: s3://..." format
+            r1_match = re.search(r'R1\s*:\s*(s3://[^\s]+|/[^\s]+)', command, re.IGNORECASE)
+            if r1_match:
+                forward_reads = r1_match.group(1).strip()
             
-            reverse_section = re.search(r'Reverse reads\s*\([^)]+\):\s*\n', command, re.IGNORECASE)
-            if reverse_section:
-                start_pos = reverse_section.end()
-                next_section = re.search(r'\n\n(?:Forward reads|Reverse reads|File content)', command[start_pos:], re.IGNORECASE)
-                if next_section:
-                    reverse_reads = command[start_pos:start_pos + next_section.start()].strip()
-                else:
-                    reverse_reads = command[start_pos:].strip()
+            r2_match = re.search(r'R2\s*:\s*(s3://[^\s]+|/[^\s]+)', command, re.IGNORECASE)
+            if r2_match:
+                reverse_reads = r2_match.group(1).strip()
+            
+            # Pattern 1b: Extract S3 paths containing R1 or R2 in the path
+            if not forward_reads:
+                r1_path_match = re.search(r's3://[^\s]*(?:R1|r1|_1\.fq|mate_R1)[^\s]*', command, re.IGNORECASE)
+                if r1_path_match:
+                    forward_reads = r1_path_match.group(0).strip()
+            
+            if not reverse_reads:
+                r2_path_match = re.search(r's3://[^\s]*(?:R2|r2|_2\.fq|mate_R2)[^\s]*', command, re.IGNORECASE)
+                if r2_path_match:
+                    reverse_reads = r2_path_match.group(0).strip()
+            
+            # Pattern 2: Extract from "Forward reads (filename):\n{content}" and "Reverse reads (filename):\n{content}"
+            if not forward_reads:
+                forward_section = re.search(r'Forward reads\s*\([^)]+\):\s*\n', command, re.IGNORECASE)
+                if forward_section:
+                    start_pos = forward_section.end()
+                    next_section = re.search(r'\n\n(?:Reverse reads|Forward reads|File content)', command[start_pos:], re.IGNORECASE)
+                    if next_section:
+                        forward_reads = command[start_pos:start_pos + next_section.start()].strip()
+                    else:
+                        forward_reads = command[start_pos:].strip()
+            
+            if not reverse_reads:
+                reverse_section = re.search(r'Reverse reads\s*\([^)]+\):\s*\n', command, re.IGNORECASE)
+                if reverse_section:
+                    start_pos = reverse_section.end()
+                    next_section = re.search(r'\n\n(?:Forward reads|Reverse reads|File content)', command[start_pos:], re.IGNORECASE)
+                    if next_section:
+                        reverse_reads = command[start_pos:start_pos + next_section.start()].strip()
+                    else:
+                        reverse_reads = command[start_pos:].strip()
             
             # If not found in command, try to get from session context (trimmed reads from previous step)
             if not forward_reads or not reverse_reads:
@@ -841,7 +972,9 @@ class CommandRouter:
             return {
                 "forward_reads": forward_reads,
                 "reverse_reads": reverse_reads,
-                "min_overlap": min_overlap
+                "min_overlap": min_overlap,
+                "command": command,  # Include original command for tool-generator-agent
+                "original_command": command  # Also include as original_command
             }
         
         elif tool_name == "quality_assessment":
@@ -895,8 +1028,6 @@ class CommandRouter:
         
         elif tool_name == "single_cell_analysis":
             # Extract single-cell analysis parameters
-            command_lower = command.lower()
-            
             # Determine analysis steps
             steps = []
             if "marker" in command_lower or "markers" in command_lower:
@@ -961,6 +1092,75 @@ class CommandRouter:
                 "nfeatures": nfeatures,
                 "command": command
             }
+        
+        elif tool_name == "fetch_ncbi_sequence":
+            params = {}
+            
+            # Extract accession number (common patterns)
+            accession_pattern = r'\b([A-Z]{1,2}_?\d+\.?\d*)\b'
+            matches = re.findall(accession_pattern, command)
+            if matches:
+                params["accession"] = matches[0]
+            
+            # Determine database from command
+            if any(word in command_lower for word in ['protein', 'prot', 'aa', 'amino']):
+                params["database"] = "protein"
+            else:
+                params["database"] = "nucleotide"
+            
+            return params
+        
+        elif tool_name == "query_uniprot":
+            # Use accession if present, otherwise use command text as query
+            params = {}
+            accession_match = re.search(r'\b[A-NR-Z][0-9]{5}\b|\b[OPQ][0-9][A-Z0-9]{3}[0-9]\b', command, re.IGNORECASE)
+            if accession_match:
+                params["query"] = accession_match.group(0)
+            else:
+                # Strip common leading phrases
+                cleaned = re.sub(r'\b(query|search|get|lookup|find)\b', '', command_lower, flags=re.IGNORECASE).strip()
+                cleaned = re.sub(r'\buniprot\b', '', cleaned, flags=re.IGNORECASE).strip()
+                params["query"] = cleaned or command
+            params["format"] = "fasta"
+            params["limit"] = 10
+            return params
+        
+        elif tool_name == "lookup_go_term":
+            params = {}
+            go_match = re.search(r'GO:\d{7}', command, re.IGNORECASE)
+            if go_match:
+                params["go_id"] = go_match.group(0).upper()
+            else:
+                params["go_id"] = command.strip()
+            return params
+        
+        elif tool_name == "bulk_rnaseq_analysis":
+            params = {}
+            
+            # Extract file paths (first two CSV-like tokens)
+            csv_paths = re.findall(r'[\w./-]+\.csv', command)
+            if len(csv_paths) >= 1:
+                params["count_matrix"] = csv_paths[0]
+            if len(csv_paths) >= 2:
+                params["sample_metadata"] = csv_paths[1]
+            
+            # Fallback to session context if available
+            if not params.get("count_matrix"):
+                params["count_matrix"] = session_context.get("count_matrix", "")
+            if not params.get("sample_metadata"):
+                params["sample_metadata"] = session_context.get("sample_metadata", "")
+            
+            # Extract design formula and alpha
+            design_match = re.search(r'design\s*[:=]\s*([~\w+\s]+)', command, re.IGNORECASE)
+            if design_match:
+                params["design_formula"] = design_match.group(1).strip()
+            else:
+                params["design_formula"] = "~condition"
+            
+            alpha_match = re.search(r'alpha\s*[:=]\s*([\d.]+)', command, re.IGNORECASE)
+            params["alpha"] = float(alpha_match.group(1)) if alpha_match else 0.05
+            
+            return params
         
         else:
             return {"command": command} 
