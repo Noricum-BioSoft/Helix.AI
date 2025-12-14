@@ -196,7 +196,14 @@ cd Helix.AI
 
 4. **Configure environment variables** (optional)
    
-   The startup script automatically sets the EMR cluster ID (`EMR_CLUSTER_ID=j-12QYDE51Q9LDP`) for FastQC jobs. If you need to use a different cluster or set additional variables, create a `.env` file in the project root:
+   The startup script automatically sets the EMR cluster ID (`EMR_CLUSTER_ID=j-12QYDE51Q9LDP`) for FastQC jobs.
+   
+   If you need to **set up AWS infrastructure (EMR + EC2)** or use a different cluster/instance, we have dedicated docs + scripts:
+   - **EMR cluster setup**: see `docs/EMR_SETUP_GUIDE.md` (script: `scripts/aws/setup-emr-cluster.sh`)
+   - **EC2 execution setup (bioinformatics tools box)**: see `docs/EC2_EXECUTION_SETUP.md` (scripts: `scripts/aws/create-bioinformatics-ec2.sh`, `scripts/aws/setup-existing-instance.sh`)
+   - **AWS scripts quick-start**: `scripts/aws/QUICK_START.md`
+   
+   To override defaults or set additional variables, create a `.env` file in the project root:
    ```bash
    # .env file
    EMR_CLUSTER_ID=j-12QYDE51Q9LDP
