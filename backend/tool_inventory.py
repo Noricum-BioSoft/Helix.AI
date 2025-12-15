@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from tool_schemas import list_tool_schemas
+from backend.tool_schemas import list_tool_schemas
 
 
 # Keep in sync with:

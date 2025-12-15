@@ -6,15 +6,8 @@ integrating with the platform's command routing system.
 """
 
 import json
-import sys
-import os
 from typing import Dict, List, Any, Optional
 from datetime import datetime
-
-# Add the workflow engine directory to the path
-# sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'workflow-engine'))
-
-# from directed_evolution_workflow import DirectedEvolutionWorkflow, create_workflow_config
 
 # Placeholder for directed evolution workflow (removed during microservices cleanup)
 class DirectedEvolutionWorkflow:

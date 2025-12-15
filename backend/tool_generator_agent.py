@@ -310,8 +310,12 @@ async def _execute_generated_code(
     4. Captures output and errors
     5. Cleans up temporary files
     """
-    # Check if EC2 execution is enabled
-    use_ec2 = os.getenv('HELIX_USE_EC2', 'false').lower() == 'true'
+    # Check if EC2 execution is enabled.
+    # In unit tests we default to mock mode; never attempt real EC2/SSH there.
+    if os.getenv("HELIX_MOCK_MODE") == "1":
+        use_ec2 = False
+    else:
+        use_ec2 = os.getenv('HELIX_USE_EC2', 'false').lower() == 'true'
     
     if use_ec2:
         try:

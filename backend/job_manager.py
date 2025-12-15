@@ -96,7 +96,7 @@ class JobManager:
         # Determine output path: use session S3 path if session_id provided and output_path is None
         if not output_path and session_id:
             try:
-                from history_manager import history_manager
+                from backend.history_manager import history_manager
                 session = history_manager.get_session(session_id)
                 if session:
                     s3_bucket = session.get("metadata", {}).get("s3_bucket")
@@ -226,7 +226,7 @@ class JobManager:
         job_local_path = None
         if session_id:
             try:
-                from history_manager import history_manager
+                from backend.history_manager import history_manager
                 # Get session (this will ensure directory exists)
                 session = history_manager.get_session(session_id)
                 if session:
@@ -331,7 +331,7 @@ class JobManager:
         # Determine output path: session/job S3 prefix when possible
         if not output_path and session_id:
             try:
-                from history_manager import history_manager
+                from backend.history_manager import history_manager
                 session = history_manager.get_session(session_id)
                 if session:
                     s3_bucket = session.get("metadata", {}).get("s3_bucket")
@@ -888,7 +888,7 @@ class JobManager:
             session_s3_path = None
             if session_id:
                 try:
-                    from history_manager import history_manager
+                    from backend.history_manager import history_manager
                     session = history_manager.get_session(session_id)
                     if session:
                         s3_bucket = session.get("metadata", {}).get("s3_bucket")
@@ -911,9 +911,7 @@ class JobManager:
             logger.info(f"Generating HTML visualizations for job {job_id}, uploading to {session_s3_path}")
             
             # Import visualization functions
-            import sys
             import tempfile
-            import shutil
             visualization_script = self.project_root / "scripts" / "emr" / "visualize_fastqc_results.py"
             
             if not visualization_script.exists():
@@ -924,8 +922,6 @@ class JobManager:
             # Note: This directory will be automatically deleted when the 'with' block exits
             with tempfile.TemporaryDirectory() as temp_dir:
                 logger.info(f"Created temporary directory for HTML generation: {temp_dir}")
-                # Import the visualization module
-                sys.path.insert(0, str(visualization_script.parent))
                 try:
                     import importlib.util
                     spec = importlib.util.spec_from_file_location("visualize_fastqc_results", visualization_script)
@@ -1088,7 +1084,7 @@ class JobManager:
             return None
         
         try:
-            from history_manager import history_manager
+            from backend.history_manager import history_manager
             # Get session (this will ensure session directory exists)
             session = history_manager.get_session(session_id)
             

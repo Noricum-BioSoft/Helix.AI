@@ -1,14 +1,9 @@
 import re
 from typing import Dict, Any, Optional, Tuple
-import sys
 import os
 
-# Add the project root to Python path to access tools
-project_root = os.path.join(os.path.dirname(__file__), '..')
-sys.path.insert(0, project_root)
-
 # Import directed evolution handler
-from directed_evolution_handler import DirectedEvolutionHandler
+from backend.directed_evolution_handler import DirectedEvolutionHandler
 
 class CommandRouter:
     """Simple keyword-based command router to replace ChatGPT."""

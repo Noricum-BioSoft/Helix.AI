@@ -17,14 +17,11 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-# Add the current directory to Python path for imports
-sys.path.append(str(Path(__file__).parent))
+from backend.history_manager import history_manager
+from backend.tool_schemas import list_tool_schemas
+from backend.context_builder import _truncate_sequence
 
-from history_manager import history_manager
-from tool_schemas import list_tool_schemas
-from context_builder import _truncate_sequence
-
-from execution_broker import ExecutionBroker, ExecutionRequest
+from backend.execution_broker import ExecutionBroker, ExecutionRequest
 
 
 def _get_bioagent_handle_command():
@@ -32,7 +29,7 @@ def _get_bioagent_handle_command():
     Lazy import of BioAgent to avoid importing heavy LLM dependencies at module import time.
     This keeps lightweight endpoints (like /health, /mcp/tools) working in sandbox/CI.
     """
-    from agent import handle_command  # local import by design
+    from backend.agent import handle_command  # local import by design
     return handle_command
 
 def _truncate_sequences_in_dict(obj: Any, max_length: int = 100) -> Any:
@@ -835,7 +832,7 @@ async def execute(req: CommandRequest, request: Request):
                 )
                 return CustomJSONResponse(standard_response)
 
-            from command_router import CommandRouter
+            from backend.command_router import CommandRouter
             command_router = CommandRouter()
 
             # If this looks like a workflow, build a Plan IR and execute via broker.
@@ -1273,7 +1270,7 @@ async def select_variants_mcp(req: VariantSelectionRequest):
         
         # Add tools directory to path
         tools_path = str((Path(__file__).resolve().parent.parent / "tools").resolve())
-        sys.path.insert(0, tools_path)
+        # tools/ is injected via PYTHONPATH by start.sh (and by tests/conftest.py in unit tests)
         
         import variant_selection
         
@@ -1316,7 +1313,7 @@ async def parse_command_mcp(req: CommandParseRequest):
     try:
         # Add tools directory to path
         tools_path = str((Path(__file__).resolve().parent.parent / "tools").resolve())
-        sys.path.insert(0, tools_path)
+        # tools/ is injected via PYTHONPATH by start.sh (and by tests/conftest.py in unit tests)
         
         import command_parser
         
@@ -1341,7 +1338,7 @@ async def execute_command_mcp(req: CommandExecuteRequest):
     try:
         # Add tools directory to path
         tools_path = str((Path(__file__).resolve().parent.parent / "tools").resolve())
-        sys.path.insert(0, tools_path)
+        # tools/ is injected via PYTHONPATH by start.sh (and by tests/conftest.py in unit tests)
         
         import command_executor
         
@@ -1365,7 +1362,7 @@ async def handle_natural_command_mcp(req: NaturalCommandRequest):
     try:
         # Add tools directory to path
         tools_path = str((Path(__file__).resolve().parent.parent / "tools").resolve())
-        sys.path.insert(0, tools_path)
+        # tools/ is injected via PYTHONPATH by start.sh (and by tests/conftest.py in unit tests)
         
         import command_handler
         
@@ -1413,7 +1410,7 @@ async def plasmid_visualization_mcp(req: PlasmidVisualizationRequest):
         
         # Add tools directory to path
         tools_path = str((Path(__file__).resolve().parent.parent / "tools").resolve())
-        sys.path.insert(0, tools_path)
+        # tools/ is injected via PYTHONPATH by start.sh (and by tests/conftest.py in unit tests)
         
         import plasmid_visualizer
         
@@ -1468,7 +1465,7 @@ async def plasmid_for_representatives_mcp(req: PlasmidForRepresentativesRequest)
         
         # Add tools directory to path
         tools_path = str((Path(__file__).resolve().parent.parent / "tools").resolve())
-        sys.path.insert(0, tools_path)
+        # tools/ is injected via PYTHONPATH by start.sh (and by tests/conftest.py in unit tests)
         
         import plasmid_visualizer
         
@@ -1612,7 +1609,7 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
     """Call an MCP tool and return the result."""
     # Add tools directory to path
     tools_path = str((Path(__file__).resolve().parent.parent / "tools").resolve())
-    sys.path.insert(0, tools_path)
+    # tools/ is injected via PYTHONPATH by start.sh (and by tests/conftest.py in unit tests)
     
     if tool_name == "toolbox_inventory":
         from tool_inventory import build_toolbox_inventory, format_toolbox_inventory_markdown
@@ -1767,7 +1764,7 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
         if use_tool_generator:
             # Use tool-generator-agent for S3 paths
             logger.info(f"🔧 read_merging tool detected S3 paths, routing to tool-generator-agent...")
-            from tool_generator_agent import generate_and_execute_tool
+            from backend.tool_generator_agent import generate_and_execute_tool
             
             # Use original command if available, otherwise reconstruct
             if original_command:
@@ -2087,7 +2084,7 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
         # Unknown tool - try tool-generator-agent
         logger.info(f"🔧 Unknown tool '{tool_name}', attempting tool-generator-agent...")
         try:
-            from tool_generator_agent import generate_and_execute_tool
+            from backend.tool_generator_agent import generate_and_execute_tool
             from backend.intent_classifier import classify_intent
             
             # Build command from tool_name and arguments
@@ -2289,7 +2286,7 @@ async def copy_job_results_to_session(job_id: str, req: Optional[CopyToSessionRe
     """
     try:
         from job_manager import get_job_manager
-        from history_manager import history_manager
+        from backend.history_manager import history_manager
         
         job_manager = get_job_manager()
         

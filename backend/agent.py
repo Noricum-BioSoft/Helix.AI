@@ -62,7 +62,7 @@ class OutputFormatter(BaseModel):
 @tool
 def toolbox_inventory() -> Dict:
     """List all tools Helix.AI has access to (registered MCP tools, discovered @tool functions, and local/EC2 CLI tools)."""
-    from tool_inventory import build_toolbox_inventory, format_toolbox_inventory_markdown
+    from backend.tool_inventory import build_toolbox_inventory, format_toolbox_inventory_markdown
     inv = build_toolbox_inventory()
     return {
         "text": format_toolbox_inventory_markdown(inv),
@@ -77,9 +77,6 @@ def sequence_alignment(sequences: str) -> Dict:
     """Performs a sequence alignment on a given set of sequences."""
     
     # Import the alignment function
-    import sys
-    import os
-    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'tools'))
     from alignment import run_alignment_tool
     
     result = run_alignment_tool(sequences)
@@ -101,9 +98,6 @@ def mutate_sequence(sequence: str, num_variants: int = 96) -> Dict:
     """Mutates a given sequence and returns the specified number of variants. Use this when you need to CREATE new sequence variants from an input sequence."""
     
     # Import the mutation function
-    import sys
-    import os
-    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'tools'))
     from mutations import run_mutation_raw
     
     result = run_mutation_raw(sequence, num_variants)
@@ -127,9 +121,6 @@ def dna_vendor_research(command: str, sequence_length: int = None, quantity: str
     """Research DNA synthesis vendors and testing options for experimental validation. Use this when the user wants to ORDER sequences, find VENDORS, or research TESTING options. Keywords: order, vendor, synthesis, test, assay, expression, function, binding."""
     
     # Import the research function
-    import sys
-    import os
-    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'tools'))
     from dna_vendor_research import run_dna_vendor_research_raw
     
     result = run_dna_vendor_research_raw(command, sequence_length, quantity)
@@ -156,9 +147,6 @@ def phylogenetic_tree(aligned_sequences: str) -> Dict:
     print(f"🔧 Agent phylogenetic_tree called with aligned_sequences: '{aligned_sequences}'")
     
     # Import the phylogenetic tree function
-    import sys
-    import os
-    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'tools'))
     from phylogenetic_tree import run_phylogenetic_tree
     
     result = run_phylogenetic_tree(aligned_sequences)
@@ -190,9 +178,6 @@ def sequence_selection(aligned_sequences: str, selection_type: str = "random", n
     print(f"🔧 num_sequences: {num_sequences}")
     
     # Import the sequence selection function
-    import sys
-    import os
-    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'tools'))
     from sequence_selection import run_sequence_selection_raw
     
     result = run_sequence_selection_raw(aligned_sequences, selection_type, num_sequences)
@@ -220,9 +205,6 @@ def synthesis_submission(sequences: str, vendor_preference: str = None, quantity
     """Submit sequences for DNA synthesis and get pricing quote. Quantity options: standard, large, custom. Delivery options: rush, standard, economy."""
     
     # Import the synthesis submission function
-    import sys
-    import os
-    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'tools'))
     from synthesis_submission import run_synthesis_submission_raw
     
     result = run_synthesis_submission_raw(sequences, vendor_preference, quantity, delivery_time)
@@ -267,9 +249,6 @@ def plasmid_visualization(vector_name: str = None, cloning_sites: str = "", inse
     """
     
     # Import the plasmid visualization function
-    import sys
-    import os
-    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'tools'))
     from plasmid_visualizer import run_plasmid_visualization_raw
     
     result = run_plasmid_visualization_raw(
@@ -298,9 +277,6 @@ def plasmid_for_representatives(representatives: List[str], aligned_sequences: s
     """Create plasmid visualizations for representative sequences from clustering analysis."""
     
     # Import the plasmid visualization function
-    import sys
-    import os
-    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'tools'))
     from plasmid_visualizer import create_plasmid_for_representatives
     
     result = create_plasmid_for_representatives(representatives, aligned_sequences, vector_name, cloning_sites)
@@ -347,9 +323,6 @@ def single_cell_analysis(
     """
     
     # Import the single-cell analysis function
-    import sys
-    import os
-    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'tools'))
     from single_cell_analysis import analyze_single_cell_data, process_single_cell_command
     
     # If no data file is provided, return informational response about single-cell analysis
@@ -459,9 +432,6 @@ def fetch_ncbi_sequence(
     """
     
     # Import the NCBI tool function
-    import sys
-    import os
-    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'tools'))
     from ncbi_tools import fetch_sequence_from_ncbi
     
     result = fetch_sequence_from_ncbi(accession, database)
@@ -511,9 +481,6 @@ def query_uniprot(
 ) -> Dict:
     """Query UniProt protein database for sequences and metadata."""
     
-    import sys
-    import os
-    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'tools'))
     from uniprot_tools import query_uniprot as query_uniprot_api
     
     result = query_uniprot_api(query, format=format, limit=limit)
@@ -539,9 +506,6 @@ def query_uniprot(
 def lookup_go_term(go_id: str) -> Dict:
     """Lookup Gene Ontology (GO) term details by ID."""
     
-    import sys
-    import os
-    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'tools'))
     from go_tools import lookup_go_term as lookup_go
     
     result = lookup_go(go_id)
@@ -571,9 +535,6 @@ def bulk_rnaseq_analysis(
 ) -> Dict:
     """Run bulk RNA-seq differential expression analysis using DESeq2."""
     
-    import sys
-    import os
-    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'tools'))
     from bulk_rnaseq import run_deseq2_analysis
     
     if not count_matrix or not sample_metadata:
@@ -988,7 +949,7 @@ async def handle_command(command: str, session_id: str = "default", session_cont
                 return result
 
             # Use relative import since we're in the backend directory
-            from tool_generator_agent import generate_and_execute_tool
+            from backend.tool_generator_agent import generate_and_execute_tool
             
             tool_result = await generate_and_execute_tool(
                 command=command,
@@ -1200,9 +1161,6 @@ def _maybe_handle_vendor_request(command: str):
     if '96' in command or 'variants' in command:
         sequence_length = 1000
 
-    import sys
-    import os
-    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'tools'))
     from dna_vendor_research import run_dna_vendor_research_raw
 
     result = run_dna_vendor_research_raw(command, sequence_length, 'large')

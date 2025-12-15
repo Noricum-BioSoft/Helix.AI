@@ -213,8 +213,8 @@ cd ..
 
 # Start backend server
 print_status "Starting backend server..."
-cd backend
-export PYTHONPATH="../tools:$PYTHONPATH"
+# Run backend as a package module to keep imports clean (`from backend...`).
+export PYTHONPATH="$(pwd)/tools:$PYTHONPATH"
 
 # Set environment variables
 if [ "$USE_REDIS" = true ]; then
@@ -225,9 +225,8 @@ else
 fi
 
 # Start the enhanced MCP backend
-python main_with_mcp.py &
+python -m backend.main_with_mcp &
 BACKEND_PID=$!
-cd ..
 
 # Wait for backend
 if wait_for_service "http://localhost:$BACKEND_PORT/health" "Backend server"; then
