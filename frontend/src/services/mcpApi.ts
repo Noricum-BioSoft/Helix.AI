@@ -68,6 +68,17 @@ export const mcpApi = {
     return response.data;
   },
 
+  // Jobs API (async jobs like EMR FastQC)
+  getJob: async (jobId: string) => {
+    const response = await axios.get(`${API_BASE_URL}/jobs/${jobId}`);
+    return response.data;
+  },
+
+  getJobResults: async (jobId: string) => {
+    const response = await axios.get(`${API_BASE_URL}/jobs/${jobId}/results`);
+    return response.data;
+  },
+
   // Sequence alignment
   sequenceAlignment: async (params: { sequences: string; algorithm?: string }, sessionId?: string) => {
     const response = await axios.post(`${API_BASE_URL}/mcp/sequence-alignment`, { ...params, session_id: sessionId });

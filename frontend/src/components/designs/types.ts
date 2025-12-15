@@ -26,6 +26,9 @@ export interface PromptDesignProps {
   onExampleClick: (command: string) => void;
   examplesOpen: boolean;
   onToggleExamples: () => void;
+  jobsOpen: boolean;
+  onToggleJobs: () => void;
+  jobsCount?: number;
   workflowContextContent: React.ReactNode;
   historyContent: React.ReactNode;
 }

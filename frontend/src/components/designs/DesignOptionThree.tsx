@@ -26,11 +26,13 @@ export const DesignOptionThree: React.FC<PromptDesignProps> = ({
   onExampleClick,
   examplesOpen,
   onToggleExamples,
+  jobsOpen,
+  onToggleJobs,
+  jobsCount,
   workflowContextContent,
   historyContent,
 }) => {
   const [activeTab, setActiveTab] = useState<'prompt' | 'upload'>('prompt');
-  const examplesToggleLabel = examplesOpen ? 'Collapse Examples' : 'Expand Examples';
 
   const renderToggleButton = (isOpen: boolean, onToggle: () => void) => (
     <Button
@@ -106,9 +108,6 @@ export const DesignOptionThree: React.FC<PromptDesignProps> = ({
     <div className="design-option design-option-three d-flex flex-column gap-4">
       <div className="d-flex justify-content-between align-items-center">
         <h2 className="h4 mb-0">Workspace Tabs</h2>
-        <Button variant="outline-primary" size="sm" onClick={onToggleExamples}>
-          {examplesToggleLabel}
-        </Button>
       </div>
 
       <Card className="shadow-sm border-0">
@@ -150,6 +149,11 @@ export const DesignOptionThree: React.FC<PromptDesignProps> = ({
                   onAgentSubmit={onAgentSubmit}
                   placeholder={placeholder}
                   dragActive={dragActive}
+                  examplesOpen={examplesOpen}
+                  onToggleExamples={onToggleExamples}
+                  jobsOpen={jobsOpen}
+                  onToggleJobs={onToggleJobs}
+                  jobsCount={jobsCount}
                   onDropZoneDragOver={onDropZoneDragOver}
                   onDropZoneDragLeave={onDropZoneDragLeave}
                   onDropZoneDrop={onDropZoneDrop}

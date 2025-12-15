@@ -16,6 +16,7 @@ import { DesignOptionOne, DesignOptionTwo, DesignOptionThree } from './component
 import type { PromptDesignProps, QuickExample } from './components/designs';
 import { getExampleWithSequences, sampleSequences } from './utils/sampleSequences';
 import { theme } from './theme';
+import { JobsPanel } from './components/JobsPanel';
 
 interface HistoryItem {
   input: string;
@@ -56,6 +57,7 @@ function App() {
   const [isInitialized, setIsInitialized] = useState(false);
   const [selectedDesign, setSelectedDesign] = useState<DesignOptionId>('integrated');
   const [examplesOpen, setExamplesOpen] = useState(false);
+  const [jobsOpen, setJobsOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const SelectedDesignComponent = useMemo(() => {
     const option = DESIGN_OPTIONS.find(option => option.id === selectedDesign);
@@ -69,6 +71,27 @@ function App() {
   const handleToggleExamples = () => {
     setExamplesOpen(prev => !prev);
   };
+
+  const handleToggleJobs = () => {
+    setJobsOpen(prev => !prev);
+  };
+
+  const extractJobIds = (obj: any, out: Set<string>) => {
+    if (!obj) return;
+    if (typeof obj === 'object') {
+      if (typeof obj.job_id === 'string') out.add(obj.job_id);
+      if (typeof obj.jobId === 'string') out.add(obj.jobId);
+      for (const v of Array.isArray(obj) ? obj : Object.values(obj)) {
+        extractJobIds(v, out);
+      }
+    }
+  };
+
+  const jobIds = useMemo(() => {
+    const s = new Set<string>();
+    for (const item of history) extractJobIds(item.output, s);
+    return Array.from(s);
+  }, [history]);
   // Create a session on mount and check server health
   useEffect(() => {
     const initializeApp = async () => {
@@ -2761,6 +2784,9 @@ function App() {
     onExampleClick: handleExampleClick,
     examplesOpen,
     onToggleExamples: handleToggleExamples,
+    jobsOpen,
+    onToggleJobs: handleToggleJobs,
+    jobsCount: jobIds.length,
     workflowContextContent,
     historyContent,
   };
@@ -2794,6 +2820,7 @@ function App() {
         </div>
 
         <SelectedDesignComponent {...designProps} />
+        <JobsPanel show={jobsOpen} onHide={() => setJobsOpen(false)} jobIds={jobIds} />
       </div>
     );
   }

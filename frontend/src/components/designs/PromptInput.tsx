@@ -13,6 +13,11 @@ interface PromptInputProps {
   dragActive: boolean;
   onCommandChange: (value: string) => void;
   onSubmit: () => void;
+  examplesOpen?: boolean;
+  onToggleExamples?: () => void;
+  jobsOpen?: boolean;
+  onToggleJobs?: () => void;
+  jobsCount?: number;
   onDropZoneDragOver: (event: React.DragEvent) => void;
   onDropZoneDragLeave: (event: React.DragEvent) => void;
   onDropZoneDrop: (event: React.DragEvent) => void;
@@ -28,15 +33,29 @@ export const PromptInput: React.FC<PromptInputProps> = ({
   dragActive,
   onCommandChange,
   onSubmit,
+  examplesOpen,
+  onToggleExamples,
+  jobsOpen,
+  onToggleJobs,
+  jobsCount,
   onDropZoneDragOver,
   onDropZoneDragLeave,
   onDropZoneDrop,
   onBrowseClick,
 }) => {
+  const handlePrimarySubmit = () => {
+    // Single-button UX: route to agent or direct path based on heuristic recommendation.
+    if (recommendedButton === 'agent') {
+      onAgentSubmit();
+    } else {
+      onSubmit();
+    }
+  };
+
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
       event.preventDefault();
-      onSubmit();
+      handlePrimarySubmit();
     }
   };
 
@@ -78,64 +97,77 @@ export const PromptInput: React.FC<PromptInputProps> = ({
         />
 
         <div className="prompt-actions d-flex align-items-center gap-2">
+          {(onToggleExamples || onToggleJobs) && (
+            <div className="prompt-top-icons d-inline-flex align-items-center gap-2">
+              {onToggleExamples && (
+                <OverlayTrigger
+                  placement="top"
+                  overlay={
+                    <Tooltip id="prompt-examples-tooltip">
+                      {examplesOpen ? 'Hide examples' : 'Show examples'}
+                    </Tooltip>
+                  }
+                >
+                  <button
+                    type="button"
+                    className={`prompt-mini-icon-button ${examplesOpen ? 'is-active' : ''}`}
+                    onClick={onToggleExamples}
+                    aria-label={examplesOpen ? 'Hide examples' : 'Show examples'}
+                  >
+                    ✨
+                  </button>
+                </OverlayTrigger>
+              )}
+
+              {onToggleJobs && (
+                <OverlayTrigger
+                  placement="top"
+                  overlay={
+                    <Tooltip id="prompt-jobs-tooltip">
+                      {jobsOpen ? 'Hide jobs' : 'Show jobs'}
+                    </Tooltip>
+                  }
+                >
+                  <button
+                    type="button"
+                    className={`prompt-mini-icon-button ${jobsOpen ? 'is-active' : ''}`}
+                    onClick={onToggleJobs}
+                    aria-label={jobsOpen ? 'Hide jobs' : 'Show jobs'}
+                  >
+                    <span className="prompt-mini-icon">🧾</span>
+                    {typeof jobsCount === 'number' && jobsCount > 0 && (
+                      <span className="prompt-mini-badge" aria-hidden="true">
+                        {jobsCount}
+                      </span>
+                    )}
+                  </button>
+                </OverlayTrigger>
+              )}
+            </div>
+          )}
+
           <OverlayTrigger
             placement="top"
             overlay={
-              <Tooltip id="prompt-agent-tooltip">
-                Ask the smart Helix.AI agent to interpret your request, suggest workflows, and call tools automatically.
+              <Tooltip id="prompt-primary-tooltip">
+                {recommendedButton === 'agent'
+                  ? 'Run with Helix agent (recommended)'
+                  : 'Run directly (recommended)'}
               </Tooltip>
             }
           >
             <span className="d-inline-flex">
               <Button
-                variant={recommendedButton === 'agent' ? 'primary' : 'outline-secondary'}
-                className={`prompt-agent-button ${recommendedButton === 'agent' ? 'recommended-button' : ''}`}
-                onClick={onAgentSubmit}
-                disabled={agentLoading || loading || !command.trim()}
-                aria-label={agentLoading ? 'Contacting agent' : 'Send to agent'}
+                variant="primary"
+                className={`prompt-primary-button ${recommendedButton === 'agent' ? 'recommended-button' : ''}`}
+                onClick={handlePrimarySubmit}
+                disabled={loading || agentLoading || !command.trim()}
+                aria-label={loading || agentLoading ? 'Processing' : 'Run'}
               >
-                {agentLoading ? (
+                {(loading || agentLoading) ? (
                   <span className="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
                 ) : (
                   <span aria-hidden="true">🤖</span>
-                )}
-              </Button>
-            </span>
-          </OverlayTrigger>
-          <OverlayTrigger
-            placement="top"
-            overlay={
-              <Tooltip id="prompt-submit-tooltip">
-                Send this prompt directly to the configured workflow without additional agent reasoning.
-              </Tooltip>
-            }
-          >
-            <span className="d-inline-flex">
-              <Button
-                variant={recommendedButton === 'direct' ? 'primary' : recommendedButton === 'agent' ? 'outline-primary' : 'primary'}
-                className={`prompt-submit-button ${recommendedButton === 'direct' ? 'recommended-button' : ''}`}
-                onClick={onSubmit}
-                disabled={loading || agentLoading || !command.trim()}
-                aria-label={loading ? 'Processing' : 'Send command'}
-              >
-                {loading ? (
-                  <>
-                    <span className="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
-                  </>
-                ) : (
-                  <svg
-                    className="prompt-submit-icon"
-                    width="20"
-                    height="20"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    xmlns="http://www.w3.org/2000/svg"
-                    aria-hidden="true"
-                  >
-                    <circle cx="12" cy="12" r="10.5" stroke="currentColor" strokeWidth="1.5" />
-                    <path d="M12 6V16" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-                    <path d="M8 10L12 6L16 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
                 )}
               </Button>
             </span>

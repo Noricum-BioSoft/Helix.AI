@@ -24,6 +24,9 @@ export const DesignOptionOne: React.FC<PromptDesignProps> = ({
   onExampleClick,
   examplesOpen,
   onToggleExamples,
+  jobsOpen,
+  onToggleJobs,
+  jobsCount,
   workflowContextContent,
   historyContent,
 }) => {
@@ -126,6 +129,11 @@ export const DesignOptionOne: React.FC<PromptDesignProps> = ({
                 onAgentSubmit={onAgentSubmit}
                 placeholder={placeholder}
                 dragActive={dragActive}
+                examplesOpen={examplesOpen}
+                onToggleExamples={onToggleExamples}
+                jobsOpen={jobsOpen}
+                onToggleJobs={onToggleJobs}
+                jobsCount={jobsCount}
                 onDropZoneDragOver={onDropZoneDragOver}
                 onDropZoneDragLeave={onDropZoneDragLeave}
                 onDropZoneDrop={onDropZoneDrop}

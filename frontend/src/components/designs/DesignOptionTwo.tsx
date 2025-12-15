@@ -26,10 +26,12 @@ export const DesignOptionTwo: React.FC<PromptDesignProps> = ({
   onExampleClick,
   examplesOpen,
   onToggleExamples,
+  jobsOpen,
+  onToggleJobs,
+  jobsCount,
   workflowContextContent,
   historyContent,
 }) => {
-  const examplesToggleLabel = examplesOpen ? 'Collapse Examples' : 'Expand Examples';
   const sidebarExpanded = examplesOpen;
 
   const renderToggleButton = (isOpen: boolean, onToggle: () => void) => (
@@ -129,9 +131,6 @@ export const DesignOptionTwo: React.FC<PromptDesignProps> = ({
     <div className="design-option design-option-two">
       <div className="d-flex justify-content-between align-items-center mb-3">
         <h2 className="h4 mb-0">Split Workspace</h2>
-        <Button variant="outline-primary" size="sm" onClick={onToggleExamples}>
-          {examplesToggleLabel}
-        </Button>
       </div>
 
       <Row className="g-4">
@@ -151,6 +150,11 @@ export const DesignOptionTwo: React.FC<PromptDesignProps> = ({
                 onAgentSubmit={onAgentSubmit}
                 placeholder={placeholder}
                 dragActive={dragActive}
+                examplesOpen={examplesOpen}
+                onToggleExamples={onToggleExamples}
+                jobsOpen={jobsOpen}
+                onToggleJobs={onToggleJobs}
+                jobsCount={jobsCount}
                 onDropZoneDragOver={onDropZoneDragOver}
                 onDropZoneDragLeave={onDropZoneDragLeave}
                 onDropZoneDrop={onDropZoneDrop}

@@ -247,6 +247,60 @@ a:hover {
   display: inline-flex;
 }
 
+.prompt-top-icons {
+  display: inline-flex;
+}
+
+.prompt-mini-icon-button {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: var(--brand-white);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
+}
+
+.prompt-mini-icon-button:hover {
+  background: var(--bg-blue-subtle);
+  transform: translateY(-1px);
+}
+
+.prompt-mini-icon-button.is-active {
+  border-color: var(--brand-blue);
+  box-shadow: 0 0 0 3px rgba(58, 96, 168, 0.12);
+}
+
+.prompt-mini-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--brand-blue);
+  color: var(--brand-white);
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+  font-weight: 600;
+}
+
+.prompt-primary-button {
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
 .prompt-icon-button:hover {
   background: var(--bg-blue-subtle);
   transform: translateY(-1px);
