@@ -29,8 +29,8 @@ except Exception as e:
     logger.warning(f"Could not load .env; continuing without it: {e}")
 
 from langchain.globals import set_verbose, set_debug
-from prompts.templates import build_react_prompt
-from context_builder import build_context_snippet
+from backend.prompts.templates import build_react_prompt
+from backend.context_builder import build_context_snippet
 
 # Disable verbose/debug logging by default to prevent large tool results (like sequences) from being printed
 # Can be enabled via LANGCHAIN_VERBOSE=true or LANGCHAIN_DEBUG=true environment variables for debugging

@@ -3,6 +3,8 @@ import pytest
 import asyncio
 from backend.agent import handle_command
 
+pytestmark = pytest.mark.integration
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("command, expected_text, expected_plot_title", [
@@ -12,7 +14,8 @@ from backend.agent import handle_command
 ])
 async def test_handle_command(command:str, expected_text:str, expected_plot_title:str):
 
-    assert os.getenv("OPENAI_API_KEY") is not None
+    if os.getenv("HELIX_MOCK_MODE") == "1" or not os.getenv("OPENAI_API_KEY"):
+        pytest.skip("Requires live OpenAI access (integration-only).")
 
     result = await handle_command(command)
 
@@ -28,6 +31,9 @@ async def test_handle_command(command:str, expected_text:str, expected_plot_titl
 
 
 def test_run_agent():
+    if os.getenv("HELIX_MOCK_MODE") == "1" or not os.getenv("OPENAI_API_KEY"):
+        pytest.skip("Requires live OpenAI access (integration-only).")
+
     # Import relevant functionality
     from langchain.chat_models import init_chat_model
     from langgraph.checkpoint.memory import MemorySaver
