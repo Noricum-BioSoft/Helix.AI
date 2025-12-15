@@ -39,6 +39,9 @@ def _get_llm():
     try:
         openai_key = os.getenv("OPENAI_API_KEY", "").strip()
         deepseek_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
+        # Allow overriding the model without code changes.
+        # LangChain init_chat_model expects provider-prefixed names like "openai:<model>".
+        openai_model = os.getenv("HELIX_TOOLGEN_OPENAI_MODEL", "openai:gpt-5.1-codex-max").strip()
         
         openai_enabled = openai_key and openai_key not in ["", "disabled", "your_openai_api_key_here", "none"]
         deepseek_enabled = deepseek_key and deepseek_key not in ["", "disabled", "your_deepseek_api_key_here", "none"]
@@ -46,7 +49,7 @@ def _get_llm():
         if openai_enabled:
             # Local import to avoid importing optional SSL/cert deps during test collection.
             from langchain.chat_models import init_chat_model
-            return init_chat_model("openai:gpt-4o", temperature=0)
+            return init_chat_model(openai_model, temperature=0)
         elif deepseek_enabled:
             # Local import to avoid importing optional SSL/cert deps during test collection.
             from langchain_deepseek import ChatDeepSeek
