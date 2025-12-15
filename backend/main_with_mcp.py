@@ -2646,4 +2646,5 @@ async def startup_event():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main_with_mcp:app", host="0.0.0.0", port=8001, reload=True) 
+    # Run as package module (start.sh uses `python -m backend.main_with_mcp`)
+    uvicorn.run("backend.main_with_mcp:app", host="0.0.0.0", port=8001, reload=True)
