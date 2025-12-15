@@ -19,35 +19,12 @@ export const DesignOptionOne: React.FC<PromptDesignProps> = ({
   onDropZoneDragLeave,
   onDropZoneDrop,
   onBrowseClick,
-  onToggleExamples,
-  jobsOpen,
-  onToggleJobs,
-  jobsCount,
   workflowContextContent,
   historyContent,
 }) => {
   return (
     <div className="design-option design-option-one">
       <div className="d-flex flex-column gap-3">
-        <div className="prompt-toolbar">
-          <Button
-            variant="outline-secondary"
-            className="prompt-toolbar-button"
-            onClick={onToggleExamples}
-            aria-label="Toggle examples"
-          >
-            📚 Examples
-          </Button>
-          <Button
-            variant="outline-secondary"
-            className="prompt-toolbar-button"
-            onClick={onToggleJobs}
-            aria-label="Toggle jobs"
-          >
-            🧾 Jobs{typeof jobsCount === 'number' && jobsCount > 0 ? ` (${jobsCount})` : ''}
-          </Button>
-        </div>
-
         <Card className="shadow-sm border-0">
           <Card.Body>
             <PromptInput

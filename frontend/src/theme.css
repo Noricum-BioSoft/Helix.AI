@@ -269,6 +269,14 @@ a:hover {
   box-shadow: 0 8px 16px rgba(58, 96, 168, 0.08);
 }
 
+.helix-header-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  align-items: flex-end;
+  margin-bottom: 0.75rem;
+}
+
 .prompt-icon-button:hover {
   background: var(--bg-blue-subtle);
   transform: translateY(-1px);

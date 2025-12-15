@@ -2813,6 +2813,25 @@ function App() {
               )}
             </div>
           </div>
+
+          <div className="helix-header-actions">
+            <Button
+              variant="outline-secondary"
+              className="prompt-toolbar-button"
+              onClick={handleToggleExamples}
+              aria-label="Toggle examples"
+            >
+              📚 Examples ▶
+            </Button>
+            <Button
+              variant="outline-secondary"
+              className="prompt-toolbar-button"
+              onClick={handleToggleJobs}
+              aria-label="Toggle jobs"
+            >
+              🧾 Jobs ▶{jobIds.length > 0 ? ` (${jobIds.length})` : ''}
+            </Button>
+          </div>
         </div>
 
         <SelectedDesignComponent {...designProps} />
