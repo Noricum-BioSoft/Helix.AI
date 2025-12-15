@@ -705,6 +705,11 @@ async def execute(req: CommandRequest, request: Request):
         if hasattr(history_manager, 'sessions') and req.session_id in history_manager.sessions:
             session_context = history_manager.sessions[req.session_id]
 
+        # Phase 3: detect multi-step workflows and execute as a Plan IR (sync/async broker handles routing)
+        def _looks_like_workflow(cmd: str) -> bool:
+            c = (cmd or "").lower()
+            return any(tok in c for tok in [" and then ", " then ", "->", "→", "\n", ";"]) and len(c) > 20
+
         # Primary path: let BioAgent (with agent.md prompt) plan/execute
         use_agent = os.getenv("HELIX_MOCK_MODE") != "1"
 
@@ -806,6 +811,37 @@ async def execute(req: CommandRequest, request: Request):
 
             from command_router import CommandRouter
             command_router = CommandRouter()
+
+            # If this looks like a workflow, build a Plan IR and execute via broker.
+            if _looks_like_workflow(req.command):
+                plan = command_router.route_plan(req.command, session_context)
+                broker = _get_execution_broker()
+                result = await broker.execute_tool(
+                    ExecutionRequest(
+                        tool_name="__plan__",
+                        arguments={"plan": plan, "session_id": req.session_id},
+                        session_id=req.session_id,
+                        original_command=req.command,
+                        session_context=session_context,
+                    )
+                )
+
+                history_manager.add_history_entry(
+                    req.session_id,
+                    req.command,
+                    "__plan__",
+                    result,
+                )
+
+                standard_response = build_standard_response(
+                    prompt=req.command,
+                    tool="__plan__",
+                    result=result,
+                    session_id=req.session_id,
+                    mcp_route="/execute",
+                    success=True if not isinstance(result, dict) else result.get("status", "success") != "error"
+                )
+                return CustomJSONResponse(standard_response)
 
             tool_name, parameters = command_router.route_command(req.command, session_context)
             print(f"🔧 Routed command '{req.command}' to tool '{tool_name}' with parameters: {parameters}")

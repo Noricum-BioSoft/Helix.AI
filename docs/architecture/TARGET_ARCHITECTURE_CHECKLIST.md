@@ -63,11 +63,11 @@ Legend:
 ---
 
 ## Phase 3 — Multi-step workflows (Plan IR)
-- [ ] Define minimal Plan IR schema (steps with inputs/outputs and references)
-- [ ] Update planner to emit Plan IR for workflows
-- [ ] Broker executes steps sequentially:
-  - [ ] sync sequential execution
-  - [ ] async execution (single EMR step running the plan v1)
+- [x] Define minimal Plan IR schema (steps with inputs/outputs and references)
+- [x] Update planner to emit Plan IR for workflows
+- [x] Broker executes steps sequentially:
+  - [x] sync sequential execution
+  - [x] async execution (single EMR step running the plan v1)
 
 ---
 

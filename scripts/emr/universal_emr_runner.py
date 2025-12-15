@@ -256,6 +256,7 @@ def main() -> int:
             tools_bundle_s3 = payload.get("tools_bundle_s3")
             python_code = payload.get("python_code")
             python_code_s3 = payload.get("python_code_s3")
+            plan = payload.get("plan")
 
             # Ensure tools bundle if provided
             _ensure_tools_bundle(tools_bundle_s3, workdir)
@@ -269,11 +270,13 @@ def main() -> int:
                 _download_s3_to_file(python_code_s3, code_path)
                 python_code = code_path.read_text()
 
-            if python_code and isinstance(python_code, str):
+            if plan and isinstance(plan, dict):
+                tool_output = _execute_plan(plan, workdir)
+            elif python_code and isinstance(python_code, str):
                 tool_output = _execute_python_code(python_code, workdir)
             else:
                 if not tool_name:
-                    raise ValueError("payload missing tool_name (or python_code/python_code_s3)")
+                    raise ValueError("payload missing tool_name (or plan/python_code/python_code_s3)")
                 tool_output = _dispatch_tool(tool_name, tool_args if isinstance(tool_args, dict) else {})
 
         except Exception as e:
@@ -306,6 +309,51 @@ def main() -> int:
             # still exit non-zero if job failed
 
         return 0 if status == "success" else 2
+
+
+def _resolve_refs(obj: Any, ctx: Dict[str, Any]) -> Any:
+    if isinstance(obj, dict) and "$ref" in obj and isinstance(obj["$ref"], str):
+        ref = obj["$ref"]
+        cur: Any = ctx
+        for part in ref.split("."):
+            if isinstance(cur, dict):
+                cur = cur.get(part)
+            elif isinstance(cur, list) and part.isdigit():
+                cur = cur[int(part)]
+            else:
+                return None
+        return cur
+    if isinstance(obj, dict):
+        return {k: _resolve_refs(v, ctx) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_resolve_refs(v, ctx) for v in obj]
+    return obj
+
+
+def _execute_plan(plan: Dict[str, Any], workdir: Path) -> Dict[str, Any]:
+    """
+    Execute a Plan IR payload (single-step v1 runner can execute multiple steps sequentially).
+    """
+    steps = plan.get("steps") or []
+    ctx: Dict[str, Any] = {"steps": {}}
+    outputs = []
+    for step in steps:
+        step_id = step.get("id") or f"step{len(outputs)+1}"
+        tool_name = step.get("tool_name")
+        args = step.get("arguments") or {}
+        args = _materialize_s3_inputs(args, workdir)
+        args = _resolve_refs(args, ctx)
+        result = _dispatch_tool(tool_name, args)
+        record = {"id": step_id, "tool_name": tool_name, "arguments": args, "result": result}
+        ctx["steps"][step_id] = record
+        outputs.append(record)
+    return {
+        "status": "success",
+        "type": "plan_result",
+        "plan_version": plan.get("version"),
+        "steps": outputs,
+        "result": outputs[-1]["result"] if outputs else {},
+    }
 
 
 if __name__ == "__main__":

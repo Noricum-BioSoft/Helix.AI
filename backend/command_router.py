@@ -155,7 +155,7 @@ class CommandRouter:
         if any(phrase in command_lower for phrase in vendor_keywords):
             print(f"🔧 Command router: Matched 'vendor' -> dna_vendor_research")
             return 'dna_vendor_research', self._extract_parameters(command, 'dna_vendor_research', session_context)
-        
+
         # Check for plasmid for representatives (HIGH PRIORITY - before general plasmid)
         if any(phrase in command_lower for phrase in ['insert representatives', 'express representatives', 'clone representatives', 'vector representatives', 'plasmid representatives']):
             print(f"🔧 Command router: Matched 'plasmid representatives' -> plasmid_for_representatives")
@@ -224,6 +224,41 @@ class CommandRouter:
         # For other commands, try to use the natural command handler
         print(f"🔧 Command router: No specific match, using natural command handler")
         return "handle_natural_command", {"command": command, "session_id": session_context.get("session_id", "")}
+        
+    def route_plan(self, command: str, session_context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Phase 3: Emit a minimal Plan IR for multi-step workflows.
+
+        This is intentionally heuristic-based (non-LLM) so it works in mock/CI.
+        We split on common workflow delimiters (then, and then, ->, ;, newlines) and map each chunk
+        through the existing router.
+        """
+        from backend.plan_ir import Plan, PlanStep
+
+        parts = self._split_workflow_command(command)
+        steps = []
+        for idx, part in enumerate(parts, start=1):
+            tool_name, params = self.route_command(part, session_context)
+            steps.append(
+                PlanStep(
+                    id=f"step{idx}",
+                    tool_name=tool_name,
+                    arguments=params or {},
+                    description=part.strip(),
+                )
+            )
+        return Plan(steps=steps).dict()
+
+    def _split_workflow_command(self, command: str) -> list[str]:
+        if not command:
+            return []
+        # Normalize separators
+        text = command.replace("->", "\n").replace("→", "\n")
+        # Split on "then"/"and then" plus newlines/semicolons
+        chunks = re.split(r"(?:\bthen\b|\band then\b|;|\n)+", text, flags=re.IGNORECASE)
+        parts = [c.strip() for c in chunks if c and c.strip()]
+        # If no real split happened, return the original as a single step
+        return parts or [command.strip()]
     
     def _extract_parameters(self, command: str, tool_name: str, session_context: Dict[str, Any]) -> Dict[str, Any]:
         """Extract parameters for the specific tool."""

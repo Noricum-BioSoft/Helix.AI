@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 from pathlib import Path
 
+from backend.plan_ir import Plan
+
 
 ToolExecutor = Callable[[str, Dict[str, Any]], Awaitable[Dict[str, Any]]]
 
@@ -73,6 +75,36 @@ class ExecutionBroker:
         self._tool_executor = tool_executor
 
     async def execute_tool(self, req: ExecutionRequest) -> Dict[str, Any]:
+        # Phase 3: Plan execution path (multi-step workflow)
+        if req.tool_name == "__plan__" or (isinstance(req.arguments, dict) and "plan" in req.arguments):
+            plan_dict = req.arguments.get("plan") if isinstance(req.arguments, dict) else None
+            plan = Plan.parse_obj(plan_dict)
+            inputs = self._discover_inputs(plan.dict(), req.session_context or {})
+            estimated_bytes, unknown = self._estimate_total_bytes(inputs)
+            decision = self._evaluate_routing_policy(
+                tool_name="__plan__",
+                estimated_bytes=estimated_bytes,
+                unknown_inputs=unknown,
+            )
+            if decision.mode == "async":
+                output = await self._submit_plan_emr_job(req, plan)
+                return self._wrap_result(
+                    tool_name="__plan__",
+                    mode="async",
+                    decision=decision,
+                    inputs=inputs,
+                    output=output,
+                )
+
+            output = await self._execute_plan_sync(plan)
+            return self._wrap_result(
+                tool_name="__plan__",
+                mode="sync",
+                decision=decision,
+                inputs=inputs,
+                output=output,
+            )
+
         inputs = self._discover_inputs(req.arguments or {}, req.session_context or {})
         estimated_bytes, unknown = self._estimate_total_bytes(inputs)
         decision = self._evaluate_routing_policy(
@@ -352,6 +384,75 @@ class ExecutionBroker:
             "job_id": job_id,
             "message": f"EMR job submitted for tool '{req.tool_name}'.",
         }
+
+    async def _submit_plan_emr_job(self, req: ExecutionRequest, plan: Plan) -> Dict[str, Any]:
+        from job_manager import get_job_manager
+
+        jm = get_job_manager()
+        session_id = (req.arguments or {}).get("session_id") or req.session_id
+
+        if hasattr(asyncio, "to_thread"):
+            job_id = await asyncio.to_thread(jm.submit_plan_emr_job, plan.dict(), session_id)
+        else:
+            loop = asyncio.get_event_loop()
+            job_id = await loop.run_in_executor(None, lambda: jm.submit_plan_emr_job(plan.dict(), session_id))
+
+        return {
+            "type": "job",
+            "status": "submitted",
+            "job_id": job_id,
+            "message": "EMR plan job submitted.",
+        }
+
+    async def _execute_plan_sync(self, plan: Plan) -> Dict[str, Any]:
+        """
+        Execute plan steps sequentially (sync mode).
+        Supports minimal references using {"$ref": "steps.<id>.result.<path>"} in arguments.
+        """
+        context: Dict[str, Any] = {"steps": {}}
+        step_outputs: List[Dict[str, Any]] = []
+
+        for step in plan.steps:
+            resolved_args = self._resolve_refs(step.arguments, context)
+            out = await self._tool_executor(step.tool_name, resolved_args)
+            step_record = {
+                "id": step.id,
+                "tool_name": step.tool_name,
+                "arguments": resolved_args,
+                "result": out,
+            }
+            context["steps"][step.id] = step_record
+            step_outputs.append(step_record)
+
+        return {
+            "status": "success",
+            "type": "plan_result",
+            "plan_version": plan.version,
+            "steps": step_outputs,
+            "result": step_outputs[-1]["result"] if step_outputs else {},
+        }
+
+    def _resolve_refs(self, obj: Any, context: Dict[str, Any]) -> Any:
+        if isinstance(obj, dict) and "$ref" in obj and isinstance(obj["$ref"], str):
+            return self._get_ref_value(obj["$ref"], context)
+        if isinstance(obj, dict):
+            return {k: self._resolve_refs(v, context) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [self._resolve_refs(v, context) for v in obj]
+        return obj
+
+    def _get_ref_value(self, ref: str, context: Dict[str, Any]) -> Any:
+        # ref format: steps.<step_id>.result.<path...>
+        parts = ref.split(".")
+        cur: Any = context
+        for p in parts:
+            if isinstance(cur, dict):
+                cur = cur.get(p)
+            elif isinstance(cur, list) and p.isdigit():
+                cur = cur[int(p)]
+            else:
+                return None
+        return cur
 
     def _iter_strings(self, obj: Any) -> List[str]:
         out: List[str] = []

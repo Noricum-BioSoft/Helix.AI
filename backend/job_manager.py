@@ -12,7 +12,7 @@ import subprocess
 import re
 import json
 from datetime import datetime, timezone
-from typing import Dict, Optional, List, Tuple
+from typing import Any, Dict, Optional, List, Tuple
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -313,6 +313,7 @@ class JobManager:
         output_path: Optional[str] = None,
         tools_bundle_s3: Optional[str] = None,
         python_code_s3: Optional[str] = None,
+        plan: Optional[Dict] = None,
     ) -> str:
         """
         Submit a generic (non-FastQC) job to EMR using the universal runner.
@@ -322,8 +323,8 @@ class JobManager:
         - runner.log
         to the output prefix.
         """
-        if not tool_name:
-            raise ValueError("tool_name is required")
+        if not tool_name and not plan:
+            raise ValueError("tool_name is required (unless plan is provided)")
 
         job_id = str(uuid.uuid4())
 
@@ -383,12 +384,15 @@ class JobManager:
                 # runner can still execute python_code path if provided
 
         payload = {
-            "tool_name": tool_name,
-            "arguments": tool_args or {},
             "output_s3_prefix": output_path,
             "tools_bundle_s3": tools_bundle_s3,
             "python_code_s3": python_code_s3,
         }
+        if plan:
+            payload["plan"] = plan
+        else:
+            payload["tool_name"] = tool_name
+            payload["arguments"] = tool_args or {}
 
         # Upload payload JSON
         import tempfile
@@ -459,8 +463,9 @@ class JobManager:
             "status": STATUS_SUBMITTED,
             "type": "emr_universal",
             "job_type": "tool",
-            "tool_name": tool_name,
+            "tool_name": tool_name or "__plan__",
             "args": tool_args or {},
+            "plan": plan,
             "infra": {
                 "provider": "aws",
                 "service": "emr",
@@ -481,6 +486,18 @@ class JobManager:
         }
         self._save_job_metadata_to_local(job_id)
         return job_id
+
+    def submit_plan_emr_job(self, plan: Dict[str, Any], session_id: Optional[str] = None, output_path: Optional[str] = None) -> str:
+        """
+        Convenience wrapper for submitting a Plan IR payload to EMR.
+        """
+        return self.submit_universal_emr_job(
+            tool_name="__plan__",
+            tool_args={},
+            session_id=session_id,
+            output_path=output_path,
+            plan=plan,
+        )
 
     def _extract_step_id(self, output: str) -> Optional[str]:
         """
