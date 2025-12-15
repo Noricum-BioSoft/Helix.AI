@@ -11,12 +11,12 @@ import 'bootstrap/dist/css/bootstrap.min.css';
 import './theme.css';
 import Button from 'react-bootstrap/Button';
 import Card from 'react-bootstrap/Card';
-import { ExampleCommandsPanel } from './components/ExampleCommandsPanel';
 import { DesignOptionOne, DesignOptionTwo, DesignOptionThree } from './components/designs';
 import type { PromptDesignProps, QuickExample } from './components/designs';
 import { getExampleWithSequences, sampleSequences } from './utils/sampleSequences';
 import { theme } from './theme';
 import { JobsPanel } from './components/JobsPanel';
+import { ExamplesPanel } from './components/ExamplesPanel';
 
 interface HistoryItem {
   input: string;
@@ -2779,10 +2779,6 @@ function App() {
     onDropZoneDragLeave: handleDragLeave,
     onDropZoneDrop: handleDrop,
     onBrowseClick: handleBrowseClick,
-    examplesPanel: <ExampleCommandsPanel onCommandSelect={handleExampleClick} />,
-    quickExamples,
-    onExampleClick: handleExampleClick,
-    examplesOpen,
     onToggleExamples: handleToggleExamples,
     jobsOpen,
     onToggleJobs: handleToggleJobs,
@@ -2806,12 +2802,12 @@ function App() {
         <div className="d-flex justify-content-between align-items-start flex-wrap mb-4">
           <div className="mb-3">
             <h1 className="mb-1">Helix.AI</h1>
-            <div className="d-flex align-items-center gap-2">
-              <span className={`badge ${serverStatus === 'healthy' ? 'bg-success' : 'bg-danger'}`}>
+            <div className="d-flex flex-column gap-2">
+              <span className={`badge ${serverStatus === 'healthy' ? 'bg-success' : 'bg-danger'}`} style={{ width: 'fit-content' }}>
                 Server: {serverStatus}
               </span>
               {sessionId && (
-                <span className="badge" style={{ backgroundColor: theme.colors.blue, color: theme.colors.white }}>
+                <span className="badge" style={{ width: 'fit-content', backgroundColor: theme.colors.blue, color: theme.colors.white }}>
                   Session: {sessionId.substring(0, 8)}...
                 </span>
               )}
@@ -2821,6 +2817,7 @@ function App() {
 
         <SelectedDesignComponent {...designProps} />
         <JobsPanel show={jobsOpen} onHide={() => setJobsOpen(false)} jobIds={jobIds} />
+        <ExamplesPanel show={examplesOpen} onHide={() => setExamplesOpen(false)} onSelect={handleExampleClick} />
       </div>
     );
   }

@@ -21,14 +21,10 @@ export interface PromptDesignProps {
   onDropZoneDragLeave: (event: React.DragEvent) => void;
   onDropZoneDrop: (event: React.DragEvent) => void;
   onBrowseClick: () => void;
-  examplesPanel: React.ReactNode;
-  quickExamples: QuickExample[];
-  onExampleClick: (command: string) => void;
-  examplesOpen: boolean;
   onToggleExamples: () => void;
-  jobsOpen: boolean;
   onToggleJobs: () => void;
   jobsCount?: number;
+  jobsOpen: boolean;
   workflowContextContent: React.ReactNode;
   historyContent: React.ReactNode;
 }

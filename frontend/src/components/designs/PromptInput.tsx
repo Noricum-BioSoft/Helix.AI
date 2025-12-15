@@ -13,11 +13,6 @@ interface PromptInputProps {
   dragActive: boolean;
   onCommandChange: (value: string) => void;
   onSubmit: () => void;
-  examplesOpen?: boolean;
-  onToggleExamples?: () => void;
-  jobsOpen?: boolean;
-  onToggleJobs?: () => void;
-  jobsCount?: number;
   onDropZoneDragOver: (event: React.DragEvent) => void;
   onDropZoneDragLeave: (event: React.DragEvent) => void;
   onDropZoneDrop: (event: React.DragEvent) => void;
@@ -33,29 +28,15 @@ export const PromptInput: React.FC<PromptInputProps> = ({
   dragActive,
   onCommandChange,
   onSubmit,
-  examplesOpen,
-  onToggleExamples,
-  jobsOpen,
-  onToggleJobs,
-  jobsCount,
   onDropZoneDragOver,
   onDropZoneDragLeave,
   onDropZoneDrop,
   onBrowseClick,
 }) => {
-  const handlePrimarySubmit = () => {
-    // Single-button UX: route to agent or direct path based on heuristic recommendation.
-    if (recommendedButton === 'agent') {
-      onAgentSubmit();
-    } else {
-      onSubmit();
-    }
-  };
-
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
       event.preventDefault();
-      handlePrimarySubmit();
+      onSubmit();
     }
   };
 
@@ -97,70 +78,19 @@ export const PromptInput: React.FC<PromptInputProps> = ({
         />
 
         <div className="prompt-actions d-flex align-items-center gap-2">
-          {(onToggleExamples || onToggleJobs) && (
-            <div className="prompt-top-icons d-inline-flex align-items-center gap-2">
-              {onToggleExamples && (
-                <OverlayTrigger
-                  placement="top"
-                  overlay={
-                    <Tooltip id="prompt-examples-tooltip">
-                      {examplesOpen ? 'Hide examples' : 'Show examples'}
-                    </Tooltip>
-                  }
-                >
-                  <button
-                    type="button"
-                    className={`prompt-mini-icon-button ${examplesOpen ? 'is-active' : ''}`}
-                    onClick={onToggleExamples}
-                    aria-label={examplesOpen ? 'Hide examples' : 'Show examples'}
-                  >
-                    ✨
-                  </button>
-                </OverlayTrigger>
-              )}
-
-              {onToggleJobs && (
-                <OverlayTrigger
-                  placement="top"
-                  overlay={
-                    <Tooltip id="prompt-jobs-tooltip">
-                      {jobsOpen ? 'Hide jobs' : 'Show jobs'}
-                    </Tooltip>
-                  }
-                >
-                  <button
-                    type="button"
-                    className={`prompt-mini-icon-button ${jobsOpen ? 'is-active' : ''}`}
-                    onClick={onToggleJobs}
-                    aria-label={jobsOpen ? 'Hide jobs' : 'Show jobs'}
-                  >
-                    <span className="prompt-mini-icon">🧾</span>
-                    {typeof jobsCount === 'number' && jobsCount > 0 && (
-                      <span className="prompt-mini-badge" aria-hidden="true">
-                        {jobsCount}
-                      </span>
-                    )}
-                  </button>
-                </OverlayTrigger>
-              )}
-            </div>
-          )}
-
           <OverlayTrigger
             placement="top"
             overlay={
               <Tooltip id="prompt-primary-tooltip">
-                {recommendedButton === 'agent'
-                  ? 'Run with Helix agent (recommended)'
-                  : 'Run directly (recommended)'}
+                Run with Helix agent (single-button UX)
               </Tooltip>
             }
           >
             <span className="d-inline-flex">
               <Button
                 variant="primary"
-                className={`prompt-primary-button ${recommendedButton === 'agent' ? 'recommended-button' : ''}`}
-                onClick={handlePrimarySubmit}
+                className="prompt-primary-button"
+                onClick={onAgentSubmit}
                 disabled={loading || agentLoading || !command.trim()}
                 aria-label={loading || agentLoading ? 'Processing' : 'Run'}
               >
