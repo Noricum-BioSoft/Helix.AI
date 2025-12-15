@@ -980,6 +980,13 @@ async def handle_command(command: str, session_id: str = "default", session_cont
         print(f"[handle_command] No tool mapping found, attempting tool-generator-agent...")
         
         try:
+            from backend.intent_classifier import classify_intent
+
+            intent = classify_intent(command)
+            if intent.intent != "execute":
+                print(f"[handle_command] Skipping tool-generator-agent (intent={intent.intent}, reason={intent.reason})")
+                return result
+
             # Use relative import since we're in the backend directory
             from tool_generator_agent import generate_and_execute_tool
             

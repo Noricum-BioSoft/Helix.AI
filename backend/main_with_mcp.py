@@ -705,6 +705,9 @@ async def execute(req: CommandRequest, request: Request):
         if hasattr(history_manager, 'sessions') and req.session_id in history_manager.sessions:
             session_context = history_manager.sessions[req.session_id]
 
+        from backend.intent_classifier import classify_intent
+        intent = classify_intent(req.command)
+
         # Phase 3: detect multi-step workflows and execute as a Plan IR (sync/async broker handles routing)
         def _looks_like_workflow(cmd: str) -> bool:
             c = (cmd or "").lower()
@@ -808,6 +811,29 @@ async def execute(req: CommandRequest, request: Request):
         except Exception as agent_err:
             # Fallback: use NLP router and MCP tools if the agent path fails
             print(f"⚠️  Agent path failed, falling back to router/tool. Error: {agent_err}")
+
+            # Phase 4: prevent unintended tool generation for pure Q&A.
+            # If the user intent is Q&A and the agent isn't available (e.g. mock mode),
+            # return a safe response instead of routing into CommandRouter/tool-gen.
+            if intent.intent != "execute":
+                standard_response = build_standard_response(
+                    prompt=req.command,
+                    tool="handle_natural_command",
+                    result={
+                        "status": "success",
+                        "text": (
+                            "This looks like a question (Q&A intent). "
+                            "In mock mode or when the agent is unavailable, Helix.AI will not generate new tools. "
+                            "Re-run with HELIX_MOCK_MODE=0 (Agent enabled) or rephrase as an execution request."
+                        ),
+                        "intent": intent.intent,
+                        "intent_reason": intent.reason,
+                    },
+                    session_id=req.session_id,
+                    mcp_route="/execute",
+                    success=True,
+                )
+                return CustomJSONResponse(standard_response)
 
             from command_router import CommandRouter
             command_router = CommandRouter()
@@ -2062,6 +2088,7 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
         logger.info(f"🔧 Unknown tool '{tool_name}', attempting tool-generator-agent...")
         try:
             from tool_generator_agent import generate_and_execute_tool
+            from backend.intent_classifier import classify_intent
             
             # Build command from tool_name and arguments
             # Try to construct a natural language command from the tool name and arguments
@@ -2082,6 +2109,23 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
                 
                 command = " ".join(command_parts)
                 user_request = f"Execute {tool_name} with parameters: {arguments}"
+
+            intent = classify_intent(user_command or command)
+            if intent.intent != "execute":
+                # Phase 4: never run tool-generator-agent for Q&A intent.
+                return {
+                    "status": "success",
+                    "tool_generated": False,
+                    "tool_name": tool_name,
+                    "result": {},
+                    "text": (
+                        "This request looks like Q&A intent. "
+                        "Helix.AI will not generate or execute a new tool for Q&A. "
+                        "Rephrase as an execution request (e.g. 'run ...', 'analyze ...')."
+                    ),
+                    "intent": intent.intent,
+                    "intent_reason": intent.reason,
+                }
             
             result = await generate_and_execute_tool(
                 command=command,

@@ -72,11 +72,11 @@ Legend:
 ---
 
 ## Phase 4 — Reduce keyword fragility and unintended tool generation
-- [ ] Demote `CommandRouter` to last resort
-- [ ] Improve tool schemas for semantic mapping (clear inputs/outputs)
-- [ ] Prevent tool-generator from running on pure Q&A:
-  - [ ] explicit intent classification
-  - [ ] tool-gen only when user intent is “execute”
+- [x] Demote `CommandRouter` to last resort
+- [x] Improve tool schemas for semantic mapping (clear inputs/outputs)
+- [x] Prevent tool-generator from running on pure Q&A:
+  - [x] explicit intent classification
+  - [x] tool-gen only when user intent is “execute”
 
 ---
 

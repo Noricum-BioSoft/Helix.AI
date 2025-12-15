@@ -9,6 +9,11 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
     {
         "name": "toolbox_inventory",
         "description": "List all tools Helix.AI has access to (registered MCP tools, discovered @tool functions, and local/EC2 CLI tools).",
+        "tags": ["tools", "inventory", "capabilities", "help"],
+        "outputs": {
+            "type": "object",
+            "description": "Tool inventory including MCP tools, discovered @tool functions, and local/EC2 tools.",
+        },
         "inputs": {
             "type": "object",
             "properties": {},
@@ -17,6 +22,8 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
     {
         "name": "sequence_alignment",
         "description": "Perform multiple sequence alignment on DNA/RNA sequences.",
+        "tags": ["alignment", "msa", "clustal", "muscle", "mafft"],
+        "outputs": {"type": "object", "description": "Aligned sequences (FASTA) and alignment metadata."},
         "inputs": {
             "type": "object",
             "properties": {
@@ -29,6 +36,8 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
     {
         "name": "mutate_sequence",
         "description": "Generate sequence variants.",
+        "tags": ["mutation", "variants", "library"],
+        "outputs": {"type": "object", "description": "Generated variants and summary statistics."},
         "inputs": {
             "type": "object",
             "properties": {
@@ -42,6 +51,8 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
     {
         "name": "variant_selection",
         "description": "Select variants from session mutations.",
+        "tags": ["selection", "variants", "diversity"],
+        "outputs": {"type": "object", "description": "Selected variants and selection rationale."},
         "inputs": {
             "type": "object",
             "properties": {
@@ -56,6 +67,8 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
     {
         "name": "phylogenetic_tree",
         "description": "Create a phylogenetic tree from aligned sequences.",
+        "tags": ["phylogeny", "tree", "newick"],
+        "outputs": {"type": "object", "description": "Tree representation (e.g. Newick) plus metrics/plots."},
         "inputs": {
             "type": "object",
             "properties": {
@@ -67,6 +80,8 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
     {
         "name": "fetch_ncbi_sequence",
         "description": "Fetch sequence by accession from NCBI.",
+        "tags": ["ncbi", "accession", "genbank", "refseq"],
+        "outputs": {"type": "object", "description": "Fetched sequence record (FASTA/text) and metadata."},
         "inputs": {
             "type": "object",
             "properties": {
@@ -79,6 +94,8 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
     {
         "name": "query_uniprot",
         "description": "Query UniProt for protein sequences and metadata.",
+        "tags": ["uniprot", "protein", "search"],
+        "outputs": {"type": "object", "description": "Protein hits and sequences/metadata."},
         "inputs": {
             "type": "object",
             "properties": {
@@ -92,6 +109,8 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
     {
         "name": "lookup_go_term",
         "description": "Lookup Gene Ontology term details.",
+        "tags": ["gene ontology", "go", "annotation"],
+        "outputs": {"type": "object", "description": "GO term details and related metadata."},
         "inputs": {
             "type": "object",
             "properties": {
@@ -103,6 +122,8 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
     {
         "name": "bulk_rnaseq_analysis",
         "description": "Run DESeq2 bulk RNA-seq differential expression.",
+        "tags": ["rnaseq", "deseq2", "differential expression"],
+        "outputs": {"type": "object", "description": "Differential expression results and QC plots."},
         "inputs": {
             "type": "object",
             "properties": {
@@ -117,6 +138,8 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
     {
         "name": "plasmid_visualization",
         "description": "Generate plasmid visualization data.",
+        "tags": ["plasmid", "vector", "cloning", "visualization"],
+        "outputs": {"type": "object", "description": "Plasmid map/annotations and rendered visualization data."},
         "inputs": {
             "type": "object",
             "properties": {
@@ -131,6 +154,8 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
     {
         "name": "single_cell_analysis",
         "description": "Perform single-cell RNA-seq analysis or answer SC questions.",
+        "tags": ["single cell", "scrna-seq", "seurat", "markers", "cell types"],
+        "outputs": {"type": "object", "description": "Single-cell analysis summary, marker tables, and plots."},
         "inputs": {
             "type": "object",
             "properties": {
@@ -145,6 +170,8 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
     {
         "name": "dna_vendor_research",
         "description": "Research DNA synthesis vendors and testing options.",
+        "tags": ["vendors", "synthesis", "pricing", "assays"],
+        "outputs": {"type": "object", "description": "Vendor comparison and recommendation summary."},
         "inputs": {
             "type": "object",
             "properties": {
@@ -158,6 +185,8 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
     {
         "name": "read_trimming",
         "description": "Trim adapters/low-quality bases from sequencing reads.",
+        "tags": ["trimming", "adapters", "fastq", "qc"],
+        "outputs": {"type": "object", "description": "Trimmed reads and trimming statistics."},
         "inputs": {
             "type": "object",
             "properties": {
@@ -172,6 +201,8 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
     {
         "name": "read_merging",
         "description": "Merge paired-end reads using overlap consensus.",
+        "tags": ["merge", "paired-end", "fastq", "bbmerge", "flash", "pear"],
+        "outputs": {"type": "object", "description": "Merged reads and merge statistics."},
         "inputs": {
             "type": "object",
             "properties": {
@@ -185,6 +216,8 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
     {
         "name": "sequence_selection",
         "description": "Select sequences from aligned sequences based on various criteria.",
+        "tags": ["selection", "alignment", "subsample", "filter"],
+        "outputs": {"type": "object", "description": "Selected sequences and selection summary."},
         "inputs": {
             "type": "object",
             "properties": {
@@ -198,6 +231,8 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
     {
         "name": "synthesis_submission",
         "description": "Submit sequences for DNA synthesis and get pricing quote.",
+        "tags": ["synthesis", "order", "quote", "vendors"],
+        "outputs": {"type": "object", "description": "Submission payload and quote/recommendations."},
         "inputs": {
             "type": "object",
             "properties": {
@@ -212,6 +247,8 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
     {
         "name": "plasmid_for_representatives",
         "description": "Create plasmid visualizations for representative sequences from clustering analysis.",
+        "tags": ["plasmid", "clustering", "representatives", "visualization"],
+        "outputs": {"type": "object", "description": "Plasmid visualizations for representative sequences."},
         "inputs": {
             "type": "object",
             "properties": {
@@ -226,6 +263,8 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
     {
         "name": "fastqc_quality_analysis",
         "description": "Run FastQC quality control analysis on paired-end FASTQ files stored in S3 using AWS EMR. This is an asynchronous long-running job that typically takes 10-30 minutes. Returns immediately with a job_id for tracking progress.",
+        "tags": ["fastqc", "quality control", "emr", "fastq", "async"],
+        "outputs": {"type": "object", "description": "Asynchronous job submission result including job_id."},
         "inputs": {
             "type": "object",
             "properties": {

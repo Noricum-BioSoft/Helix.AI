@@ -81,6 +81,27 @@ async def generate_and_execute_tool(
         Dictionary with execution results
     """
     logger.info(f"🔧 Tool Generator Agent: Generating tool for command: {command}")
+
+    # Phase 4 safety: do not generate tools for pure Q&A intent.
+    try:
+        from backend.intent_classifier import classify_intent
+
+        intent = classify_intent(user_request or command)
+        if intent.intent != "execute":
+            return {
+                "status": "skipped",
+                "tool_generated": False,
+                "result": {},
+                "explanation": (
+                    "Tool generation skipped because the request looks like Q&A intent. "
+                    "Rephrase as an execution request (e.g. 'run ...', 'analyze ...')."
+                ),
+                "intent": intent.intent,
+                "intent_reason": intent.reason,
+            }
+    except Exception:
+        # If classifier fails for any reason, fall through to previous behavior.
+        pass
     
     try:
         llm = _get_llm()
