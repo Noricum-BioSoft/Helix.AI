@@ -28,7 +28,20 @@ except PermissionError as e:
 except Exception as e:
     logger.warning(f"Could not load .env; continuing without it: {e}")
 
-from langchain.globals import set_verbose, set_debug
+# Try to import langchain globals (may not exist in all versions)
+try:
+    from langchain.globals import set_verbose, set_debug
+    _has_langchain_globals = True
+except ImportError:
+    # langchain.globals doesn't exist in this version - use environment variables instead
+    _has_langchain_globals = False
+    def set_verbose(value: bool):
+        """No-op if langchain.globals not available"""
+        pass
+    def set_debug(value: bool):
+        """No-op if langchain.globals not available"""
+        pass
+
 from backend.prompts.templates import build_react_prompt
 from backend.context_builder import build_context_snippet
 
@@ -746,6 +759,33 @@ async def handle_command(command: str, session_id: str = "default", session_cont
             "message": "Capability/toolbox query: returning toolbox inventory.",
         }
 
+    # Deterministic short-circuit: explicit read-merging requests with S3 R1/R2 should never depend on
+    # LLM tool-call extraction. These are high-value and easy to parse deterministically.
+    # This prevents the agent from incorrectly responding with "I can't do that" and avoids toolgen fallback
+    # just for tool *selection*.
+    try:
+        has_merge = "merge" in cmd_lower or "merging" in cmd_lower
+        has_r1 = "r1:" in cmd_lower or "read 1" in cmd_lower or "forward" in cmd_lower
+        has_r2 = "r2:" in cmd_lower or "read 2" in cmd_lower or "reverse" in cmd_lower
+        has_s3 = "s3://" in cmd_lower
+        if has_merge and has_r1 and has_r2 and has_s3:
+            from backend.command_router import CommandRouter
+
+            router = CommandRouter()
+            tool_name, parameters = router.route_command(command, session_context or {})
+            if tool_name == "read_merging":
+                print("[handle_command] Matched deterministic S3 read-merging -> read_merging")
+                return {
+                    "tool_mapping": {"tool_name": "read_merging", "parameters": parameters or {}},
+                    "tool_name": "read_merging",
+                    "parameters": parameters or {},
+                    "status": "tool_mapped",
+                    "message": "Deterministic read-merging request: routing to read_merging.",
+                }
+    except Exception:
+        # Never fail the agent on a deterministic pre-check.
+        pass
+
     # Note: Removed _maybe_handle_vendor_request pre-filter to let LLM handle all tool selection
     # The LLM agent is capable of correctly identifying tools based on context,
     # including distinguishing between vendor research and file paths containing keywords like "test"
@@ -938,6 +978,42 @@ async def handle_command(command: str, session_id: str = "default", session_cont
         # If no tool mapping found, try tool-generator-agent
         msg_count = len(result.get("messages", [])) if isinstance(result, dict) else 0
         print(f"[handle_command] result: {msg_count} messages in response (no tool mapping extracted)")
+
+        # Deterministic fallback: try the keyword router for safe, non-recursive tools.
+        # IMPORTANT: Do NOT return "handle_natural_command" from here (it would call BioAgent again).
+        try:
+            from backend.command_router import CommandRouter
+
+            router = CommandRouter()
+            tool_name, parameters = router.route_command(command, session_context or {})
+            if tool_name in {
+                "toolbox_inventory",
+                "read_merging",
+                "read_trimming",
+                "fastqc_quality_analysis",
+                "sequence_alignment",
+                "mutate_sequence",
+                "plasmid_visualization",
+                "phylogenetic_tree",
+                "clustering_analysis",
+                "variant_selection",
+                "fetch_ncbi_sequence",
+                "query_uniprot",
+                "lookup_go_term",
+                "bulk_rnaseq_analysis",
+                "single_cell_analysis",
+            }:
+                print(f"[handle_command] Deterministic router fallback -> {tool_name}")
+                return {
+                    "tool_mapping": {"tool_name": tool_name, "parameters": parameters or {}},
+                    "tool_name": tool_name,
+                    "parameters": parameters or {},
+                    "status": "tool_mapped",
+                    "message": f"Deterministic router fallback identified tool: {tool_name}. Execution will be handled by router.",
+                }
+        except Exception:
+            pass
+
         print(f"[handle_command] No tool mapping found, attempting tool-generator-agent...")
         
         try:
@@ -949,12 +1025,26 @@ async def handle_command(command: str, session_id: str = "default", session_cont
                 return result
 
             # Use relative import since we're in the backend directory
-            from backend.tool_generator_agent import generate_and_execute_tool
+            from backend.tool_generator_agent import generate_and_execute_tool, _discover_inputs_from_args, _discover_outputs_from_args
+            
+            # Discover inputs and outputs from command (extract S3 paths, etc.)
+            # Note: agent.py doesn't have structured arguments, so we parse from command text
+            # This is a best-effort discovery
+            command_args = {"command": command}  # Minimal args dict for discovery
+            discovered_inputs = _discover_inputs_from_args(command_args, session_context)
+            if discovered_inputs:
+                print(f"[handle_command] 🔧 Discovered {len(discovered_inputs)} input files for infrastructure decision")
+            
+            discovered_outputs = _discover_outputs_from_args(command_args, command)
+            if discovered_outputs:
+                print(f"[handle_command] 🔧 Discovered {len(discovered_outputs)} output paths")
             
             tool_result = await generate_and_execute_tool(
                 command=command,
                 user_request=command,
-                session_id=session_id
+                session_id=session_id,
+                inputs=discovered_inputs,
+                outputs=discovered_outputs
             )
             
             if tool_result.get("status") == "success":
@@ -967,7 +1057,16 @@ async def handle_command(command: str, session_id: str = "default", session_cont
                     "message": tool_result.get("explanation", "Tool generated and executed successfully")
                 }
             else:
-                print(f"[handle_command] ⚠️  Tool-generator-agent failed: {tool_result.get('error', 'Unknown error')}")
+                # Extract error message - check top-level error first, then execution_result
+                error_msg = tool_result.get('error')
+                if not error_msg:
+                    execution_result = tool_result.get("execution_result", {})
+                    if isinstance(execution_result, dict):
+                        error_msg = execution_result.get("error")
+                        if not error_msg and execution_result.get("stderr"):
+                            error_msg = f"Execution failed: {execution_result.get('stderr', '')[:200]}"
+                    error_msg = error_msg or "Unknown error"
+                print(f"[handle_command] ⚠️  Tool-generator-agent failed: {error_msg}")
                 # Fall through to return original result
         except Exception as e:
             print(f"[handle_command] ❌ Tool-generator-agent exception: {e}")

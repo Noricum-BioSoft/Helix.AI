@@ -17,7 +17,7 @@ import logging
 import tempfile
 import subprocess
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import json
 
 logger = logging.getLogger(__name__)
@@ -25,6 +25,79 @@ logger = logging.getLogger(__name__)
 # Load the tool-generator-agent prompt
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TOOL_GENERATOR_PROMPT_PATH = PROJECT_ROOT / "agents" / "tool-generator-agent.md"
+
+
+def _discover_inputs_from_args(arguments: Dict[str, Any], session_context: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """
+    Discover input files from arguments and session context.
+    Returns a list of dicts with 'uri' and 'size_bytes' keys.
+    
+    This is a simplified version of ExecutionBroker._discover_inputs that doesn't require
+    instantiating ExecutionBroker.
+    """
+    from backend.execution_broker import ExecutionBroker
+    
+    # Create a temporary broker instance just to use its _discover_inputs method
+    # We pass a dummy tool executor since we only need input discovery
+    async def dummy_executor(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        return {"status": "error", "message": "dummy executor"}
+    
+    broker = ExecutionBroker(tool_executor=dummy_executor)
+    input_assets = broker._discover_inputs(arguments or {}, session_context or {})
+    
+    # Convert InputAsset objects to dicts for easier serialization
+    return [
+        {
+            "uri": asset.uri,
+            "size_bytes": asset.size_bytes,
+            "source": asset.source
+        }
+        for asset in input_assets
+    ]
+
+
+def _discover_outputs_from_args(arguments: Dict[str, Any], command: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    Discover output files/paths from arguments and command text.
+    Returns a list of dicts with 'uri' and optional metadata.
+    
+    Looks for:
+    - Explicit output_path or output arguments
+    - S3 paths in command text following patterns like "output ... on s3://..." or "save to s3://..."
+    """
+    import re
+    outputs = []
+    
+    # 1. Check explicit arguments
+    output_path = arguments.get("output_path") or arguments.get("output")
+    if output_path and isinstance(output_path, str):
+        if output_path.startswith("s3://") or output_path.startswith("/"):
+            outputs.append({
+                "uri": output_path,
+                "source": "args"
+            })
+    
+    # 2. Extract from command text if provided
+    if command:
+        # Pattern 1: "output ... on s3://..." or "output: s3://..."
+        output_patterns = [
+            r'(?:output|save|write|upload)[^\n]*?(s3://[^\s]+)',
+            r'\bon\s+(s3://[^\s]+)',
+            r'output\s*:\s*(s3://[^\s]+|/[^\s]+)',
+        ]
+        
+        for pattern in output_patterns:
+            matches = re.finditer(pattern, command, re.IGNORECASE)
+            for match in matches:
+                uri = match.group(1).strip()
+                # Avoid duplicates
+                if not any(o.get("uri") == uri for o in outputs):
+                    outputs.append({
+                        "uri": uri,
+                        "source": "command_text"
+                    })
+    
+    return outputs
 
 try:
     TOOL_GENERATOR_SYSTEM_PROMPT = TOOL_GENERATOR_PROMPT_PATH.read_text()
@@ -41,7 +114,9 @@ def _get_llm():
         deepseek_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
         # Allow overriding the model without code changes.
         # LangChain init_chat_model expects provider-prefixed names like "openai:<model>".
-        openai_model = os.getenv("HELIX_TOOLGEN_OPENAI_MODEL", "openai:gpt-5.1-codex-max").strip()
+        # Default to a chat-capable model. Some code-focused models are *not* exposed via chat-completions
+        # and will 404 when called through the Chat Completions endpoint.
+        openai_model = os.getenv("HELIX_TOOLGEN_OPENAI_MODEL", "openai:gpt-4o").strip()
         
         openai_enabled = openai_key and openai_key not in ["", "disabled", "your_openai_api_key_here", "none"]
         deepseek_enabled = deepseek_key and deepseek_key not in ["", "disabled", "your_deepseek_api_key_here", "none"]
@@ -49,6 +124,9 @@ def _get_llm():
         if openai_enabled:
             # Local import to avoid importing optional SSL/cert deps during test collection.
             from langchain.chat_models import init_chat_model
+            # Be forgiving: allow HELIX_TOOLGEN_OPENAI_MODEL="gpt-4o" as well.
+            if ":" not in openai_model:
+                openai_model = f"openai:{openai_model}"
             return init_chat_model(openai_model, temperature=0)
         elif deepseek_enabled:
             # Local import to avoid importing optional SSL/cert deps during test collection.
@@ -70,7 +148,9 @@ def _get_llm():
 async def generate_and_execute_tool(
     command: str,
     user_request: str,
-    session_id: Optional[str] = None
+    session_id: Optional[str] = None,
+    inputs: Optional[List[Any]] = None,
+    outputs: Optional[List[Any]] = None
 ) -> Dict[str, Any]:
     """
     Generate and execute a bioinformatics tool for the given command.
@@ -79,6 +159,8 @@ async def generate_and_execute_tool(
         command: The user's bioinformatics command/request
         user_request: The original user request (for context)
         session_id: Optional session ID for tracking
+        inputs: Optional list of InputAsset objects with discovered input files and their sizes
+        outputs: Optional list of output paths/URIs where results should be written
         
     Returns:
         Dictionary with execution results
@@ -109,13 +191,78 @@ async def generate_and_execute_tool(
     try:
         llm = _get_llm()
         
+        # Build input metadata section if inputs are provided
+        input_metadata_section = ""
+        if inputs:
+            total_size = 0
+            known_sizes = []
+            unknown_sizes = []
+            
+            for inp in inputs:
+                # Handle both InputAsset objects and dicts
+                if hasattr(inp, 'uri'):
+                    uri = inp.uri
+                    size_bytes = inp.size_bytes
+                elif isinstance(inp, dict):
+                    uri = inp.get('uri', '')
+                    size_bytes = inp.get('size_bytes')
+                else:
+                    continue
+                
+                if size_bytes is not None:
+                    total_size += size_bytes
+                    size_mb = size_bytes / (1024 * 1024)
+                    known_sizes.append(f"  - {uri}: {size_mb:.2f} MB ({size_bytes:,} bytes)")
+                else:
+                    unknown_sizes.append(f"  - {uri}: size unknown")
+            
+            if known_sizes or unknown_sizes:
+                input_metadata_section = "\n\n**Input File Information:**\n"
+                if known_sizes:
+                    input_metadata_section += "Files with known sizes:\n" + "\n".join(known_sizes) + "\n"
+                    total_mb = total_size / (1024 * 1024)
+                    input_metadata_section += f"\nTotal size of known files: {total_mb:.2f} MB ({total_size:,} bytes)\n"
+                if unknown_sizes:
+                    input_metadata_section += "\nFiles with unknown sizes:\n" + "\n".join(unknown_sizes) + "\n"
+                    input_metadata_section += "(Size unknown due to permissions or file not found)\n"
+                
+                # Add infrastructure recommendation based on file sizes
+                if total_size > 0:
+                    if total_size > 100 * 1024 * 1024:  # >100MB
+                        input_metadata_section += "\n**Infrastructure Recommendation**: Based on file sizes (>100MB), AWS EMR is recommended to avoid large data transfers.\n"
+                    elif total_size > 10 * 1024 * 1024:  # >10MB
+                        input_metadata_section += "\n**Infrastructure Recommendation**: Files are medium-sized (10-100MB). Consider AWS Batch or local execution depending on compute requirements.\n"
+                    else:
+                        input_metadata_section += "\n**Infrastructure Recommendation**: Files are small (<10MB). Local execution or AWS Batch are suitable.\n"
+        
+        # Build output metadata section if outputs are provided
+        output_metadata_section = ""
+        if outputs:
+            output_paths = []
+            for out in outputs:
+                # Handle both dicts and strings
+                if isinstance(out, dict):
+                    uri = out.get('uri', '')
+                elif isinstance(out, str):
+                    uri = out
+                else:
+                    continue
+                
+                if uri:
+                    output_paths.append(f"  - {uri}")
+            
+            if output_paths:
+                output_metadata_section = "\n\n**Output File Information:**\n"
+                output_metadata_section += "Expected output locations:\n" + "\n".join(output_paths) + "\n"
+                output_metadata_section += "\n**IMPORTANT**: Ensure your generated code writes the results to these exact output paths. Verify the output location matches the user's request.\n"
+        
         # Build the prompt for tool generation
         user_prompt = f"""Generate and execute a solution for this bioinformatics operation:
 
 User Command: {command}
 
 Original Request: {user_request}
-
+{input_metadata_section}{output_metadata_section}
 Please follow the workflow:
 1. Analyze the task and identify the biological operation
 2. Research appropriate bioinformatics tools
@@ -124,6 +271,8 @@ Please follow the workflow:
    - **AWS EMR**: For large S3-hosted files (>100MB), distributed processing
    - **AWS Batch**: For containerized tools, medium-sized jobs
    - **Local execution**: Fallback when EC2/cloud not available
+   
+   **IMPORTANT**: Use the file size information provided above to make an informed infrastructure decision. If file sizes are unknown, assume files may be large and prefer EMR for S3-hosted files.
 4. Generate complete, executable Python code
 5. Execute the code and return results
 
@@ -144,19 +293,82 @@ CRITICAL REQUIREMENTS:
    - If conda is NOT available, skip installation and use Python fallback immediately
    - Do not attempt installation if conda is not available - it will always fail
 3. **ALWAYS check tool availability**: Before using any external tool, check if it exists using `shutil.which()`, attempt installation if missing, provide Python fallback only as last resort
-4. **For read merging**: If BBMerge/FLASH/PEAR are not available and cannot be installed, use simple Python string manipulation for overlap detection - NO BioPython SeqRecord manipulation needed:
+4. **For read merging with S3 files**: If BBMerge/FLASH/PEAR are not available and cannot be installed, you MUST use the built-in Python implementation. **IT IS FORBIDDEN TO RETURN EARLY WITHOUT MERGING**. Here is the EXACT code pattern you MUST follow:
    ```python
-   def reverse_complement(seq: str) -> str:
-       complement = str.maketrans("ACGTacgtNn", "TGCAtgcaNn")
-       return seq.translate(complement)[::-1]
+   import boto3
+   import logging
+   import os
+   import shutil
+   import subprocess
    
-   def merge_pair(forward: str, reverse: str, min_overlap: int) -> str:
-       rc_reverse = reverse_complement(reverse)
-       for overlap in range(min(len(forward), len(rc_reverse)), min_overlap - 1, -1):
-           if forward.endswith(rc_reverse[:overlap]):
-               return forward + rc_reverse[overlap:]
-       return forward + rc_reverse
+   logging.basicConfig(level=logging.INFO)
+   logger = logging.getLogger(__name__)
+   
+   def check_tool_available(tool_name: str) -> bool:
+       return shutil.which(tool_name) is not None
+   
+   def install_tool_via_conda(tool_name: str, conda_package: str = None) -> bool:
+       if not shutil.which("conda"):
+           return False
+       package = conda_package or tool_name
+       try:
+           result = subprocess.run(
+               ["conda", "install", "-c", "bioconda", package, "-y"],
+               capture_output=True, text=True, timeout=300
+           )
+           return result.returncode == 0
+       except Exception:
+           return False
+   
+   # Main execution - this is the CRITICAL part
+   r1_path = "s3://noricum-ngs-data/datasets/GRCh38.p12.MafHi/mate_R1.fq"
+   r2_path = "s3://noricum-ngs-data/datasets/GRCh38.p12.MafHi/mate_R2.fq"
+   output_path = "s3://noricum-ngs-data/datasets/GRCh38.p12.MafHi/merged_mates.fq"
+   
+   # Check if BBMerge is available
+   if not check_tool_available("bbmerge.sh"):
+       logger.info("BBMerge not found, attempting installation via conda...")
+       if not install_tool_via_conda("bbtools"):
+           logger.warning("Could not install BBTools via conda, using Python implementation")
+           # CRITICAL: You MUST call merge_reads_from_s3 here - DO NOT return!
+           try:
+               from tools.read_merging import merge_reads_from_s3
+               result = merge_reads_from_s3(
+                   r1_path=r1_path,
+                   r2_path=r2_path,
+                   output_path=output_path,
+                   min_overlap=12
+               )
+               if result.get("status") == "success":
+                   print(f"SUCCESS: Merged reads written to {output_path}")
+               else:
+                   raise Exception(result.get("error", "Merge failed"))
+           except ImportError:
+               raise RuntimeError("merge_reads_from_s3 not available and inline implementation not provided")
+       else:
+           # BBMerge was installed, use it (implementation here)
+           pass
+   else:
+       # BBMerge is available, use it (implementation here)
+       pass
    ```
+   
+   **CRITICAL RULES**:
+   - NEVER write `return` after "falling back to Python implementation" - you MUST call merge_reads_from_s3
+   - The function merge_reads_from_s3 MUST be called when BBMerge is unavailable
+   - You MUST print "SUCCESS: Merged reads written to {output_path}" when merge completes
+   - If you return early without merging, the operation will be detected as a failure
+   The `merge_reads_from_s3` function handles:
+   - S3 file downloads
+   - FASTQ parsing with quality scores
+   - Sequence merging with overlap detection
+   - Quality score merging (taking max in overlap regions)
+   - FASTQ output writing
+   - S3 upload
+   
+   **CRITICAL RULE**: The merge function MUST complete the merge operation. It is FORBIDDEN to return early without performing the merge. If BBMerge is unavailable, you MUST call merge_reads_from_s3 or implement the merge inline. Returning without merging is a fatal error that will cause the task to fail.
+   
+   **VALIDATION**: Your code MUST print "SUCCESS: Merged reads written to {output_path}" when the merge completes. If this message is not printed, the merge did not execute.
 4. **BioPython usage**: If using BioPython, ALWAYS create new SeqRecord objects - never modify existing ones:
    ```python
    # CORRECT: Create new SeqRecord
@@ -176,18 +388,43 @@ CRITICAL REQUIREMENTS:
 
 IMPORTANT: Generate ONLY executable Python code that can be run directly. Include all necessary imports, error handling, and AWS credential handling if needed. DO NOT assume external bioinformatics tools are installed - always check availability and provide Python fallbacks.
 
-**AWS Credentials on EC2:**
-- When executing on EC2 instances, AWS credentials are automatically available via IAM instance role
-- Simply use `boto3.client('s3')` without explicit credentials - boto3 will automatically use IAM role credentials
-- The AWS region is set via environment variables (AWS_REGION, AWS_DEFAULT_REGION)
-- Example:
+**AWS Credentials and S3 Access:**
+- When executing on EC2/ECS, AWS credentials are automatically available via IAM instance/task role
+- Simply use `boto3.client('s3')` without explicit credentials - boto3 automatically uses IAM role credentials
+- **IMPORTANT for S3 operations:**
+  1. S3 buckets can be in different regions - always detect bucket region before operations
+  2. Use `s3.get_bucket_location()` to detect the bucket's region, then create a client for that region
+  3. Handle permission errors gracefully - 403 Forbidden means the IAM role lacks permissions
+  4. Example for S3 operations:
   ```python
   import boto3
   import os
+  from botocore.exceptions import ClientError
   
-  # Get region from environment (set automatically on EC2)
-  region = os.getenv('AWS_REGION', 'us-east-1')
-  s3 = boto3.client('s3', region_name=region)
+  # Default region from environment
+  default_region = os.getenv('AWS_REGION', os.getenv('AWS_DEFAULT_REGION', 'us-east-1'))
+  
+  # Create S3 client (S3 works with any region, but use default for metadata operations)
+  s3_meta = boto3.client('s3', region_name=default_region)
+  
+  # For bucket operations, detect the bucket's actual region
+  def get_bucket_region(bucket_name: str) -> str:
+      try:
+          response = s3_meta.head_bucket(Bucket=bucket_name)
+          # HeadBucket doesn't return region in response, use get_bucket_location instead
+          location = s3_meta.get_bucket_location(Bucket=bucket_name)
+          # get_bucket_location returns None for us-east-1, 'EU' for Europe, etc.
+          region = location.get('LocationConstraint') or 'us-east-1'
+          return region
+      except ClientError as e:
+          error_code = e.response.get('Error', {}).get('Code', '')
+          if error_code == '403':
+              raise PermissionError(f"Access denied to bucket {bucket_name}. Check IAM role permissions.")
+          raise
+  
+  # Use the bucket's region for operations (better performance and avoids issues)
+  bucket_region = get_bucket_region('my-bucket')
+  s3 = boto3.client('s3', region_name=bucket_region)
   # No credentials needed - uses IAM role automatically
   ```
 """
@@ -230,7 +467,16 @@ IMPORTANT: Generate ONLY executable Python code that can be run directly. Includ
             exec_status = execution_result.get("status", "success")
         overall_status = "success" if exec_status == "success" else "error"
 
-        return {
+        # Extract error information from execution_result for top-level error reporting
+        error_message = None
+        if overall_status == "error" and isinstance(execution_result, dict):
+            error_message = execution_result.get("error")
+            if not error_message and execution_result.get("stderr"):
+                error_message = f"Execution failed: {execution_result.get('stderr', '')[:500]}"
+            elif not error_message:
+                error_message = "Tool execution failed (see execution_result for details)"
+
+        result = {
             "status": overall_status,
             "tool_generated": True,
             "explanation": _extract_explanation(content),
@@ -238,6 +484,12 @@ IMPORTANT: Generate ONLY executable Python code that can be run directly. Includ
             "execution_result": execution_result,
             "full_response": content
         }
+        
+        # Add error field if execution failed
+        if error_message:
+            result["error"] = error_message
+
+        return result
         
     except Exception as e:
         logger.error(f"❌ Tool Generator Agent error: {e}", exc_info=True)
@@ -319,7 +571,13 @@ async def _execute_generated_code(
     
     if use_ec2:
         try:
-            from ec2_executor import get_ec2_executor
+            # Prefer package import. The backend is normally run as `python -m backend.main_with_mcp`,
+            # so `backend.ec2_executor` is the correct module path.
+            try:
+                from backend.ec2_executor import get_ec2_executor
+            except Exception:
+                # Fallback for legacy execution where backend/ is on PYTHONPATH directly.
+                from ec2_executor import get_ec2_executor
             executor = get_ec2_executor()
             
             logger.info("🔧 Using EC2 instance for code execution (with pre-installed bioinformatics tools)")
@@ -365,8 +623,13 @@ async def _execute_generated_code(
                         "error_type": type(e).__name__
                     }
                 
-        except ImportError:
-            logger.warning("⚠️  EC2 executor not available (paramiko not installed?), falling back to local execution")
+        except ImportError as e:
+            # This can happen if paramiko is missing, but can also be triggered by *any* import-time
+            # failure inside backend/ec2_executor.py (boto3, botocore, etc). Log the real reason.
+            logger.warning(
+                f"⚠️  EC2 executor not available (import failed: {type(e).__name__}: {e}). "
+                "Falling back to local execution."
+            )
             use_ec2 = False
         except Exception as e:
             logger.error(f"❌ EC2 execution error: {e}", exc_info=True)
