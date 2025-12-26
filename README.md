@@ -8,13 +8,16 @@
 
 An AI-powered web application for managing biotechnology workflows via natural language commands, featuring interactive phylogenetic tree visualization, simulated DNA synthesis vendor research, and comprehensive bioinformatics tools with session management and history tracking.
 
-## 📌 Current Status (as of Phase 1 rollout)
+## 📌 Current Status (as of Version 2.0)
 
+- **Architecture**: ✅ **Refactored and improved** — centralized `agent_tools.py` module, simplified agent codebase, better separation of concerns.
 - **Execution architecture**: ✅ **Phase 1 complete** — centralized `ExecutionBroker`, routing policy v1, input discovery/size estimation, generalized jobs.
 - **Sync execution**: ✅ Supported (local / EC2 depending on deployment & environment).
 - **Async execution**: ✅ Supported for **FastQC on EMR** (returns `job_id` immediately).
 - **Jobs API**: ✅ `/jobs/{job_id}` + `/jobs/{job_id}/results` working (and additional job helpers exist).
-- **Testing**: ✅ Unit tests run in **mock mode** by default; integration tests are **opt-in**.
+- **Testing**: ✅ Comprehensive test suite with unit tests (mock mode by default), integration tests (opt-in), evaluation framework, and deployed backend tests.
+- **Agent Tools**: ✅ 16+ bioinformatics tools centrally defined and organized in `agent_tools.py`.
+- **UI/UX**: ✅ Enhanced with ThinkingIndicator component, improved component organization, and better user feedback.
 
 ## 🚀 Features
 
@@ -66,13 +69,43 @@ An AI-powered web application for managing biotechnology workflows via natural l
 - **Export Capabilities**: Save plots and results in multiple formats
 
 ### 🧰 **Comprehensive Tool Suite**
+All tools are centrally defined in `backend/agent_tools.py` for better maintainability and organization.
+
+**Core Sequence Analysis:**
 - **Sequence Alignment**: Multiple algorithms (ClustalW, Muscle, MAFFT)
 - **Mutation Analysis**: Generate and analyze sequence variants
-- **Data Science Tools**: Statistical analysis and feature engineering
-- **Variant Selection**: Smart selection based on diversity, length, or custom criteria
+- **Phylogenetic Tree Construction**: Build and visualize evolutionary relationships
+- **Sequence Selection**: Smart selection based on diversity, length, conservation, or custom criteria
+- **Read Merging**: Merge paired-end reads with quality control
+
+**Visualization:**
 - **Plasmid Visualization**: Interactive plasmid and vector visualization with circular/linear views
+- **Phylogenetic Tree Rendering**: Interactive tree visualization with D3.js and ETE3
 - **Clustering Analysis**: Hierarchical clustering with representative sequence selection
-- **Toolbox inventory**: Ask “what tools do you have?” to see a full list of registered tools, discovered `@tool` functions, and detected local/EC2 CLI tools.
+
+**Genomics & Proteomics:**
+- **NCBI Sequence Fetching**: Retrieve sequences from NCBI databases by accession
+- **UniProt Query**: Query UniProt protein database for sequences and metadata
+- **Gene Ontology (GO) Lookup**: Look up GO term details and annotations
+
+**RNA-seq Analysis:**
+- **Single-Cell RNA-seq**: Comprehensive scRNA-seq analysis (Seurat-based pipeline)
+  - Preprocessing and quality control
+  - Marker gene identification
+  - Differential expression analysis
+  - Pathway enrichment
+  - Cell-type annotation
+  - Batch correction
+- **Bulk RNA-seq**: Differential expression analysis using DESeq2
+- **FastQC Quality Control**: Quality assessment for FASTQ files (async EMR jobs)
+
+**DNA Synthesis & Ordering:**
+- **Vendor Research**: Simulated DNA synthesis vendor comparison and selection
+- **Synthesis Submission**: Submit sequences for DNA synthesis with pricing quotes
+
+**Session & Workflow Management:**
+- **Session Creation**: Create and manage analysis sessions
+- **Toolbox Inventory**: Ask "what tools do you have?" to see all available tools, MCP tools, and CLI tools
 
 ### 🔄 **Session Management**
 - **Persistent Sessions**: Track your workflow across multiple commands
@@ -101,6 +134,37 @@ An AI-powered web application for managing biotechnology workflows via natural l
 - **Daily prompt cap**: 100 prompts per session/IP per day.
 - In production, back these limits with Redis or a database for distributed enforcement.
 
+## 🏗 Architecture Improvements (Version 2.0)
+
+### Centralized Agent Tools Module
+- **`backend/agent_tools.py`**: All agent tool definitions (`@tool` decorated functions) are now centralized in a single module
+  - Improved maintainability and discoverability
+  - Better separation of concerns between agent logic and tool implementations
+  - Simplified imports and dependency management
+  - 16+ bioinformatics tools organized and documented
+
+### Refactored Agent System
+- **Simplified `agent.py`**: Major codebase reduction (1400+ lines refactored)
+  - Cleaner `CommandProcessor` class with dependency injection
+  - Improved error handling and response formatting
+  - Better testability and modularity
+
+### Enhanced Testing Infrastructure
+- **Evaluation Framework** (`tests/evals/`): Systematic evaluation of agent components
+- **Deployed Backend Tests**: Integration tests for production deployments
+- **Comprehensive Test Coverage**: Unit, integration, workflow, and evaluation tests
+
+### Agent Specifications
+- **`agents/` directory**: Structured agent specifications and prompts
+  - Intent detector agent specification
+  - Tool generator agent specification
+  - Clear separation of agent roles and responsibilities
+
+### Frontend Improvements
+- **ThinkingIndicator Component**: Better user feedback during agent processing
+- **Improved Component Organization**: Better structure and maintainability
+- **Enhanced Styling**: Component-specific styles in dedicated directory
+
 ## 🗂 Project Structure
 
 ```
@@ -108,37 +172,79 @@ Helix.AI/
 ├── start.sh                 # 🚀 Single startup command
 ├── frontend/                # React frontend with natural language support
 │   ├── src/
-│   │   ├── components/     # React components including PhylogeneticTree, PlasmidVisualizer
-│   │   ├── services/       # MCP API service with session management
+│   │   ├── components/     # React components
+│   │   │   ├── PhylogeneticTree.tsx      # Interactive phylogenetic tree visualization
+│   │   │   ├── PlasmidVisualizer.tsx     # Plasmid and vector visualization
+│   │   │   ├── ThinkingIndicator.tsx     # Loading/thinking indicator component
+│   │   │   ├── ExamplesPanel.tsx         # Example commands panel
+│   │   │   ├── JobsPanel.tsx             # Job management panel
+│   │   │   └── ...                       # Other UI components
+│   │   ├── services/       # API services
+│   │   │   └── mcpApi.ts   # MCP API service with session management
+│   │   ├── styles/         # Component-specific styles
 │   │   ├── utils/          # Command parser and utilities
 │   │   └── App.tsx        # Main application with drag-and-drop
 │   └── package.json
 ├── backend/                 # FastAPI + Enhanced MCP backend
 │   ├── main_with_mcp.py   # Main FastAPI application with MCP integration
-│   ├── history_manager.py  # Session and history management
+│   ├── agent.py           # LangChain agent (refactored, simplified)
+│   ├── agent_tools.py     # 🆕 Centralized agent tool definitions (@tool functions)
 │   ├── command_router.py  # Command handling and routing
-│   ├── agent.py           # LangChain agent with bioinformatics tools
+│   ├── context_builder.py # Context building for agent execution
+│   ├── execution_broker.py # Execution routing and policy management
+│   ├── history_manager.py # Session and history management
+│   ├── intent_classifier.py # Intent classification for command routing
+│   ├── tool_generator_agent.py # Dynamic tool generation agent
+│   ├── tool_inventory.py  # Tool discovery and inventory management
+│   ├── tool_schemas.py    # Tool schema definitions
+│   ├── job_manager.py     # Async job management (EMR, etc.)
+│   ├── plan_ir.py         # Plan intermediate representation
+│   ├── prompts/           # Agent prompt templates
 │   └── requirements.txt
+├── agents/                 # 🆕 Agent specification files
+│   ├── intent-detector-agent.md  # Intent classification agent spec
+│   └── tool-generator-agent.md   # Tool generation agent spec
 ├── tools/                   # Bioinformatics tool modules
-│   ├── mutations.py        # Sequence mutation and variant generation
 │   ├── alignment.py        # Sequence alignment tools
-│   ├── data_science.py     # Statistical analysis and visualization
-│   ├── variant_selection.py # Smart variant selection algorithms
+│   ├── mutations.py        # Sequence mutation and variant generation
 │   ├── phylogenetic_tree.py # Phylogenetic tree construction and analysis
+│   ├── plasmid_visualizer.py # Plasmid and vector visualization
 │   ├── dna_vendor_research.py # Simulated DNA synthesis vendor research
-│   ├── command_parser.py   # Natural language command parsing
-│   ├── command_executor.py # Command execution engine
-│   ├── command_handler.py  # Combined parser and executor
-│   └── plasmid_visualizer.py # Plasmid and vector visualization
+│   ├── sequence_selection.py # Smart sequence selection algorithms
+│   ├── single_cell_analysis.py # Single-cell RNA-seq analysis
+│   ├── bulk_rnaseq.py      # Bulk RNA-seq differential expression (DESeq2)
+│   ├── quality_assessment.py # FastQC quality control
+│   ├── read_merging.py     # Read merging and preprocessing
+│   ├── synthesis_submission.py # DNA synthesis submission
+│   ├── ncbi_tools.py       # NCBI sequence fetching
+│   ├── uniprot_tools.py    # UniProt protein database queries
+│   ├── go_tools.py         # Gene Ontology term lookup
+│   └── r_scripts/          # R scripts for analysis workflows
 ├── tests/                   # Comprehensive test suite
 │   ├── backend/            # Backend-specific tests
-│   ├── frontend/           # Frontend-specific tests
+│   │   ├── test_agent_tools.py        # 🆕 Agent tools tests
+│   │   ├── test_command_processor.py  # 🆕 Command processor tests
+│   │   ├── test_execution_logs.py     # 🆕 Execution logging tests
+│   │   └── ...                        # Other backend tests
+│   ├── evals/              # 🆕 Evaluation framework
+│   │   ├── cases/          # Test case files (JSONL format)
+│   │   ├── test_eval_intent_classifier.py
+│   │   └── test_eval_router_tool_mapping.py
 │   ├── integration/        # End-to-end integration tests
+│   │   ├── test_deployed_backend.py   # 🆕 Deployed backend tests
+│   │   └── run_deployed_tests.sh      # 🆕 Test runner script
+│   ├── workflows/          # Workflow integration tests
 │   └── README.md          # Test documentation
-├── data/                    # Data files and samples
-│   ├── samples/            # Sample sequence files
-│   ├── phylogenetic/       # Phylogenetic tree datasets
-│   └── README.md          # Data documentation
+├── infrastructure/         # AWS CDK infrastructure as code
+│   ├── helix_infrastructure/
+│   │   └── helix_stack.py  # CDK stack definition
+│   └── app.py              # CDK app entry point
+├── scripts/                # Deployment and utility scripts
+│   ├── aws/                # AWS deployment scripts
+│   │   ├── deploy.sh       # Main deployment script
+│   │   ├── setup-*.sh      # Various setup scripts
+│   │   └── ...             # Other AWS utilities
+│   └── emr/                # EMR-specific scripts
 ├── docs/                    # Documentation
 │   ├── demos/             # Demo and tutorial files
 │   ├── reports/           # Test reports and analysis
@@ -147,6 +253,9 @@ Helix.AI/
 │   ├── HISTORY_TRACKING.md
 │   └── NATURAL_LANGUAGE_GUIDE.md
 ├── shared/                 # Shared utilities and models
+├── data/                   # Data files and samples
+│   ├── samples/            # Sample sequence files
+│   └── rnaseq_demo/        # RNA-seq demo data
 └── README.md              # This file
 ```
 
@@ -338,25 +447,66 @@ Run the comprehensive test suite:
 
 ```bash
 # Unit tests (default; integration tests are deselected)
+# Runs in mock mode (HELIX_MOCK_MODE=1) by default
 pytest
 
 # Opt-in integration tests (requires backend running locally and network access)
 pytest -m integration
 
+# Run evaluation framework tests
+pytest tests/evals/
+
+# Run deployed backend tests (requires deployed backend URL)
+pytest tests/integration/test_deployed_backend.py
+
 # Frontend tests
 cd frontend && npm test
 
-# (Optional) run backend-only tests explicitly
-pytest tests/backend/
+# Run specific test categories
+pytest tests/backend/              # Backend unit tests only
+pytest tests/workflows/            # Workflow integration tests
+pytest tests/backend/test_agent_tools.py  # Agent tools tests
 ```
+
+### Test Structure
+
+- **Unit Tests** (`tests/backend/`): Fast, isolated tests that run in mock mode by default
+  - Agent tools tests (`test_agent_tools.py`)
+  - Command processor tests (`test_command_processor.py`)
+  - Execution broker and routing tests
+  - Intent classifier tests
+  - Tool generator agent tests
+
+- **Evaluation Framework** (`tests/evals/`): Systematic evaluation of agent components
+  - Intent classification evaluation
+  - Router tool mapping evaluation
+  - Test cases in JSONL format for reproducibility
+
+- **Integration Tests** (`tests/integration/`): End-to-end tests with real backend
+  - Deployed backend functionality tests
+  - Natural language command mapping tests
+  - Core functionality validation
+
+- **Workflow Tests** (`tests/workflows/`): Multi-step workflow validation
+  - Alignment and phylogenetic tree workflows
+  - RNA-seq analysis workflows
+  - Variant analysis workflows
 
 ## 📚 Documentation
 
+### System Documentation
 - **[Bioinformatics Agent Plan](docs/BioinformaticsAgentPlan.md)**: System architecture, agent prompt, roadmap
 - **[Natural Language Guide](docs/NATURAL_LANGUAGE_GUIDE.md)**: How to use natural language commands
+- **[Development Guide](docs/DEVELOPMENT_GUIDE.md)**: Development setup and guidelines
+
+### Feature Guides
 - **[Phylogenetic Tree Guide](docs/PHYLOGENETIC_TREE_GUIDE.md)**: Tree visualization and analysis
 - **[DNA Vendor Research](docs/DNA_VENDOR_RESEARCH_GUIDE.md)**: Simulated vendor comparison and selection
-- **[Development Guide](docs/DEVELOPMENT_GUIDE.md)**: Development setup and guidelines
+- **[EMR Setup Guide](docs/EMR_SETUP_GUIDE.md)**: AWS EMR cluster setup and configuration
+
+### Agent Specifications
+- **[Intent Detector Agent](agents/intent-detector-agent.md)**: Intent classification agent specification
+- **[Tool Generator Agent](agents/tool-generator-agent.md)**: Dynamic tool generation agent specification
 
 ## 🤝 Contributing
 
@@ -378,10 +528,12 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 📊 Status
 
-- **Architecture**: ✅ Unified monolithic system (primary)
-- **Backend**: ✅ Running (FastAPI + Enhanced MCP)
-- **Frontend**: ✅ Running (React + TypeScript)
+- **Architecture**: ✅ Unified monolithic system (primary) - Refactored and improved in v2.0
+- **Backend**: ✅ Running (FastAPI + Enhanced MCP + Centralized Agent Tools)
+- **Frontend**: ✅ Running (React + TypeScript + Enhanced UI components)
+- **Agent Tools**: ✅ 16+ tools centrally organized in `agent_tools.py`
 - **Session Management**: ✅ File-based with optional Redis
-- **Testing**: ✅ Comprehensive test suite
-- **Documentation**: ✅ Complete documentation
-- **Cloud Ready**: 🔄 Microservices option for future scaling
+- **Testing**: ✅ Comprehensive test suite (unit, integration, eval, workflow tests)
+- **Documentation**: ✅ Complete documentation including agent specifications
+- **Evaluation Framework**: ✅ Systematic evaluation infrastructure
+- **Cloud Ready**: ✅ AWS deployment with CDK, ECS, EMR support
