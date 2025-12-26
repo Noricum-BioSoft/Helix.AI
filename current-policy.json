@@ -1,0 +1,41 @@
+{
+  "Version" : "2012-10-17",
+  "Id" : "auto-s3-2",
+  "Statement" : [ {
+    "Sid" : "Allow access through S3 for all principals in the account that are authorized to use S3",
+    "Effect" : "Allow",
+    "Principal" : {
+      "AWS" : "*"
+    },
+    "Action" : [ "kms:Encrypt", "kms:Decrypt", "kms:ReEncrypt*", "kms:GenerateDataKey*", "kms:DescribeKey" ],
+    "Resource" : "*",
+    "Condition" : {
+      "StringEquals" : {
+        "kms:ViaService" : "s3.us-west-1.amazonaws.com",
+        "kms:CallerAccount" : "794270057041"
+      }
+    }
+  }, {
+    "Sid" : "Allow direct access to key metadata to the account",
+    "Effect" : "Allow",
+    "Principal" : {
+      "AWS" : "arn:aws:iam::794270057041:root"
+    },
+    "Action" : [ "kms:Describe*", "kms:Get*", "kms:List*", "kms:PutKeyPolicy" ],
+    "Resource" : "*"
+  }, {
+    "Sid": "Allow access through Lambda for all principals in the account",
+    "Effect": "Allow",
+    "Principal": {
+      "AWS": "*"
+    },
+    "Action": [ "kms:Decrypt", "kms:DescribeKey" ],
+    "Resource": "*",
+    "Condition": {
+      "StringEquals": {
+        "kms:ViaService": "lambda.us-west-1.amazonaws.com",
+        "kms:CallerAccount": "794270057041"
+      }
+    }
+  }]
+}

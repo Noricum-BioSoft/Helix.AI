@@ -208,3 +208,6 @@ echo "To SSH to the instance:"
 echo "  ssh -i ~/.ssh/${KEY_NAME}.pem ec2-user@$PUBLIC_IP"
 echo ""
 
+
+
+

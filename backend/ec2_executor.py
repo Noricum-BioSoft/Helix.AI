@@ -33,6 +33,13 @@ class EC2Executor:
         self.security_group_id = os.getenv('HELIX_EC2_SECURITY_GROUP_ID')
         self.subnet_id = os.getenv('HELIX_EC2_SUBNET_ID')
         
+        # Debug: Log what EC2Executor sees at instantiation
+        logger.info(f"🔍 EC2Executor instantiated with:")
+        logger.info(f"  region={self.region}")
+        logger.info(f"  instance_id={self.instance_id}")
+        logger.info(f"  key_name={self.key_name}")
+        logger.info(f"  key_file_path={self.key_file_path}")
+        
         # Cache for instance details
         self._instance_cache: Optional[Dict[str, Any]] = None
         self._cache_time: float = 0

@@ -113,7 +113,9 @@ class CommandRouter:
             return 'variant_selection', self._extract_parameters(command, 'variant_selection', session_context)
         
         # Check for phylogenetic tree first (highest priority)
-        if any(phrase in command_lower for phrase in ['phylogenetic tree', 'evolutionary tree', 'phylogeny']):
+        # Include "visualize" variations to ensure tree creation happens
+        if (any(phrase in command_lower for phrase in ['phylogenetic tree', 'evolutionary tree', 'phylogeny']) or
+            (re.search(r'visualize.*phylogenetic', command_lower) or re.search(r'visualize.*tree', command_lower))):
             print(f"🔧 Command router: Matched 'phylogenetic tree' -> phylogenetic_tree")
             return 'phylogenetic_tree', self._extract_parameters(command, 'phylogenetic_tree', session_context)
         
@@ -150,7 +152,7 @@ class CommandRouter:
         if any(phrase in command_lower for phrase in vendor_keywords):
             print(f"🔧 Command router: Matched 'vendor' -> dna_vendor_research")
             return 'dna_vendor_research', self._extract_parameters(command, 'dna_vendor_research', session_context)
-
+        
         # Check for plasmid for representatives (HIGH PRIORITY - before general plasmid)
         if any(phrase in command_lower for phrase in ['insert representatives', 'express representatives', 'clone representatives', 'vector representatives', 'plasmid representatives']):
             print(f"🔧 Command router: Matched 'plasmid representatives' -> plasmid_for_representatives")
@@ -685,8 +687,10 @@ class CommandRouter:
             is_full_plasmid = not re.search(r'\b(?:into|insert|in)\s+', command, re.IGNORECASE)
             
             # Extract vector name if specified
-            vector_match = re.search(r'\b(?:into|in)\s+(\w+)', command, re.IGNORECASE)
+            vector_match = re.search(r"\b(?:into|in)\s+(?:a|an|the)?\s*([A-Za-z0-9_-]+)", command, re.IGNORECASE)
             vector_name = vector_match.group(1) if vector_match else None
+            if vector_name and vector_name.lower() in {"a", "an", "the", "plasmid", "vector", "construct"}:
+                vector_name = None
             
             # Extract position if specified
             position_match = re.search(r'\bat\s+position\s+(\d+)', command, re.IGNORECASE)
@@ -903,6 +907,7 @@ class CommandRouter:
             # Pattern 1: Extract S3 paths or file paths from "R1: s3://..." or "R2: s3://..."
             forward_reads = ""
             reverse_reads = ""
+            output_path = None
             
             # Pattern 1a: Extract S3 paths from "R1: s3://..." format
             r1_match = re.search(r'R1\s*:\s*(s3://[^\s]+|/[^\s]+)', command, re.IGNORECASE)
@@ -923,6 +928,19 @@ class CommandRouter:
                 r2_path_match = re.search(r's3://[^\s]*(?:R2|r2|_2\.fq|mate_R2)[^\s]*', command, re.IGNORECASE)
                 if r2_path_match:
                     reverse_reads = r2_path_match.group(0).strip()
+
+            # Output path (S3) if specified.
+            # Examples:
+            # - "output: s3://bucket/path/out.fq"
+            # - "output ... on s3://bucket/path/out.fq"
+            # - "save to s3://bucket/path/out.fq"
+            output_match = re.search(r'(?:output|save|write|upload)[^\n]*?(s3://[^\s]+)', command, re.IGNORECASE)
+            if output_match:
+                output_path = output_match.group(1).strip()
+            else:
+                on_s3_match = re.search(r'\bon\s+(s3://[^\s]+)', command, re.IGNORECASE)
+                if on_s3_match:
+                    output_path = on_s3_match.group(1).strip()
             
             # Pattern 2: Extract from "Forward reads (filename):\n{content}" and "Reverse reads (filename):\n{content}"
             if not forward_reads:
@@ -1003,6 +1021,7 @@ class CommandRouter:
                 "forward_reads": forward_reads,
                 "reverse_reads": reverse_reads,
                 "min_overlap": min_overlap,
+                "output": output_path,
                 "command": command,  # Include original command for tool-generator-agent
                 "original_command": command  # Also include as original_command
             }

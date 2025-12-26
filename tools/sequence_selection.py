@@ -244,7 +244,7 @@ def run_sequence_selection_raw(aligned_sequences: str,
     # Select sequences
     return select_sequences_by_criteria(parsed_sequences, selection_type, num_sequences)
 
-from langchain.agents import tool
+from langchain_core.tools import tool
 
 @tool
 def run_sequence_selection(aligned_sequences: str, selection_type: str = "random", num_sequences: int = 1):

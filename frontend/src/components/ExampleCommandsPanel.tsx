@@ -30,16 +30,12 @@ export const ExampleCommandsPanel: React.FC<ExampleCommandsPanelProps> = ({
       icon: "🚀",
       commands: [
         {
-          command: "What is bioinformatics?",
-          description: "Ask the agent for a plain-language overview of bioinformatics"
-        },
-        {
-          command: "What is a sequence alignment?",
-          description: "Get a short explanation of sequence alignments and when to use them"
-        },
-        {
           command: "What are common bioinformatics challenges and how can AI help overcome them?",
-          description: "Learn about typical problems in bioinformatics workflows and how AI can solve them"
+          description: "Learn about typical Bioinformatics problems and how AI can help."
+        },
+        {
+          command: "List all tools Helix.AI has access to (registered MCP tools, discovered @tool functions, and local/EC2 CLI tools)",
+          description: "Discover available tools and capabilities"
         }
       ]
     },

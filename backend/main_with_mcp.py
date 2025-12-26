@@ -22,22 +22,7 @@ _dotenv_path = find_dotenv()
 load_dotenv(_dotenv_path or None, override=True)
 _dotenv_values = dotenv_values(_dotenv_path) if _dotenv_path else {}
 
-# Debug: Print EC2-related environment variables at startup
-print("=" * 80)
-print(f"🔍 DEBUG: EC2 Environment Variables at Backend Startup (dotenv: {_dotenv_path or 'NOT FOUND'}):")
-print(f"  AWS_REGION: {os.getenv('AWS_REGION', 'NOT SET')}")
-print(f"  HELIX_EC2_INSTANCE_ID: {os.getenv('HELIX_EC2_INSTANCE_ID', 'NOT SET')}")
-print(f"  HELIX_EC2_KEY_NAME: {os.getenv('HELIX_EC2_KEY_NAME', 'NOT SET')}")
-print(f"  HELIX_EC2_KEY_FILE: {os.getenv('HELIX_EC2_KEY_FILE', 'NOT SET')}")
-print(f"  HELIX_USE_EC2: {os.getenv('HELIX_USE_EC2', 'NOT SET')}")
-print(f"  HELIX_EC2_AUTO_CREATE: {os.getenv('HELIX_EC2_AUTO_CREATE', 'NOT SET')}")
-# Also show what values were parsed from the dotenv file (if found)
-if _dotenv_values:
-    print("  [dotenv] AWS_REGION:", _dotenv_values.get("AWS_REGION", "NOT IN FILE"))
-    print("  [dotenv] HELIX_EC2_INSTANCE_ID:", _dotenv_values.get("HELIX_EC2_INSTANCE_ID", "NOT IN FILE"))
-    print("  [dotenv] HELIX_EC2_KEY_NAME:", _dotenv_values.get("HELIX_EC2_KEY_NAME", "NOT IN FILE"))
-    print("  [dotenv] HELIX_EC2_KEY_FILE:", _dotenv_values.get("HELIX_EC2_KEY_FILE", "NOT IN FILE"))
-print("=" * 80)
+# Debug prints moved to startup event to avoid multiple outputs with uvicorn reloader
 
 # Configure logging to output to stdout (for CloudWatch)
 logging.basicConfig(
@@ -56,13 +41,11 @@ from backend.context_builder import _truncate_sequence
 from backend.execution_broker import ExecutionBroker, ExecutionRequest
 
 
-def _get_bioagent_handle_command():
-    """
-    Lazy import of BioAgent to avoid importing heavy LLM dependencies at module import time.
-    This keeps lightweight endpoints (like /health, /mcp/tools) working in sandbox/CI.
-    """
-    from backend.agent import handle_command  # local import by design
-    return handle_command
+# NOTE: handle_command from backend.agent is lazily imported inline (not at module level)
+# to avoid loading heavy LLM dependencies (langgraph, langchain) during server startup.
+# This keeps lightweight endpoints like /health and /mcp/tools fast, and allows the service
+# to work in sandbox/CI environments where LLM dependencies may not be installed.
+# See the three locations where "from backend.agent import handle_command" appears for details.
 
 def _truncate_sequences_in_dict(obj: Any, max_length: int = 100) -> Any:
     """
@@ -70,6 +53,11 @@ def _truncate_sequences_in_dict(obj: Any, max_length: int = 100) -> Any:
     This prevents large sequences from being included in JSON responses or LLM context.
     """
     if isinstance(obj, str):
+        # NEVER truncate Newick format strings (phylogenetic trees)
+        # Newick strings contain parentheses, colons, commas, semicolons - not sequences
+        if obj.strip().endswith(';') and ('(' in obj or ')' in obj or ':' in obj):
+            return obj  # This is a Newick string, keep it intact
+        
         # Truncate if it's longer than max_length
         if len(obj) > max_length:
             # Check if it looks like a sequence (mostly ATCGUN characters, not text with spaces/punctuation)
@@ -85,8 +73,11 @@ def _truncate_sequences_in_dict(obj: Any, max_length: int = 100) -> Any:
     elif isinstance(obj, dict):
         truncated = {}
         for key, value in obj.items():
+            # NEVER truncate tree_newick - it's needed for visualization
+            if key == "tree_newick" and isinstance(value, str):
+                truncated[key] = value  # Keep full Newick string
             # Always truncate "sequence" fields if they're strings
-            if key == "sequence" and isinstance(value, str) and len(value) > max_length:
+            elif key == "sequence" and isinstance(value, str) and len(value) > max_length:
                 truncated[key] = _truncate_sequence(value, max_length)
             # Truncate full_sequence fields too - they shouldn't be in JSON responses
             # Full sequences should be stored separately or accessed via download, not in API responses
@@ -169,9 +160,18 @@ def _get_execution_broker() -> ExecutionBroker:
         _execution_broker = ExecutionBroker(tool_executor=call_mcp_tool)
     return _execution_broker
 
+# CORS configuration
+# When allow_credentials=True, we cannot use allow_origins=["*"]
+# We must specify explicit origins
+cors_origins = os.getenv(
+    "CORS_ORIGINS",
+    "http://localhost:5173,http://localhost:3000,http://localhost:5174"
+).split(",")
+cors_origins = [origin.strip() for origin in cors_origins if origin.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -449,7 +449,31 @@ def build_standard_response(
     # Extract logs (stdout/stderr) from execution results
     logs = _extract_execution_logs(truncated_result)
     
-    return {
+    # Extract phylogenetic tree data to top level for easy frontend access
+    # This ensures tree_newick is available whether it's in raw_result or at top level
+    tree_data = {}
+    if isinstance(truncated_result, dict):
+        print(f"🔍 [build_standard_response] Checking truncated_result for tree data...")
+        print(f"🔍 [build_standard_response] truncated_result keys: {list(truncated_result.keys())}")
+        print(f"🔍 [build_standard_response] truncated_result.get('tree_newick'): {bool(truncated_result.get('tree_newick'))}")
+        if truncated_result.get("tree_newick"):
+            tree_data["tree_newick"] = truncated_result["tree_newick"]
+            print(f"🔍 [build_standard_response] Added tree_newick to tree_data ({len(truncated_result['tree_newick'])} chars)")
+        if truncated_result.get("ete_visualization"):
+            tree_data["ete_visualization"] = truncated_result["ete_visualization"]
+            print(f"🔍 [build_standard_response] Added ete_visualization to tree_data")
+        if truncated_result.get("clustering_result"):
+            tree_data["clustering_result"] = truncated_result["clustering_result"]
+            print(f"🔍 [build_standard_response] Added clustering_result to tree_data")
+        if truncated_result.get("clustered_visualization"):
+            tree_data["clustered_visualization"] = truncated_result["clustered_visualization"]
+            print(f"🔍 [build_standard_response] Added clustered_visualization to tree_data")
+    else:
+        print(f"🔍 [build_standard_response] truncated_result is not a dict: {type(truncated_result)}")
+    
+    print(f"🔍 [build_standard_response] tree_data keys: {list(tree_data.keys())}")
+    
+    response = {
         "version": "1.0",
         "success": success,
         "session_id": session_id,
@@ -471,6 +495,13 @@ def build_standard_response(
         "raw_result": truncated_result,  # Truncated to prevent large sequences in JSON
         "timestamp": now
     }
+    
+    # Add tree data to top level for frontend
+    response.update(tree_data)
+    print(f"🔍 [build_standard_response] Final response keys after update: {list(response.keys())}")
+    print(f"🔍 [build_standard_response] response.get('tree_newick'): {bool(response.get('tree_newick'))}")
+    
+    return response
 
 def _validate_files(files: Optional[List[Dict[str, Any]]]) -> None:
     if not files:
@@ -788,9 +819,6 @@ async def execute(req: CommandRequest, request: Request):
         if hasattr(history_manager, 'sessions') and req.session_id in history_manager.sessions:
             session_context = history_manager.sessions[req.session_id]
 
-        from backend.intent_classifier import classify_intent
-        intent = classify_intent(req.command)
-
         # Phase 3: detect multi-step workflows and execute as a Plan IR (sync/async broker handles routing)
         def _looks_like_workflow(cmd: str) -> bool:
             c = (cmd or "").lower()
@@ -805,7 +833,11 @@ async def execute(req: CommandRequest, request: Request):
 
             import time
             agent_start_time = time.time()
-            handle_command = _get_bioagent_handle_command()
+            # Lazy import: Import backend.agent only when needed, not at module import time.
+            # This avoids loading heavy LLM dependencies (langgraph, langchain) during server startup,
+            # keeping lightweight endpoints like /health and /mcp/tools fast and allowing the service
+            # to work in sandbox/CI environments where LLM dependencies may not be installed.
+            from backend.agent import handle_command
             agent_result = await handle_command(req.command, session_id=req.session_id, session_context=session_context)
             
             agent_done_time = time.time()
@@ -898,6 +930,9 @@ async def execute(req: CommandRequest, request: Request):
             # Phase 4: prevent unintended tool generation for pure Q&A.
             # If the user intent is Q&A and the agent isn't available (e.g. mock mode),
             # return a safe response instead of routing into CommandRouter/tool-gen.
+            # Classify intent here (only when needed in fallback path) to avoid redundant classification
+            from backend.intent_classifier import classify_intent
+            intent = classify_intent(req.command)
             if intent.intent != "execute":
                 standard_response = build_standard_response(
                     prompt=req.command,
@@ -1091,7 +1126,11 @@ async def agent_command(req: AgentCommandRequest, request: Request):
 
         import time
         agent_start_time = time.time()
-        handle_command = _get_bioagent_handle_command()
+        # Lazy import: Import backend.agent only when needed, not at module import time.
+        # This avoids loading heavy LLM dependencies (langgraph, langchain) during server startup,
+        # keeping lightweight endpoints like /health and /mcp/tools fast and allowing the service
+        # to work in sandbox/CI environments where LLM dependencies may not be installed.
+        from backend.agent import handle_command
         result = await handle_command(req.prompt, session_id=session_id, session_context=session_context)
         agent_done_time = time.time()
         agent_duration = agent_done_time - agent_start_time
@@ -1847,223 +1886,58 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
         # Use tool-generator-agent if S3 paths or file paths (but not FASTQ content)
         use_tool_generator = is_s3_path or (is_file_path and not is_fastq_content)
         
-        if use_tool_generator:
+        # Check if we're already being called from the execution broker to prevent infinite loop
+        from_broker = arguments.get("_from_broker", False)
+        
+        if use_tool_generator and not from_broker:
             # Use tool-generator-agent for S3 paths
-            logger.info(f"🔧 read_merging tool detected S3 paths, routing to tool-generator-agent...")
+            # BUT: Route through execution broker first to respect file size routing decisions
+            # The execution broker will check file sizes and route to EMR if needed
+            logger.info(f"🔧 read_merging tool detected S3 paths, routing through execution broker for infrastructure decision...")
+            
+            # Route through execution broker instead of calling tool-generator-agent directly
+            # This ensures file size-based routing (EMR vs EC2) is respected
+            from backend.execution_broker import ExecutionBroker, ExecutionRequest
+            broker = _get_execution_broker()
+            
+            # The execution broker will:
+            # 1. Discover inputs and calculate file sizes
+            # 2. Evaluate routing policy (EMR if >100MB)
+            # 3. Route to EMR if needed, or call tool-generator-agent via _tool_executor if sync
+            result = await broker.execute_tool(
+                ExecutionRequest(
+                    tool_name="read_merging",
+                    arguments=arguments,
+                    session_id=arguments.get("session_id"),
+                    original_command=arguments.get("command") or arguments.get("user_request", ""),
+                    session_context={}
+                )
+            )
+            
+            # Extract the actual result from broker wrapper
+            if isinstance(result, dict) and result.get("result"):
+                return result["result"]
+            return result
+        elif use_tool_generator and from_broker:
+            # We're already being called from the broker, so call tool-generator-agent directly
+            # to avoid infinite recursion
+            logger.info(f"🔧 read_merging tool called from broker, using tool-generator-agent directly...")
             from backend.tool_generator_agent import generate_and_execute_tool, _discover_inputs_from_args, _discover_outputs_from_args
             
-            # Use original command if available, otherwise reconstruct
-            if original_command:
-                command = original_command
-                user_request = original_command
-            else:
-                command = f"merge forward R1 and reverse R2 reads: R1: {forward_reads} R2: {reverse_reads}"
-                user_request = command
-            
-            # Discover inputs and outputs to pass file information to the agent
             session_context = arguments.get("session_context") or {}
             discovered_inputs = _discover_inputs_from_args(arguments, session_context)
-            if discovered_inputs:
-                logger.info(f"🔧 Discovered {len(discovered_inputs)} input files for infrastructure decision")
-            
-            discovered_outputs = _discover_outputs_from_args(arguments, original_command or command)
-            if discovered_outputs:
-                logger.info(f"🔧 Discovered {len(discovered_outputs)} output paths")
+            discovered_outputs = _discover_outputs_from_args(arguments, original_command)
             
             result = await generate_and_execute_tool(
-                command=command,
-                user_request=user_request,
+                command=original_command,
+                user_request=original_command,
                 session_id=arguments.get("session_id"),
                 inputs=discovered_inputs,
                 outputs=discovered_outputs
             )
-            
-            if result.get("status") == "success":
-                logger.info("✅ Tool-generator-agent successfully generated and executed read merging tool")
-                # Preserve execution_result which contains stdout/stderr logs
-                execution_result = result.get("execution_result", {})
-                
-                # Determine text message - prefer simple success message if execution succeeded
-                # Check if execution actually completed (not just returned early)
-                stderr = execution_result.get("stderr", "")
-                stdout = execution_result.get("stdout", "")
-                returncode = execution_result.get("returncode", 0)
-                
-                # Check for actual errors in stderr (even if returncode is 0)
-                has_error = (
-                    "ERROR" in stderr or
-                    "error occurred" in stderr.lower() or
-                    "403" in stderr or
-                    "Forbidden" in stderr or
-                    "AccessDenied" in stderr or
-                    "Permission denied" in stderr.lower() or
-                    "Failed to" in stderr and "ERROR" in stderr
-                )
-                
-                # Check stderr for warnings about fallback - if we see "falling back to Python implementation"
-                # but no actual merge happened, the code likely returned early
-                has_fallback_warning = "falling back to Python implementation" in stderr.lower()
-                
-                # Check for evidence that merge actually happened
-                # Look for specific success indicators
-                actually_merged = (
-                    "SUCCESS: Merged reads written to" in stdout or
-                    "merged reads written to" in stdout.lower() or
-                    "uploading merged reads" in stdout.lower() or
-                    "uploading merged file" in stdout.lower() or
-                    "Successfully merged" in stdout or
-                    "Merged file uploaded successfully" in stdout or
-                    ("merged" in stdout.lower() and ("upload" in stdout.lower() or "s3://" in stdout.lower()))
-                )
-                
-                # Also check if the code just returned early (empty stdout after fallback warning)
-                returned_early = (
-                    has_fallback_warning and 
-                    not stdout and 
-                    not actually_merged and
-                    "SUCCESS" not in stdout
-                )
-                
-                # Execution succeeded only if returncode is 0 AND no errors AND merge actually happened
-                execution_succeeded = (
-                    returncode == 0 and
-                    not has_error and
-                    actually_merged
-                )
-                
-                # Use explanation only if it's concise, otherwise use simple message
-                explanation = result.get("explanation", "")
-                
-                # Detect if explanation is the full LLM analysis (not a short summary)
-                # Full analysis typically contains multiple sections like "Task Analysis", "Tool Research", etc.
-                is_full_analysis = (
-                    explanation and (
-                        "### Task Analysis" in explanation or
-                        "### Tool Research" in explanation or
-                        "### Infrastructure Decision" in explanation or
-                        "### Implementation Plan" in explanation or
-                        "### Python Implementation" in explanation or
-                        explanation.startswith("To address") or
-                        explanation.startswith("To solve") or
-                        len(explanation) > 300  # Full analysis is typically long
-                    )
-                )
-                
-                # Check for errors first (403, permission errors, etc.)
-                if has_error:
-                    # Extract the actual error message from stderr
-                    error_lines = [line for line in stderr.split('\n') if 'ERROR' in line or 'error occurred' in line.lower() or '403' in line or 'Forbidden' in line]
-                    if error_lines:
-                        error_msg = f"Read merging failed: {error_lines[0]}"
-                    else:
-                        error_msg = f"Read merging failed: {stderr[:200]}"
-                    logger.error(f"❌ {error_msg}")
-                    logger.error(f"   Full stderr: {stderr[:500]}")
-                    return {
-                        "status": "error",
-                        "tool_generated": True,
-                        "tool_name": tool_name,
-                        "result": result,
-                        "execution_result": execution_result,
-                        "error": error_msg,
-                        "text": error_msg
-                    }
-                
-                # If we see fallback warning but no evidence of actual work, code likely returned early
-                # This is the most common bug: code says it will fall back but just returns
-                if has_fallback_warning and not actually_merged:
-                    # The code said it would fall back but didn't actually merge
-                    error_msg = (
-                        "Read merging failed: The generated code detected BBMerge was unavailable "
-                        "and logged 'falling back to Python implementation', but then returned early "
-                        "without actually calling merge_reads_from_s3 or performing the merge. "
-                        "The code must call merge_reads_from_s3 when BBMerge is unavailable."
-                    )
-                    logger.error(f"❌ {error_msg}")
-                    logger.error(f"   stderr: {stderr[:500]}")
-                    logger.error(f"   stdout: {stdout[:500]}")
-                    logger.error(f"   This indicates the generated code has a bug: it returns early instead of calling merge_reads_from_s3")
-                    return {
-                        "status": "error",
-                        "tool_generated": True,
-                        "tool_name": tool_name,
-                        "result": result,
-                        "execution_result": execution_result,
-                        "error": error_msg,
-                        "text": error_msg
-                    }
-                elif execution_succeeded:
-                    # For successful read merging, always use simple message
-                    # The full analysis is not useful to the user - they just want confirmation
-                    text = "Read merging completed successfully."
-                else:
-                    # For errors or unclear status, don't use explanation - use error message or default
-                    # The explanation is the LLM's analysis, not useful for error reporting
-                    if has_error:
-                        # Error already handled above, but just in case
-                        error_lines = [line for line in stderr.split('\n') if 'ERROR' in line or 'error occurred' in line.lower()]
-                        if error_lines:
-                            text = f"Read merging failed: {error_lines[0]}"
-                        else:
-                            text = "Read merging failed. Check logs for details."
-                    else:
-                        # Unclear status - don't show full analysis
-                        text = "Read merging status unclear. Check logs for details."
-                
-                # Override ALL text fields in nested results to prevent full explanation from showing
-                # The nested result structure can have text at multiple levels
-                def override_text_in_dict(d, new_text):
-                    """Recursively override text fields in nested dicts"""
-                    if isinstance(d, dict):
-                        if "text" in d:
-                            d["text"] = new_text
-                        if "explanation" in d and len(d.get("explanation", "")) > 200:
-                            # Only override long explanations (full analysis)
-                            d["explanation"] = new_text
-                        for v in d.values():
-                            if isinstance(v, dict):
-                                override_text_in_dict(v, new_text)
-                
-                # Override text in nested result structure
-                override_text_in_dict(result, text)
-                
-                return {
-                    "status": "success",
-                    "tool_generated": True,
-                    "tool_name": tool_name,
-                    "result": result,
-                    "execution_result": execution_result,  # Preserve logs
-                    "text": text  # This is the filtered text, not the full explanation
-                }
-            else:
-                # Extract error message - check top-level error first, then execution_result
-                error_msg = result.get('error')
-                if not error_msg:
-                    execution_result = result.get("execution_result", {})
-                    if isinstance(execution_result, dict):
-                        error_msg = execution_result.get("error")
-                        if not error_msg and execution_result.get("stderr"):
-                            error_msg = f"Execution failed: {execution_result.get('stderr', '')[:200]}"
-                    error_msg = error_msg or "Unknown error"
-                logger.warning(f"⚠️  Tool-generator-agent failed: {error_msg}")
-                # For S3 paths, don't fall back to run_read_merging_raw - it expects FASTQ content, not paths
-                # Return error instead
-                return {
-                    "status": "error",
-                    "error": error_msg,
-                    "text": f"Failed to merge reads from S3: {error_msg}. The tool generator agent could not complete the merge operation.",
-                }
+            return result
         
-        # Use existing tool for local FASTQ content (only if not S3 paths)
-        # Check if inputs are S3 paths - if so, we should have used tool-generator-agent
-        if forward_reads.startswith("s3://") or reverse_reads.startswith("s3://"):
-            return {
-                "status": "error",
-                "error": "S3 paths require tool-generator-agent, but it was not used or failed",
-                "text": "Read merging from S3 paths requires the tool generator agent, which failed. Please check the logs for details.",
-            }
-        
-        # Only use run_read_merging_raw for actual FASTQ content (not S3 paths)
+        # Fallback: If not using tool-generator-agent, use the existing read_merging implementation
         import read_merging
         return read_merging.run_read_merging_raw(
             forward_reads,
@@ -2079,10 +1953,14 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
 
     elif tool_name == "handle_natural_command":
         # Use the BioAgent path (system prompt from agent.md) for natural commands
-        bioagent_handle_command = _get_bioagent_handle_command()
+        # Lazy import: Import backend.agent only when needed, not at module import time.
+        # This avoids loading heavy LLM dependencies (langgraph, langchain) during server startup,
+        # keeping lightweight endpoints like /health and /mcp/tools fast and allowing the service
+        # to work in sandbox/CI environments where LLM dependencies may not be installed.
+        from backend.agent import handle_command
         command = arguments.get("command", "")
         session_id = arguments.get("session_id", "")
-        return await bioagent_handle_command(command, session_id=session_id)
+        return await handle_command(command, session_id=session_id)
     
     elif tool_name == "phylogenetic_tree":
         # Handle phylogenetic tree analysis
@@ -2929,10 +2807,27 @@ async def api_docs_info(request: Request):
 @app.on_event("startup")
 async def startup_event():
     """Initialize heavy components after server starts."""
-    # This runs after the server is ready to accept connections
-    # Heavy initialization (LLM, agent) happens at import time, but at least
-    # the health endpoint is available quickly
-    pass
+    # Print EC2 environment variables only once at actual server startup
+    # (not during module imports in reloader)
+    print("=" * 80)
+    print(f"🔍 DEBUG: EC2 Environment Variables at Backend Startup (dotenv: {_dotenv_path or 'NOT FOUND'}):")
+    print(f"  AWS_REGION: {os.getenv('AWS_REGION', 'NOT SET')}")
+    print(f"  HELIX_EC2_INSTANCE_ID: {os.getenv('HELIX_EC2_INSTANCE_ID', 'NOT SET')}")
+    print(f"  HELIX_EC2_KEY_NAME: {os.getenv('HELIX_EC2_KEY_NAME', 'NOT SET')}")
+    print(f"  HELIX_EC2_KEY_FILE: {os.getenv('HELIX_EC2_KEY_FILE', 'NOT SET')}")
+    print(f"  HELIX_USE_EC2: {os.getenv('HELIX_USE_EC2', 'NOT SET')}")
+    print(f"  HELIX_EC2_AUTO_CREATE: {os.getenv('HELIX_EC2_AUTO_CREATE', 'NOT SET')}")
+    # Also show what values were parsed from the dotenv file (if found)
+    if _dotenv_values:
+        print("  [dotenv] AWS_REGION:", _dotenv_values.get("AWS_REGION", "NOT IN FILE"))
+        print("  [dotenv] HELIX_EC2_INSTANCE_ID:", _dotenv_values.get("HELIX_EC2_INSTANCE_ID", "NOT IN FILE"))
+        print("  [dotenv] HELIX_EC2_KEY_NAME:", _dotenv_values.get("HELIX_EC2_KEY_NAME", "NOT IN FILE"))
+        print("  [dotenv] HELIX_EC2_KEY_FILE:", _dotenv_values.get("HELIX_EC2_KEY_FILE", "NOT IN FILE"))
+    print("=" * 80)
+    
+    # Heavy initialization (LLM, agent) happens lazily on first use
+    # Session loading happens lazily in history_manager
+    logger.info("Backend startup complete - ready to accept requests")
 
 if __name__ == "__main__":
     import uvicorn

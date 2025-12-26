@@ -113,3 +113,6 @@ echo "2. Set environment variable: export HELIX_EC2_INSTANCE_ID=<instance-id>"
 echo "3. Set SSH key: export HELIX_EC2_KEY_FILE=~/.ssh/your-key.pem"
 echo "4. Enable EC2 execution: export HELIX_USE_EC2=true"
 
+
+
+

@@ -1,0 +1,37 @@
+{
+  "domain": "bioinformatics",
+  "task_type": "qa",
+  "status": "success",
+  "user_friendly_summary": "BLAST is a heuristic local alignment tool for finding sequence similarity against databases.",
+  "details_markdown": "BLAST compares query sequences to a database and reports high-scoring local alignments (HSPs).",
+  "data_inventory": {
+    "inputs_detected": [],
+    "assumptions": [],
+    "qc_warnings": []
+  },
+  "artifacts": [
+    {
+      "type": "table",
+      "title": "BLAST program types",
+      "description": "Common BLAST variants and typical use cases.",
+      "data": {
+        "columns": ["Program", "Query", "Database", "Typical use"],
+        "rows": [
+          ["blastn", "DNA", "DNA", "Find nucleotide similarity"],
+          ["blastp", "Protein", "Protein", "Find protein similarity"],
+          ["blastx", "DNA (translated)", "Protein", "Detect coding similarity"]
+        ]
+      }
+    }
+  ],
+  "errors": [],
+  "provenance": {
+    "tools_used": [],
+    "references": [],
+    "commands_run": [],
+    "environment": {
+      "os": "unknown",
+      "container_or_env": "unknown"
+    }
+  }
+}

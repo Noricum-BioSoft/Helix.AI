@@ -321,9 +321,19 @@ CRITICAL REQUIREMENTS:
            return False
    
    # Main execution - this is the CRITICAL part
-   r1_path = "s3://noricum-ngs-data/datasets/GRCh38.p12.MafHi/mate_R1.fq"
-   r2_path = "s3://noricum-ngs-data/datasets/GRCh38.p12.MafHi/mate_R2.fq"
-   output_path = "s3://noricum-ngs-data/datasets/GRCh38.p12.MafHi/merged_mates.fq"
+   # Extract input and output paths from the provided arguments/outputs
+   # Example: r1_path = "s3://bucket/path/R1.fq"  # Extract from inputs or command
+   # Example: r2_path = "s3://bucket/path/R2.fq"  # Extract from inputs or command
+   # Example: output_path = "s3://bucket/path/merged.fq"  # Extract from outputs or command
+   
+   # IMPORTANT: Extract output_path from the outputs list if provided
+   # If outputs is a list, get the first output URI
+   # If outputs is a single string/dict, extract the URI
+   # Example:
+   #   if outputs and len(outputs) > 0:
+   #       output_path = outputs[0].get('uri') if isinstance(outputs[0], dict) else outputs[0]
+   #   else:
+   #       output_path = "s3://bucket/path/merged.fq"  # Fallback or extract from command
    
    # Check if BBMerge is available
    if not check_tool_available("bbmerge.sh"):
@@ -340,7 +350,7 @@ CRITICAL REQUIREMENTS:
                    min_overlap=12
                )
                if result.get("status") == "success":
-                   print(f"SUCCESS: Merged reads written to {output_path}")
+                   print(f"SUCCESS: Merged reads written to {{output_path}}")
                else:
                    raise Exception(result.get("error", "Merge failed"))
            except ImportError:
@@ -356,7 +366,8 @@ CRITICAL REQUIREMENTS:
    **CRITICAL RULES**:
    - NEVER write `return` after "falling back to Python implementation" - you MUST call merge_reads_from_s3
    - The function merge_reads_from_s3 MUST be called when BBMerge is unavailable
-   - You MUST print "SUCCESS: Merged reads written to {output_path}" when merge completes
+   - You MUST extract output_path from the outputs list or command before using it
+   - You MUST print "SUCCESS: Merged reads written to {{output_path}}" when merge completes (use the actual output_path variable)
    - If you return early without merging, the operation will be detected as a failure
    The `merge_reads_from_s3` function handles:
    - S3 file downloads
@@ -368,7 +379,7 @@ CRITICAL REQUIREMENTS:
    
    **CRITICAL RULE**: The merge function MUST complete the merge operation. It is FORBIDDEN to return early without performing the merge. If BBMerge is unavailable, you MUST call merge_reads_from_s3 or implement the merge inline. Returning without merging is a fatal error that will cause the task to fail.
    
-   **VALIDATION**: Your code MUST print "SUCCESS: Merged reads written to {output_path}" when the merge completes. If this message is not printed, the merge did not execute.
+   **VALIDATION**: Your code MUST print "SUCCESS: Merged reads written to {{output_path}}" when the merge completes (where output_path is the actual variable containing the output path). If this message is not printed, the merge did not execute.
 4. **BioPython usage**: If using BioPython, ALWAYS create new SeqRecord objects - never modify existing ones:
    ```python
    # CORRECT: Create new SeqRecord
@@ -417,9 +428,9 @@ IMPORTANT: Generate ONLY executable Python code that can be run directly. Includ
           region = location.get('LocationConstraint') or 'us-east-1'
           return region
       except ClientError as e:
-          error_code = e.response.get('Error', {}).get('Code', '')
+          error_code = e.response.get('Error', {{}}).get('Code', '')
           if error_code == '403':
-              raise PermissionError(f"Access denied to bucket {bucket_name}. Check IAM role permissions.")
+              raise PermissionError(f"Access denied to bucket {{bucket_name}}. Check IAM role permissions.")
           raise
   
   # Use the bucket's region for operations (better performance and avoids issues)
@@ -457,9 +468,31 @@ IMPORTANT: Generate ONLY executable Python code that can be run directly. Includ
             logger.warning("⚠️  No code block found in response, attempting to use full response")
             code = content
         
-        # Execute the generated code
-        logger.info("🔧 Tool Generator Agent: Executing generated code...")
-        execution_result = await _execute_generated_code(code, command, session_id)
+        # Check if we should route to EMR based on file sizes
+        # Calculate total file size from inputs
+        total_size = 0
+        if inputs:
+            for inp in inputs:
+                if hasattr(inp, 'size_bytes') and isinstance(inp.size_bytes, int):
+                    total_size += inp.size_bytes
+                elif isinstance(inp, dict) and isinstance(inp.get('size_bytes'), int):
+                    total_size += inp['size_bytes']
+        
+        # Get EMR threshold (default 100MB, matching execution_broker)
+        emr_threshold = int(os.getenv('HELIX_ASYNC_BYTES_THRESHOLD', 100 * 1024 * 1024))
+        
+        # Route to EMR if files are large
+        if total_size > emr_threshold:
+            logger.warning(f"⚠️  Tool Generator Agent: Files are large ({total_size / (1024*1024):.2f} MB > {emr_threshold / (1024*1024):.2f} MB)")
+            logger.warning(f"⚠️  EMR routing for tool-generator-agent is not yet implemented. This should be routed through execution_broker.")
+            logger.warning(f"⚠️  For now, executing on EC2 (may be slow for large files).")
+            logger.info("🔧 Tool Generator Agent: Executing generated code on EC2 (EMR routing pending implementation)...")
+            # Pass total_size to _execute_generated_code so it can skip EC2 if needed
+            execution_result = await _execute_generated_code(code, command, session_id, total_file_size_bytes=total_size)
+        else:
+            # Execute the generated code locally or on EC2
+            logger.info("🔧 Tool Generator Agent: Executing generated code...")
+            execution_result = await _execute_generated_code(code, command, session_id, total_file_size_bytes=total_size)
 
         # If execution failed, propagate failure status so callers don't treat it as success.
         exec_status = "success"
@@ -550,7 +583,8 @@ def _extract_explanation(content: str) -> str:
 async def _execute_generated_code(
     code: str,
     original_command: str,
-    session_id: Optional[str] = None
+    session_id: Optional[str] = None,
+    total_file_size_bytes: int = 0
 ) -> Dict[str, Any]:
     """
     Execute the generated Python code in a safe environment.
@@ -562,6 +596,18 @@ async def _execute_generated_code(
     4. Captures output and errors
     5. Cleans up temporary files
     """
+    # Check if we should skip EC2 for large files (should use EMR instead)
+    emr_threshold = int(os.getenv('HELIX_ASYNC_BYTES_THRESHOLD', 100 * 1024 * 1024))
+    if total_file_size_bytes > emr_threshold:
+        logger.warning(f"⚠️  File size ({total_file_size_bytes / (1024*1024):.2f} MB) exceeds EMR threshold ({emr_threshold / (1024*1024):.2f} MB)")
+        logger.warning(f"⚠️  This should be executed on EMR, not EC2. Skipping EC2 execution.")
+        return {
+            "status": "error",
+            "error": f"Files are too large ({total_file_size_bytes / (1024*1024):.2f} MB) for EC2 execution. This operation should be routed to EMR, but EMR routing for tool-generator-agent is not yet implemented. Please use a pre-existing tool that supports EMR routing.",
+            "stderr": f"File size {total_file_size_bytes / (1024*1024):.2f} MB exceeds EMR threshold {emr_threshold / (1024*1024):.2f} MB. EMR routing required but not implemented for tool-generator-agent.",
+            "stdout": ""
+        }
+    
     # Check if EC2 execution is enabled.
     # In unit tests we default to mock mode; never attempt real EC2/SSH there.
     if os.getenv("HELIX_MOCK_MODE") == "1":

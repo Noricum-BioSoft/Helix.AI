@@ -173,3 +173,6 @@ Ensure your AWS credentials have permissions for:
 6. Configure WAF rules for CloudFront
 7. Set up backup and disaster recovery
 
+
+
+

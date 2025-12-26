@@ -11,12 +11,14 @@ import 'bootstrap/dist/css/bootstrap.min.css';
 import './theme.css';
 import Button from 'react-bootstrap/Button';
 import Card from 'react-bootstrap/Card';
+import Modal from 'react-bootstrap/Modal';
 import { DesignOptionOne, DesignOptionTwo, DesignOptionThree } from './components/designs';
 import type { PromptDesignProps, QuickExample } from './components/designs';
 import { getExampleWithSequences, sampleSequences } from './utils/sampleSequences';
 import { theme } from './theme';
 import { JobsPanel } from './components/JobsPanel';
 import { ExamplesPanel } from './components/ExamplesPanel';
+import { ThinkingIndicator, ActivityIndicator } from './components/ThinkingIndicator';
 
 interface HistoryItem {
   input: string;
@@ -58,11 +60,43 @@ function App() {
   const [selectedDesign, setSelectedDesign] = useState<DesignOptionId>('integrated');
   const [examplesOpen, setExamplesOpen] = useState(false);
   const [jobsOpen, setJobsOpen] = useState(false);
+  const [sessionModalOpen, setSessionModalOpen] = useState(false);
+  const [sessionInfo, setSessionInfo] = useState<any>(null);
+  const [sessionInfoLoading, setSessionInfoLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [activities, setActivities] = useState<Array<{
+    id: string;
+    message: string;
+    status: 'active' | 'completed' | 'error';
+    timestamp: Date;
+  }>>([]);
   const SelectedDesignComponent = useMemo(() => {
     const option = DESIGN_OPTIONS.find(option => option.id === selectedDesign);
     return option?.component;
   }, [selectedDesign]);
+
+  // Activity tracking helpers
+  const addActivity = (message: string) => {
+    const id = `activity-${Date.now()}-${Math.random()}`;
+    setActivities(prev => [...prev, {
+      id,
+      message,
+      status: 'active',
+      timestamp: new Date()
+    }]);
+    return id;
+  };
+
+  const updateActivity = (id: string, status: 'completed' | 'error') => {
+    setActivities(prev => prev.map(activity => 
+      activity.id === id ? { ...activity, status } : activity
+    ));
+    
+    // Auto-remove completed/error activities after 3 seconds
+    setTimeout(() => {
+      setActivities(prev => prev.filter(activity => activity.id !== id));
+    }, 3000);
+  };
 
   const handleExampleClick = (exampleCommand: string) => {
     setCommand(exampleCommand);
@@ -74,6 +108,21 @@ function App() {
 
   const handleToggleJobs = () => {
     setJobsOpen(prev => !prev);
+  };
+
+  const handleSessionClick = async () => {
+    if (!sessionId) return;
+    setSessionModalOpen(true);
+    setSessionInfoLoading(true);
+    try {
+      const info = await mcpApi.getSessionInfo(sessionId);
+      setSessionInfo(info);
+    } catch (error) {
+      console.error('Failed to fetch session info:', error);
+      setSessionInfo({ error: 'Failed to fetch session information' });
+    } finally {
+      setSessionInfoLoading(false);
+    }
   };
 
   const extractJobIds = (obj: any, out: Set<string>) => {
@@ -178,6 +227,7 @@ function App() {
     if (!command.trim()) return;
     
     setLoading(true);
+    const activityId = addActivity('Processing your request...');
     
     try {
       let response;
@@ -209,42 +259,11 @@ function App() {
         });
       }
       
-      if (commandMode === 'natural') {
-        // Use natural language command handling
-        console.log('Calling handleNaturalCommand...');
-        response = await mcpApi.executeCommand(finalCommand, sessionId || undefined);
-        console.log('Natural command response:', response);
-      } else {
-        // Use structured command parsing
-        parsedCommand = CommandParser.parseCommand(command);
-        
-        switch (parsedCommand.type) {
-          case 'sequence_alignment':
-            response = await mcpApi.sequenceAlignment(parsedCommand.parameters as any, sessionId || undefined);
-            break;
-            
-          case 'mutate_sequence':
-            response = await mcpApi.mutateSequence(parsedCommand.parameters as any, sessionId || undefined);
-            break;
-            
-          case 'analyze_sequence_data':
-            response = await mcpApi.analyzeSequenceData(parsedCommand.parameters as any, sessionId || undefined);
-            break;
-            
-          case 'visualize_alignment':
-            response = await mcpApi.visualizeAlignment(parsedCommand.parameters as any, sessionId || undefined);
-            break;
-            
-          case 'dna_vendor_research':
-            response = await mcpApi.executeCommand(command, sessionId || undefined);
-            break;
-            
-          default:
-            // Fallback to general command execution
-            response = await mcpApi.executeCommand(command, sessionId || undefined);
-            break;
-        }
-      }
+      // ALWAYS use the agent endpoint - never bypass it
+      // The agent will handle routing, tool selection, and execution
+      console.log('Calling agent via /execute endpoint...');
+      response = await mcpApi.executeCommand(finalCommand, sessionId || undefined);
+      console.log('Agent response:', response);
       
       // Update session ID if the backend created one automatically
       if ((response as any).session_id && !sessionId) {
@@ -326,10 +345,11 @@ function App() {
       }
       
       // Add to history
+      // Since /execute always routes through the agent, all responses are agent responses
       const historyItem: HistoryItem = {
         input: command,
         output: response,
-        type: commandMode === 'natural' ? 'natural_command' : parsedCommand?.type || 'structured_command',
+        type: 'agent',
         timestamp: new Date()
       };
       
@@ -339,15 +359,18 @@ function App() {
       console.log('🔍 Response result keys:', (response as any).result ? Object.keys((response as any).result) : 'No result');
       
       setHistory(prev => [historyItem, ...prev]);
+      updateActivity(activityId, 'completed');
       
     } catch (error) {
       console.error('Error executing command:', error);
+      updateActivity(activityId, 'error');
       
       // Add error to history
+      // Since /execute always routes through the agent, errors are agent errors
       const historyItem: HistoryItem = {
         input: command,
         output: { error: error instanceof Error ? error.message : 'Unknown error' },
-        type: 'error',
+        type: 'agent_error',
         timestamp: new Date()
       };
       
@@ -379,11 +402,9 @@ function App() {
         });
       }
 
-      const response = await mcpApi.agentCommand({
-        prompt: finalCommand,
-        session_id: sessionId || undefined,
-        files: uploadedFiles.length > 0 ? uploadedFiles.map(f => ({ name: f.name, content: f.content })) : undefined,
-      });
+      // ALWAYS use /execute endpoint - the agent handles everything
+      // If files are needed, they should be included in the command text or handled by the agent
+      const response = await mcpApi.executeCommand(finalCommand, sessionId || undefined);
 
       if ((response as any).session_id && !sessionId) {
         setSessionId((response as any).session_id);
@@ -569,6 +590,526 @@ function App() {
 
   const renderAgentResponse = (agentOutput: any) => {
     const agentResult = agentOutput?.result ?? agentOutput;
+    
+    console.log('🔍 renderAgentResponse called');
+    console.log('🔍 agentOutput keys:', Object.keys(agentOutput || {}));
+    console.log('🔍 agentResult keys:', agentResult && typeof agentResult === 'object' ? Object.keys(agentResult) : 'not an object');
+    
+    // Extract data from multiple possible locations (matching renderOutput logic)
+    const rawResult = agentOutput?.raw_result || agentResult?.raw_result || (agentOutput?.result && agentOutput.result.raw_result);
+    const actualResult = (agentOutput?.result && agentOutput.result.result) 
+      ? agentOutput.result.result 
+      : (agentOutput?.result || agentOutput?.raw_result || agentOutput || agentResult);
+    
+    // Debug: Log the structure to find tree_newick
+    console.log('🔍 ========== RESPONSE STRUCTURE DEBUG ==========');
+    console.log('🔍 agentOutput.raw_result keys:', rawResult && typeof rawResult === 'object' ? Object.keys(rawResult) : 'not an object');
+    console.log('🔍 agentOutput.raw_result.result keys:', rawResult?.result && typeof rawResult.result === 'object' ? Object.keys(rawResult.result) : 'not an object');
+    console.log('🔍 agentOutput.raw_result.tree_newick:', rawResult?.tree_newick ? `FOUND (${rawResult.tree_newick.length} chars)` : 'NOT FOUND');
+    console.log('🔍 agentOutput.raw_result.result.tree_newick:', rawResult?.result?.tree_newick ? `FOUND (${rawResult.result.tree_newick.length} chars)` : 'NOT FOUND');
+    console.log('🔍 agentOutput.tree_newick:', agentOutput?.tree_newick ? `FOUND (${agentOutput.tree_newick.length} chars)` : 'NOT FOUND');
+    console.log('🔍 agentOutput.data:', agentOutput?.data ? 'EXISTS' : 'NOT FOUND');
+    console.log('🔍 agentOutput.data keys:', agentOutput?.data && typeof agentOutput.data === 'object' ? Object.keys(agentOutput.data) : 'N/A');
+    console.log('🔍 agentOutput.visualization_type:', agentOutput?.visualization_type);
+    console.log('🔍 agentOutput.tool:', agentOutput?.tool);
+    console.log('🔍 ==============================================');
+    
+    // ========== PHYLOGENETIC TREE VISUALIZATIONS ==========
+    // Check ALL possible locations including top-level, raw_result, data, and nested structures
+    // Priority: raw_result.result first (most likely location based on agent execution structure), then raw_result, then top-level
+    const treeNewick = rawResult?.result?.tree_newick ||  // Agent execution result structure
+                       rawResult?.tree_newick ||
+                       agentOutput?.tree_newick ||
+                       agentResult?.tree_newick ||
+                       actualResult?.tree_newick ||
+                       agentOutput?.data?.tree_newick ||
+                       (agentOutput?.result && agentOutput.result.tree_newick) ||
+                       (agentOutput?.raw_result && agentOutput.raw_result.tree_newick) ||
+                       (agentOutput?.raw_result?.result && agentOutput.raw_result.result.tree_newick);
+    
+    const eteVisualization = rawResult?.result?.ete_visualization ||  // Agent execution result structure
+                             agentOutput?.ete_visualization ||
+                             agentResult?.ete_visualization ||
+                             actualResult?.ete_visualization ||
+                             rawResult?.ete_visualization ||
+                             agentOutput?.data?.ete_visualization ||
+                             (agentOutput?.result && agentOutput.result.ete_visualization) ||
+                             (agentOutput?.raw_result?.result && agentOutput.raw_result.result.ete_visualization);
+    
+    const clusteringResult = rawResult?.result?.clustering_result ||  // Agent execution result structure
+                             actualResult?.clustering_result || 
+                             rawResult?.clustering_result ||
+                             agentOutput?.data?.clustering_result ||
+                             (agentOutput?.result && agentOutput.result.clustering_result) ||
+                             (agentOutput?.raw_result?.result && agentOutput.raw_result.result.clustering_result);
+    
+    const clusteredVisualization = rawResult?.result?.clustered_visualization ||  // Agent execution result structure
+                                   actualResult?.clustered_visualization || 
+                                   rawResult?.clustered_visualization ||
+                                   agentOutput?.data?.clustered_visualization ||
+                                   (agentOutput?.result && agentOutput.result.clustered_visualization) ||
+                                   (agentOutput?.raw_result?.result && agentOutput.raw_result.result.clustered_visualization);
+    
+    console.log('🔍 Final treeNewick check:', treeNewick ? `FOUND (${treeNewick.length} chars)` : 'NOT FOUND');
+    
+    if (treeNewick) {
+      console.log('🔍 Rendering phylogenetic tree visualization');
+      return (
+        <div>
+          {actualResult?.text && (
+            <pre className="bg-light p-3 border rounded mb-3">{actualResult.text}</pre>
+          )}
+          
+          {/* Clustering Results */}
+          {clusteringResult && (
+            <div className="bg-light p-3 border rounded mb-3">
+              <h5>🧬 Clustering Analysis Results</h5>
+              <div className="row">
+                <div className="col-md-6">
+                  <h6>Summary</h6>
+                  <ul className="list-unstyled">
+                    <li><strong>Total Sequences:</strong> {clusteringResult.total_sequences}</li>
+                    <li><strong>Number of Clusters:</strong> {clusteringResult.num_clusters}</li>
+                    <li><strong>Representatives:</strong> {clusteringResult.representatives?.join(', ')}</li>
+                  </ul>
+                </div>
+                <div className="col-md-6">
+                  <h6>Cluster Details</h6>
+                  {clusteringResult.clusters && (
+                    <div>
+                      {clusteringResult.clusters.map((cluster: any, index: number) => (
+                        <div key={index} className="mb-2">
+                          <strong>Cluster {cluster.cluster_id}:</strong>
+                          <ul className="list-unstyled ml-3">
+                            <li>Size: {cluster.size} sequences</li>
+                            <li>Representative: {cluster.representative}</li>
+                            <li>Average Distance: {cluster.average_distance?.toFixed(4)}</li>
+                          </ul>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Clustered Visualization */}
+          {clusteredVisualization && clusteredVisualization.svg && (
+            <div className="bg-light p-3 border rounded mb-3">
+              <h5>🧬 Clustered Phylogenetic Tree Visualization</h5>
+              <div dangerouslySetInnerHTML={{ __html: clusteredVisualization.svg }} />
+            </div>
+          )}
+
+          {/* ETE3 Visualization */}
+          {eteVisualization && eteVisualization.svg && (
+            <div className="bg-light p-3 border rounded mb-3">
+              <h5>🧬 ETE3 Phylogenetic Tree Visualization</h5>
+              <div dangerouslySetInnerHTML={{ __html: eteVisualization.svg }} />
+            </div>
+          )}
+          
+          {/* D3.js Visualization */}
+          <div className="bg-light p-3 border rounded mb-3">
+            <h5>🧬 Interactive Phylogenetic Tree (D3.js)</h5>
+            <PhylogeneticTree newick={treeNewick} />
+          </div>
+          
+          {actualResult?.statistics && (
+            <div className="bg-light p-3 border rounded mb-3">
+              <h6>Tree Statistics</h6>
+              <div className="row">
+                {Object.entries(actualResult.statistics).map(([key, value]) => (
+                  <div key={key} className="col-md-6 mb-2">
+                    <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          
+          {/* Debug Section - Consistent across all commands */}
+          {renderDebugInfo(agentOutput, actualResult)}
+        </div>
+      );
+    }
+    
+    // ========== PLASMID VISUALIZATIONS ==========
+    const plasmidData = rawResult?.result?.plasmid_data ||  // Agent execution result structure
+                        actualResult?.plasmid_data || 
+                        rawResult?.plasmid_data ||
+                        (agentOutput?.result && agentOutput.result.plasmid_data) ||
+                        (agentOutput?.raw_result?.result && agentOutput.raw_result.result.plasmid_data);
+    
+    const plasmidResults = rawResult?.result?.plasmid_results ||  // Agent execution result structure
+                           actualResult?.plasmid_results ||
+                           rawResult?.plasmid_results ||
+                           (agentOutput?.result && agentOutput.result.plasmid_results) ||
+                           (agentOutput?.raw_result?.result && agentOutput.raw_result.result.plasmid_results);
+    
+    if (plasmidData) {
+      console.log('🔍 Rendering plasmid visualization');
+      console.log('🔍 plasmidData:', plasmidData);
+      console.log('🔍 plasmidData.sequence:', plasmidData?.sequence);
+      console.log('🔍 plasmidData type:', typeof plasmidData);
+      
+      // Validate plasmid data before rendering
+      if (!plasmidData.sequence || typeof plasmidData.sequence !== 'string') {
+        console.error('❌ Invalid plasmid data: missing or invalid sequence');
+        return (
+          <div>
+            {actualResult?.text && (
+              <pre className="bg-light p-3 border rounded mb-3">{actualResult.text}</pre>
+            )}
+            <div className="alert alert-warning">
+              <h5>🧬 Plasmid Visualization</h5>
+              <p>Plasmid data received but sequence is missing or invalid.</p>
+              <details>
+                <summary>Debug Info</summary>
+                <pre>{JSON.stringify(plasmidData, null, 2)}</pre>
+              </details>
+            </div>
+            
+            {/* Debug Section - Consistent across all commands */}
+            {renderDebugInfo(agentOutput, actualResult)}
+          </div>
+        );
+      }
+      
+      return (
+        <div>
+          {actualResult?.text && (
+            <pre className="bg-light p-3 border rounded mb-3">{actualResult.text}</pre>
+          )}
+          <div className="bg-light p-3 border rounded mb-3">
+            <h5>🧬 Plasmid Visualization</h5>
+            <PlasmidDataVisualizer data={plasmidData} />
+          </div>
+          
+          {/* Debug Section - Consistent across all commands */}
+          {renderDebugInfo(agentOutput, actualResult)}
+        </div>
+      );
+    }
+    
+    if (plasmidResults) {
+      console.log('🔍 Rendering plasmid representatives visualization');
+      console.log('🔍 plasmidResults:', plasmidResults);
+      
+      // Validate plasmid results
+      if (!Array.isArray(plasmidResults) || plasmidResults.length === 0) {
+        console.error('❌ Invalid plasmid results: not an array or empty');
+        return (
+          <div>
+            {actualResult?.text && (
+              <pre className="bg-light p-3 border rounded mb-3">{actualResult.text}</pre>
+            )}
+            <div className="alert alert-warning">
+              <h5>🧬 Plasmid Representatives Visualization</h5>
+              <p>Plasmid results received but data is invalid.</p>
+            </div>
+            
+            {/* Debug Section - Consistent across all commands */}
+            {renderDebugInfo(agentOutput, actualResult)}
+          </div>
+        );
+      }
+      
+      return (
+        <div>
+          {actualResult?.text && (
+            <pre className="bg-light p-3 border rounded mb-3">{actualResult.text}</pre>
+          )}
+          <PlasmidRepresentativesVisualizer 
+            plasmidResults={plasmidResults}
+            vectorName={rawResult?.result?.vector_name || actualResult?.vector_name || "pUC19"}
+            cloningSites={rawResult?.result?.cloning_sites || actualResult?.cloning_sites || "EcoRI, BamHI, HindIII"}
+          />
+          
+          {/* Debug Section - Consistent across all commands */}
+          {renderDebugInfo(agentOutput, actualResult)}
+        </div>
+      );
+    }
+    
+    // ========== QUALITY ASSESSMENT VISUALIZATIONS ==========
+    const qualityMetrics = rawResult?.result?.quality_metrics ||  // Agent execution result structure
+                          actualResult?.quality_metrics ||
+                          rawResult?.quality_metrics ||
+                          (agentOutput?.result && agentOutput.result.quality_metrics) ||
+                          (agentOutput?.raw_result?.result && agentOutput.raw_result.result.quality_metrics);
+    
+    const qualityPlotData = rawResult?.result?.plot_data ||  // Agent execution result structure
+                           actualResult?.plot_data || 
+                           rawResult?.plot_data ||
+                           (agentOutput?.result && agentOutput.result.plot_data) ||
+                           (agentOutput?.result && agentOutput.result.result && agentOutput.result.result.plot_data) ||
+                           (agentOutput?.raw_result?.result && agentOutput.raw_result.result.plot_data);
+    
+    const qualitySummary = rawResult?.result?.summary ||  // Agent execution result structure
+                          actualResult?.summary ||
+                          rawResult?.summary ||
+                          (agentOutput?.result && agentOutput.result.summary) ||
+                          (agentOutput?.raw_result?.result && agentOutput.raw_result.result.summary);
+    
+    if (qualityMetrics || qualityPlotData || qualitySummary) {
+      console.log('🔍 Rendering quality assessment visualization');
+      return (
+        <div>
+          {actualResult?.text && (
+            <pre className="bg-light p-3 border rounded mb-3">{actualResult.text}</pre>
+          )}
+          
+          {qualitySummary && (
+            <div className="bg-light p-3 border rounded mb-3">
+              <h5>Quality Assessment Summary</h5>
+              <div className="row">
+                {Object.entries(qualitySummary).map(([key, value]) => (
+                  <div key={key} className="col-md-6 mb-2">
+                    <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          
+          {qualityPlotData && (
+            <div className="bg-light p-3 border rounded mb-3">
+              <h5>Quality Assessment Plots</h5>
+              
+              {qualityPlotData.length_distribution && (
+                <div className="mb-4">
+                  <h6>Length Distribution</h6>
+                  <Plot
+                    data={[{
+                      x: qualityPlotData.length_distribution.x,
+                      y: qualityPlotData.length_distribution.y,
+                      type: 'bar',
+                      marker: { color: '#007bff' }
+                    }]}
+                    layout={{
+                      title: 'Length Distribution',
+                      xaxis: { title: 'Length (bp)' },
+                      yaxis: { title: 'Count' },
+                      height: 400,
+                      margin: { l: 60, r: 20, t: 60, b: 60 }
+                    }}
+                    style={{ width: '100%' }}
+                  />
+                </div>
+              )}
+              
+              {qualityPlotData.gc_content_distribution && (
+                <div className="mb-4">
+                  <h6>GC Content Distribution</h6>
+                  <Plot
+                    data={[{
+                      x: qualityPlotData.gc_content_distribution.x,
+                      y: qualityPlotData.gc_content_distribution.y,
+                      type: 'bar',
+                      marker: { color: '#28a745' }
+                    }]}
+                    layout={{
+                      title: 'GC Content Distribution',
+                      xaxis: { title: 'GC Content (%)' },
+                      yaxis: { title: 'Count' },
+                      height: 400,
+                      margin: { l: 60, r: 20, t: 60, b: 60 }
+                    }}
+                    style={{ width: '100%' }}
+                  />
+                </div>
+              )}
+              
+              {qualityPlotData.base_composition && (
+                <div className="mb-4">
+                  <h6>Base Composition</h6>
+                  <Plot
+                    data={[{
+                      x: qualityPlotData.base_composition.x,
+                      y: qualityPlotData.base_composition.y,
+                      type: 'bar',
+                      marker: { color: '#ffc107' }
+                    }]}
+                    layout={{
+                      title: 'Base Composition',
+                      xaxis: { title: 'Base' },
+                      yaxis: { title: 'Count' },
+                      height: 400,
+                      margin: { l: 60, r: 20, t: 60, b: 60 }
+                    }}
+                    style={{ width: '100%' }}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+          
+          {/* Debug Section - Consistent across all commands */}
+          {renderDebugInfo(agentOutput, actualResult)}
+        </div>
+      );
+    }
+    
+    // ========== SEQUENCE ALIGNMENT VISUALIZATIONS ==========
+    // Check for aligned sequences in various formats
+    const alignedSequences = rawResult?.result?.aligned_sequences ||  // Agent execution result structure
+                            rawResult?.result?.output ||
+                            actualResult?.output ||
+                            actualResult?.aligned_sequences ||
+                            rawResult?.aligned_sequences ||
+                            (agentOutput?.result && agentOutput.result.aligned_sequences) ||
+                            (agentOutput?.raw_result?.result && agentOutput.raw_result.result.aligned_sequences);
+    
+    if (alignedSequences && Array.isArray(alignedSequences)) {
+      console.log('🔍 Rendering sequence alignment visualization');
+      return (
+        <div>
+          {actualResult?.text && (
+            <pre className="bg-light p-3 border rounded mb-3">{actualResult.text}</pre>
+          )}
+          <div className="bg-light p-3 border rounded mb-3">
+            <h5>Sequence Alignment Result</h5>
+            <div className="table-responsive">
+              <table className="table table-sm">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Sequence</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {alignedSequences.map((seq: any, index: number) => (
+                    <tr key={index}>
+                      <td>{seq.name || `Sequence_${index + 1}`}</td>
+                      <td className="font-monospace">{seq.sequence || seq}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          {actualResult?.statistics && (
+            <div className="bg-light p-3 border rounded mb-3">
+              <h6>Alignment Statistics</h6>
+              <div className="row">
+                {Object.entries(actualResult.statistics).map(([key, value]) => (
+                  <div key={key} className="col-md-6 mb-2">
+                    <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          
+          {/* Debug Section - Consistent across all commands */}
+          {renderDebugInfo(agentOutput, actualResult)}
+        </div>
+      );
+    }
+    
+    // ========== PLOTLY PLOTS ==========
+    const plotData = rawResult?.result?.plot ||  // Agent execution result structure
+                    actualResult?.plot ||
+                    rawResult?.plot ||
+                    (agentOutput?.result && agentOutput.result.plot) ||
+                    (agentOutput?.raw_result?.result && agentOutput.raw_result.result.plot);
+    
+    if (plotData && plotData.data) {
+      console.log('🔍 Rendering Plotly visualization');
+      return (
+        <div>
+          {actualResult?.text && (
+            <pre className="bg-light p-3 border rounded mb-3">{actualResult.text}</pre>
+          )}
+          <div className="bg-light p-3 border rounded mb-3">
+            <Plot
+              data={plotData.data}
+              layout={plotData.layout || { title: 'Visualization' }}
+              style={{ width: '100%' }}
+            />
+          </div>
+          
+          {/* Debug Section - Consistent across all commands */}
+          {renderDebugInfo(agentOutput, actualResult)}
+        </div>
+      );
+    }
+    
+    // ========== VENDOR RESEARCH ==========
+    const vendors = rawResult?.result?.vendors ||  // Agent execution result structure
+                   actualResult?.vendors ||
+                   rawResult?.vendors ||
+                   (agentOutput?.result && agentOutput.result.vendors) ||
+                   (agentOutput?.raw_result?.result && agentOutput.raw_result.result.vendors);
+    
+    const recommendations = rawResult?.result?.recommendations ||  // Agent execution result structure
+                          actualResult?.recommendations ||
+                          rawResult?.recommendations ||
+                          (agentOutput?.result && agentOutput.result.recommendations) ||
+                          (agentOutput?.raw_result?.result && agentOutput.raw_result.result.recommendations) ||
+                          [];
+    
+    if (vendors) {
+      console.log('🔍 Rendering vendor research results');
+      return (
+        <div>
+          {actualResult?.text && (
+            <pre className="bg-light p-3 border rounded mb-3">{actualResult.text}</pre>
+          )}
+          <div className="bg-light p-3 border rounded mb-3">
+            <h5>DNA Synthesis Vendors</h5>
+            <div className="row">
+              {Object.entries(vendors).map(([vendorId, vendor]: [string, any]) => (
+                <div key={vendorId} className="col-md-6 mb-3">
+                  <div className="card h-100">
+                    <div className="card-body">
+                      <h6 className="card-title">{vendor.name}</h6>
+                      <p className="card-text">
+                        <strong>Services:</strong> {vendor.services.join(', ')}
+                      </p>
+                      <p className="card-text">
+                        <strong>Pricing:</strong> {vendor.pricing_range}
+                      </p>
+                      <p className="card-text">
+                        <strong>Turnaround:</strong> {vendor.turnaround_time}
+                      </p>
+                      <p className="card-text">
+                        <strong>Max Length:</strong> {vendor.max_length}
+                      </p>
+                      <p className="card-text">
+                        <strong>Specialties:</strong> {vendor.specialties.join(', ')}
+                      </p>
+                      <a href={vendor.website} target="_blank" rel="noopener noreferrer" className="btn btn-sm btn-outline-primary">
+                        Visit Website
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+          {recommendations.length > 0 && (
+            <div className="bg-light p-3 border rounded mb-3">
+              <h5>Recommendations</h5>
+              <ul className="list-unstyled">
+                {recommendations.map((rec: string, index: number) => (
+                  <li key={index} className="mb-2">
+                    <i className="bi bi-lightbulb text-warning me-2"></i>
+                    {rec}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          
+          {/* Debug Section - Consistent across all commands */}
+          {renderDebugInfo(agentOutput, actualResult)}
+        </div>
+      );
+    }
+    
     const messages: any[] = Array.isArray(agentResult?.messages)
       ? agentResult.messages
       : Array.isArray(agentResult?.output?.messages)
@@ -595,25 +1136,40 @@ function App() {
 
     if (finalText) {
       return (
-        <div className="agent-response-markdown">
-          <ReactMarkdown>{finalText}</ReactMarkdown>
+        <div>
+          <div className="agent-response-markdown">
+            <ReactMarkdown>{finalText}</ReactMarkdown>
+          </div>
+          
+          {/* Debug Section - Consistent across all commands */}
+          {renderDebugInfo(agentOutput, actualResult)}
         </div>
       );
     }
 
     if (renderStructuredData(agentResult)) {
       return (
-        <div className="bg-light p-3 border rounded">
-          {renderStructuredData(agentResult)}
+        <div>
+          <div className="bg-light p-3 border rounded">
+            {renderStructuredData(agentResult)}
+          </div>
+          
+          {/* Debug Section - Consistent across all commands */}
+          {renderDebugInfo(agentOutput, actualResult)}
         </div>
       );
     }
 
     return (
-      <details className="bg-light p-2 border rounded">
-        <summary className="text-muted" style={{ cursor: 'pointer' }}>View Raw Agent Output</summary>
-        <pre className="bg-white border rounded p-2 mt-2">{JSON.stringify(agentResult, null, 2)}</pre>
-      </details>
+      <div>
+        <details className="bg-light p-2 border rounded">
+          <summary className="text-muted" style={{ cursor: 'pointer' }}>View Raw Agent Output</summary>
+          <pre className="bg-white border rounded p-2 mt-2">{JSON.stringify(agentResult, null, 2)}</pre>
+        </details>
+        
+        {/* Debug Section - Consistent across all commands */}
+        {renderDebugInfo(agentOutput, actualResult)}
+      </div>
     );
   };
 
@@ -662,1979 +1218,18 @@ function App() {
       return <div className="alert alert-danger mb-0">{message}</div>;
     }
 
-    if (type === 'agent') {
+    // Since /execute always routes through the agent, all responses (including legacy types)
+    // should be handled by renderAgentResponse for consistency
+    // This provides backward compatibility with old history items while using the unified rendering
+    if (type === 'agent' || type === 'natural_command' || type === 'structured_command' || type === 'error') {
       return renderAgentResponse(output);
     }
     
-    // Add debugging
-    console.log('🔍 renderOutput called with:', { type, input: item.input });
-    console.log('🔍 output structure:', JSON.stringify(output, null, 2));
-    console.log('🔍 output keys:', Object.keys(output));
-    console.log('🔍 Checking for tree_newick in output:', output.tree_newick ? 'FOUND' : 'NOT FOUND');
-    console.log('🔍 Checking for ete_visualization in output:', output.ete_visualization ? 'FOUND' : 'NOT FOUND');
-    console.log('🔍 ETE3 SVG content:', output.ete_visualization?.svg ? 'PRESENT' : 'MISSING');
-    
-    // Check in result field if not found in output directly
-    // Handle nested result structures: output.result.result or output.result
-    // IMPORTANT: For /execute endpoint, the structure is: {success: true, result: {...}, session_id: "..."}
-    // So output.result contains the actual data
-    const actualResult = (output.result && output.result.result) ? output.result.result : (output.result || output);
-    
-    console.log('🔍 [DEBUG] actualResult extraction:', {
-      hasOutputResult: !!output.result,
-      hasOutputResultResult: !!(output.result && output.result.result),
-      actualResultType: typeof actualResult,
-      actualResultIsObject: typeof actualResult === 'object' && actualResult !== null,
-      actualResultKeys: actualResult && typeof actualResult === 'object' ? Object.keys(actualResult) : []
-    });
-    
-    // Debug logging for read trimming/merging
-    console.log('🔍 [DEBUG] renderOutput - Checking for read trimming/merging results');
-    console.log('🔍 [DEBUG] output keys:', Object.keys(output));
-    console.log('🔍 [DEBUG] output.result keys:', output.result ? Object.keys(output.result) : 'No result');
-    console.log('🔍 [DEBUG] actualResult keys:', actualResult ? Object.keys(actualResult) : 'No actualResult');
-    console.log('🔍 [DEBUG] forward_reads:', actualResult?.forward_reads ? 'FOUND' : 'NOT FOUND');
-    console.log('🔍 [DEBUG] reverse_reads:', actualResult?.reverse_reads ? 'FOUND' : 'NOT FOUND');
-    console.log('🔍 [DEBUG] merged_sequences:', actualResult?.merged_sequences ? 'FOUND' : 'NOT FOUND');
-    console.log('🔍 [DEBUG] trimmed_reads:', actualResult?.trimmed_reads ? 'FOUND' : 'NOT FOUND');
-    console.log('🔍 [DEBUG] actualResult structure:', JSON.stringify(actualResult, null, 2).substring(0, 1000));
-    
-    // PRIORITY: Check for read trimming/merging FIRST (before phylogenetic trees)
-    // Handle read trimming results (paired-end)
-    const forwardData = actualResult?.forward_reads || 
-                       (output.result && output.result.forward_reads) ||
-                       (output.result && output.result.result && output.result.result.forward_reads);
-    const reverseData = actualResult?.reverse_reads || 
-                       (output.result && output.result.reverse_reads) ||
-                       (output.result && output.result.result && output.result.result.reverse_reads);
-    const trimmedReads = actualResult?.trimmed_reads ||
-                        (output.result && output.result.trimmed_reads) ||
-                        (output.result && output.result.result && output.result.result.trimmed_reads);
-    const trimmingResult = forwardData || reverseData || trimmedReads;
-    
-    // Handle read merging results
-    const mergedSequences = actualResult?.merged_sequences || 
-                           (output.result && output.result.merged_sequences) ||
-                           (output.result && output.result.result && output.result.result.merged_sequences);
-    
-    // Handle quality assessment results
-    const qualityMetrics = actualResult?.metrics || 
-                          (output.result && output.result.metrics) ||
-                          (output.result && output.result.result && output.result.result.metrics);
-    const qualityPlotData = actualResult?.plot_data || 
-                           (output.result && output.result.plot_data) ||
-                           (output.result && output.result.result && output.result.result.plot_data);
-    const qualitySummary = actualResult?.summary || 
-                          (output.result && output.result.summary) ||
-                          (output.result && output.result.result && output.result.result.summary);
-    const hasQualityAssessment = !!(qualityMetrics || qualityPlotData || qualitySummary);
-    
-    console.log('🔍 [DEBUG] Trimming check:', {
-      hasForwardData: !!forwardData,
-      hasReverseData: !!reverseData,
-      hasTrimmedReads: !!trimmedReads,
-      trimmingResult: !!trimmingResult,
-      hasMergedSequences: !!mergedSequences,
-      hasQualityAssessment: hasQualityAssessment,
-      actualResultKeys: actualResult ? Object.keys(actualResult) : [],
-      outputResultKeys: output.result ? Object.keys(output.result) : [],
-      forwardDataType: forwardData ? typeof forwardData : 'null',
-      reverseDataType: reverseData ? typeof reverseData : 'null',
-      forwardDataKeys: forwardData && typeof forwardData === 'object' ? Object.keys(forwardData) : [],
-      reverseDataKeys: reverseData && typeof reverseData === 'object' ? Object.keys(reverseData) : []
-    });
-    
-    if (trimmingResult) {
-      console.log('🔍 [DEBUG] ✅ ENTERING trimming result render block!');
-      console.log('🔍 [DEBUG] forwardData:', forwardData);
-      console.log('🔍 [DEBUG] reverseData:', reverseData);
-      console.log('🔍 [DEBUG] forwardData.trimmed_reads exists:', !!(forwardData && forwardData.trimmed_reads));
-      console.log('🔍 [DEBUG] reverseData.trimmed_reads exists:', !!(reverseData && reverseData.trimmed_reads));
-      const resultText = actualResult?.text || (output.result && output.result.text);
-      
-      console.log('🔍 [DEBUG] About to render trimming visualization with:', {
-        hasResultText: !!resultText,
-        hasForwardData: !!forwardData,
-        hasReverseData: !!reverseData,
-        forwardHasTrimmedReads: !!(forwardData && forwardData.trimmed_reads),
-        reverseHasTrimmedReads: !!(reverseData && reverseData.trimmed_reads)
-      });
-      
-      return (
-        <div>
-          {resultText && (
-            <div className="alert alert-success mb-3">
-              <strong>✓ {resultText}</strong>
-            </div>
-          )}
-          
-          {/* Summary Statistics */}
-          {(() => {
-            const summary = actualResult?.summary || 
-                           (output.result && output.result.summary) ||
-                           (output.result && output.result.result && output.result.result.summary);
-            return summary && (
-            <div className="bg-light p-3 border rounded mb-3">
-              <h6>📊 Summary Statistics</h6>
-              {summary.forward && (
-                <div className="mb-2">
-                  <strong>Forward Reads:</strong>
-                  <ul className="list-unstyled ms-3">
-                    <li>Total reads: {summary.forward.total_reads || 'N/A'}</li>
-                    <li>Total bases: {summary.forward.total_bases || 'N/A'}</li>
-                    <li>Trimmed bases: {summary.forward.trimmed_bases || 'N/A'}</li>
-                    <li>Quality threshold: {summary.forward.quality_threshold || 'N/A'}</li>
-                  </ul>
-                </div>
-              )}
-              {summary.reverse && (
-                <div className="mb-2">
-                  <strong>Reverse Reads:</strong>
-                  <ul className="list-unstyled ms-3">
-                    <li>Total reads: {summary.reverse.total_reads || 'N/A'}</li>
-                    <li>Total bases: {summary.reverse.total_bases || 'N/A'}</li>
-                    <li>Trimmed bases: {summary.reverse.trimmed_bases || 'N/A'}</li>
-                    <li>Quality threshold: {summary.reverse.quality_threshold || 'N/A'}</li>
-                  </ul>
-                </div>
-              )}
-              {!summary.forward && !summary.reverse && summary.total_reads && (
-                <div>
-                  <p><strong>Total reads:</strong> {summary.total_reads}</p>
-                  <p><strong>Total bases:</strong> {summary.total_bases}</p>
-                  <p><strong>Trimmed bases:</strong> {summary.trimmed_bases}</p>
-                  <p><strong>Quality threshold:</strong> {summary.quality_threshold}</p>
-                </div>
-              )}
-            </div>
-            );
-          })()}
-          
-          {/* Forward Reads */}
-          {(() => {
-            const hasForwardData = forwardData && forwardData.trimmed_reads;
-            console.log('🔍 [DEBUG] Rendering forward reads section:', { hasForwardData, forwardDataType: typeof forwardData });
-            return hasForwardData;
-          })() && (
-            <div className="bg-light p-3 border rounded mb-3">
-              <h6>📄 Forward Reads (R1) - Trimmed Sequences</h6>
-              <details>
-                <summary className="text-primary" style={{cursor: 'pointer'}}>
-                  View trimmed forward reads ({forwardData.trimmed_reads.split('\n').filter((l: string) => l.startsWith('@')).length} reads)
-                </summary>
-                <pre className="small mt-2 bg-white p-2 border rounded" style={{maxHeight: '400px', overflow: 'auto'}}>
-                  {forwardData.trimmed_reads}
-                </pre>
-              </details>
-              {forwardData.summary && (
-                <div className="mt-2 small text-muted">
-                  <strong>Forward Summary:</strong> {forwardData.summary.total_reads} reads, {forwardData.summary.total_bases} bases, {forwardData.summary.trimmed_bases} bases trimmed
-                </div>
-              )}
-            </div>
-          )}
-          
-          {/* Reverse Reads */}
-          {(() => {
-            const hasReverseData = reverseData && reverseData.trimmed_reads;
-            console.log('🔍 [DEBUG] Rendering reverse reads section:', { hasReverseData, reverseDataType: typeof reverseData });
-            return hasReverseData;
-          })() && (
-            <div className="bg-light p-3 border rounded mb-3">
-              <h6>📄 Reverse Reads (R2) - Trimmed Sequences</h6>
-              <details>
-                <summary className="text-primary" style={{cursor: 'pointer'}}>
-                  View trimmed reverse reads ({reverseData.trimmed_reads.split('\n').filter((l: string) => l.startsWith('@')).length} reads)
-                </summary>
-                <pre className="small mt-2 bg-white p-2 border rounded" style={{maxHeight: '400px', overflow: 'auto'}}>
-                  {reverseData.trimmed_reads}
-                </pre>
-              </details>
-              {reverseData.summary && (
-                <div className="mt-2 small text-muted">
-                  <strong>Reverse Summary:</strong> {reverseData.summary.total_reads} reads, {reverseData.summary.total_bases} bases, {reverseData.summary.trimmed_bases} bases trimmed
-                </div>
-              )}
-            </div>
-          )}
-          
-          {/* Single-end trimmed reads (fallback) */}
-          {!forwardData && !reverseData && trimmedReads && (
-            <div className="bg-light p-3 border rounded mb-3">
-              <h6>📄 Trimmed Sequences</h6>
-              <details>
-                <summary className="text-primary" style={{cursor: 'pointer'}}>
-                  View trimmed reads ({trimmedReads.split('\n').filter((l: string) => l.startsWith('@')).length} reads)
-                </summary>
-                <pre className="small mt-2 bg-white p-2 border rounded" style={{maxHeight: '400px', overflow: 'auto'}}>
-                  {trimmedReads}
-                </pre>
-              </details>
-            </div>
-          )}
-          
-          {/* Debug Section - Consistent across all commands */}
-          {renderDebugInfo(output, actualResult)}
-        </div>
-      );
-    }
-    
-    if (mergedSequences) {
-      console.log('🔍 [DEBUG] ✅ ENTERING merging result render block!');
-      const resultText = actualResult?.text || (output.result && output.result.text);
-      
-      return (
-        <div>
-          {resultText && (
-            <div className="alert alert-success mb-3">
-              <strong>✓ {resultText}</strong>
-            </div>
-          )}
-          
-          {/* Summary Statistics */}
-          {(() => {
-            const summary = actualResult?.summary || 
-                           (output.result && output.result.summary) ||
-                           (output.result && output.result.result && output.result.result.summary);
-            return summary && (
-            <div className="bg-light p-3 border rounded mb-3">
-              <h6>📊 Merging Statistics</h6>
-              <div className="row">
-                <div className="col-md-6">
-                  <p><strong>Total pairs:</strong> {summary.total_pairs}</p>
-                  <p><strong>Merged pairs:</strong> {summary.merged_pairs}</p>
-                </div>
-                <div className="col-md-6">
-                  <p><strong>Minimum overlap:</strong> {summary.min_overlap} bases</p>
-                  <p><strong>Average overlap:</strong> {summary.average_overlap?.toFixed(2) || 'N/A'} bases</p>
-                </div>
-              </div>
-            </div>
-            );
-          })()}
-          
-          {/* Merged Sequences */}
-          <div className="bg-light p-3 border rounded mb-3">
-            <h6>🧬 Merged Sequences</h6>
-            <details>
-              <summary className="text-primary" style={{cursor: 'pointer'}}>
-                View merged sequences ({mergedSequences.split('>').length - 1} sequences)
-              </summary>
-              <pre className="small mt-2 bg-white p-2 border rounded" style={{maxHeight: '400px', overflow: 'auto'}}>
-                {mergedSequences}
-              </pre>
-            </details>
-          </div>
-          
-          {/* Debug Section - Consistent across all commands */}
-          {renderDebugInfo(output, actualResult)}
-        </div>
-      );
-    }
-    
-    // Handle quality assessment results
-    if (hasQualityAssessment) {
-      console.log('🔍 [DEBUG] ✅ ENTERING quality assessment result render block!');
-      const resultText = actualResult?.text || (output.result && output.result.text);
-      
-      return (
-        <div>
-          {resultText && (
-            <div className="alert alert-success mb-3">
-              <strong>✓ {resultText}</strong>
-            </div>
-          )}
-          
-          {/* Summary Statistics */}
-          {qualitySummary && (
-            <div className="bg-light p-3 border rounded mb-3">
-              <h6>📊 Quality Assessment Summary</h6>
-              <div className="row">
-                <div className="col-md-6">
-                  <p><strong>Total sequences:</strong> {qualitySummary.total_sequences}</p>
-                  <p><strong>Total bases:</strong> {qualitySummary.total_bases?.toLocaleString()}</p>
-                  <p><strong>Average length:</strong> {qualitySummary.average_length} bp</p>
-                </div>
-                <div className="col-md-6">
-                  <p><strong>Length range:</strong> {qualitySummary.length_range}</p>
-                  <p><strong>Average GC content:</strong> {qualitySummary.average_gc_content}%</p>
-                </div>
-              </div>
-            </div>
-          )}
-          
-          {/* Detailed Metrics */}
-          {qualityMetrics && (
-            <div className="bg-light p-3 border rounded mb-3">
-              <h6>📈 Detailed Quality Metrics</h6>
-              <div className="row">
-                <div className="col-md-6">
-                  <h6>Length Statistics</h6>
-                  <ul className="list-unstyled">
-                    <li><strong>Min length:</strong> {qualityMetrics.min_length} bp</li>
-                    <li><strong>Max length:</strong> {qualityMetrics.max_length} bp</li>
-                    <li><strong>Median length:</strong> {qualityMetrics.median_length?.toFixed(2)} bp</li>
-                    <li><strong>Std deviation:</strong> {qualityMetrics.length_std_dev?.toFixed(2)} bp</li>
-                  </ul>
-                </div>
-                <div className="col-md-6">
-                  <h6>GC Content Statistics</h6>
-                  <ul className="list-unstyled">
-                    <li><strong>Average GC:</strong> {qualityMetrics.average_gc_content?.toFixed(2)}%</li>
-                    <li><strong>Std deviation:</strong> {qualityMetrics.gc_content_std_dev?.toFixed(2)}%</li>
-                  </ul>
-                  {qualityMetrics.base_percentages && (
-                    <div className="mt-2">
-                      <h6>Base Composition (%)</h6>
-                      <ul className="list-unstyled">
-                        {Object.entries(qualityMetrics.base_percentages).map(([base, percent]: [string, any]) => (
-                          <li key={base}><strong>{base}:</strong> {percent?.toFixed(2)}%</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-          
-          {/* Visualizations */}
-          {qualityPlotData && (
-            <div className="bg-light p-3 border rounded mb-3">
-              <h6>📊 Quality Assessment Charts</h6>
-              
-              {/* Length Distribution */}
-              {qualityPlotData.length_distribution && (
-                <div className="mb-4">
-                  <h6>Sequence Length Distribution</h6>
-                  <Plot
-                    data={[{
-                      x: qualityPlotData.length_distribution.x,
-                      y: qualityPlotData.length_distribution.y,
-                      type: 'bar',
-                      marker: { color: '#007bff' }
-                    }]}
-                    layout={{
-                      title: 'Sequence Length Distribution',
-                      xaxis: { title: 'Length (bp)' },
-                      yaxis: { title: 'Number of Sequences' },
-                      height: 400,
-                      margin: { l: 60, r: 20, t: 60, b: 60 }
-                    }}
-                    style={{ width: '100%' }}
-                  />
-                </div>
-              )}
-              
-              {/* GC Content Distribution */}
-              {qualityPlotData.gc_content_distribution && (
-                <div className="mb-4">
-                  <h6>GC Content Distribution</h6>
-                  <Plot
-                    data={[{
-                      x: qualityPlotData.gc_content_distribution.x,
-                      y: qualityPlotData.gc_content_distribution.y,
-                      type: 'bar',
-                      marker: { color: '#28a745' }
-                    }]}
-                    layout={{
-                      title: 'GC Content Distribution',
-                      xaxis: { title: 'GC Content Range (%)' },
-                      yaxis: { title: 'Number of Sequences' },
-                      height: 400,
-                      margin: { l: 60, r: 20, t: 60, b: 60 }
-                    }}
-                    style={{ width: '100%' }}
-                  />
-                </div>
-              )}
-              
-              {/* Base Composition */}
-              {qualityPlotData.base_composition && (
-                <div className="mb-4">
-                  <h6>Base Composition</h6>
-                  <Plot
-                    data={[{
-                      x: qualityPlotData.base_composition.x,
-                      y: qualityPlotData.base_composition.y,
-                      type: 'bar',
-                      marker: { color: '#ffc107' }
-                    }]}
-                    layout={{
-                      title: 'Base Composition',
-                      xaxis: { title: 'Base' },
-                      yaxis: { title: 'Count' },
-                      height: 400,
-                      margin: { l: 60, r: 20, t: 60, b: 60 }
-                    }}
-                    style={{ width: '100%' }}
-                  />
-                </div>
-              )}
-            </div>
-          )}
-          
-          {/* Debug Section - Consistent across all commands */}
-          {renderDebugInfo(output, actualResult)}
-        </div>
-      );
-    }
-    
-    console.log('🔍 Checking for tree_newick in actualResult:', actualResult.tree_newick ? 'FOUND' : 'NOT FOUND');
-    console.log('🔍 Checking for ete_visualization in actualResult:', actualResult.ete_visualization ? 'FOUND' : 'NOT FOUND');
-    console.log('🔍 Checking for clustering_result in actualResult:', actualResult.clustering_result ? 'FOUND' : 'NOT FOUND');
-    
-    // --- NEW: Render phylogenetic tree if present ---
-    if (actualResult && actualResult.tree_newick) {
-      console.log('🔍 Phylogenetic tree section 1 - tree_newick detected:', actualResult.tree_newick);
-      console.log('🔍 Full actualResult structure:', actualResult);
-      return (
-        <div>
-          {output.text && (
-            <pre className="bg-light p-3 border rounded mb-3">{output.text}</pre>
-          )}
-          
-          {/* Debug Section - Consistent across all commands */}
-          {renderDebugInfo(output, actualResult)}
-          
-          {actualResult.text && (
-            <pre className="bg-light p-3 border rounded mb-3">{actualResult.text}</pre>
-          )}
-
-          {/* Clustering Results */}
-          {actualResult.clustering_result && (
-            <div className="bg-light p-3 border rounded mb-3">
-              <h5>🧬 Clustering Analysis Results</h5>
-              <div className="row">
-                <div className="col-md-6">
-                  <h6>Summary</h6>
-                  <ul className="list-unstyled">
-                    <li><strong>Total Sequences:</strong> {actualResult.clustering_result.total_sequences}</li>
-                    <li><strong>Number of Clusters:</strong> {actualResult.clustering_result.num_clusters}</li>
-                    <li><strong>Representatives:</strong> {actualResult.clustering_result.representatives?.join(', ')}</li>
-                  </ul>
-                </div>
-                <div className="col-md-6">
-                  <h6>Cluster Details</h6>
-                  {actualResult.clustering_result.clusters && (
-                    <div>
-                      {actualResult.clustering_result.clusters.map((cluster: any, index: number) => (
-                        <div key={index} className="mb-2">
-                          <strong>Cluster {cluster.cluster_id}:</strong>
-                          <ul className="list-unstyled ml-3">
-                            <li>Size: {cluster.size} sequences</li>
-                            <li>Representative: {cluster.representative}</li>
-                            <li>Average Distance: {cluster.average_distance?.toFixed(4)}</li>
-                          </ul>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Clustered Visualization */}
-          {actualResult.clustered_visualization && actualResult.clustered_visualization.svg && (
-            <div className="bg-light p-3 border rounded mb-3">
-              <h5>🧬 Clustered Phylogenetic Tree Visualization</h5>
-              <div dangerouslySetInnerHTML={{ __html: actualResult.clustered_visualization.svg }} />
-            </div>
-          )}
-
-          {/* ETE3 Visualization */}
-          {actualResult.ete_visualization && actualResult.ete_visualization.svg && (
-            <div className="bg-light p-3 border rounded mb-3">
-              <h5>🧬 ETE3 Phylogenetic Tree Visualization</h5>
-              <div dangerouslySetInnerHTML={{ __html: actualResult.ete_visualization.svg }} />
-            </div>
-          )}
-          
-          {/* D3.js Visualization as fallback */}
-          <div className="bg-light p-3 border rounded mb-3">
-            <h5>🧬 Interactive Phylogenetic Tree (D3.js)</h5>
-            <PhylogeneticTree newick={actualResult.tree_newick} />
-          </div>
-          {actualResult.statistics && (
-            <div className="bg-light p-3 border rounded mb-3">
-              <h6>Tree Statistics</h6>
-              <div className="row">
-                {Object.entries(actualResult.statistics).map(([key, value]) => (
-                  <div key={key} className="col-md-6 mb-2">
-                    <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      );
-    }
-
-    // --- NEW: Render vendor research results if present ---
-    // Check multiple possible paths for vendor data
-    let vendors = null;
-    let recommendations = [];
-    
-    // Path 1: output.output.result.vendors (nested structure)
-    if (output && output.output && output.output.result && output.output.result.vendors) {
-      vendors = output.output.result.vendors;
-      recommendations = output.output.result.recommendations || [];
-    }
-    // Path 2: output.result.vendors (direct structure)
-    else if (output && output.result && output.result.vendors) {
-      vendors = output.result.vendors;
-      recommendations = output.result.recommendations || [];
-    }
-    // Path 3: output.result.result.vendors (double nested result)
-    else if (output && output.result && output.result.result && output.result.result.vendors) {
-      vendors = output.result.result.vendors;
-      recommendations = output.result.result.recommendations || [];
-    }
-    
-    if (vendors) {
-      
-      return (
-        <div>
-          {output.text && (
-            <pre className="bg-light p-3 border rounded mb-3">{output.text}</pre>
-          )}
-          
-          <div className="bg-light p-3 border rounded mb-3">
-            <h5>DNA Synthesis Vendors</h5>
-            <div className="row">
-              {Object.entries(vendors).map(([vendorId, vendor]: [string, any]) => (
-                <div key={vendorId} className="col-md-6 mb-3">
-                  <div className="card h-100">
-                    <div className="card-body">
-                      <h6 className="card-title">{vendor.name}</h6>
-                      <p className="card-text">
-                        <strong>Services:</strong> {vendor.services.join(', ')}
-                      </p>
-                      <p className="card-text">
-                        <strong>Pricing:</strong> {vendor.pricing_range}
-                      </p>
-                      <p className="card-text">
-                        <strong>Turnaround:</strong> {vendor.turnaround_time}
-                      </p>
-                      <p className="card-text">
-                        <strong>Max Length:</strong> {vendor.max_length}
-                      </p>
-                      <p className="card-text">
-                        <strong>Specialties:</strong> {vendor.specialties.join(', ')}
-                      </p>
-                      <a href={vendor.website} target="_blank" rel="noopener noreferrer" className="btn btn-sm btn-outline-primary">
-                        Visit Website
-                      </a>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-          
-          {recommendations.length > 0 && (
-            <div className="bg-light p-3 border rounded mb-3">
-              <h5>Recommendations</h5>
-              <ul className="list-unstyled">
-                {recommendations.map((rec: string, index: number) => (
-                  <li key={index} className="mb-2">
-                    <i className="bi bi-lightbulb text-warning me-2"></i>
-                    {rec}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </div>
-      );
-    }
-    
-    if (type === 'error') {
-      return (
-        <div className="alert alert-danger">
-          <strong>Error:</strong> {output.error}
-        </div>
-      );
-    }
-    
-    // Handle responses with messages array directly in output
-    if (output.messages && Array.isArray(output.messages)) {
-      console.log('Found messages array directly in output with length:', output.messages.length);
-      console.log('Messages:', output.messages);
-      
-      // Find the last tool message (most recent tool result)
-      const toolMessages = output.messages.filter(
-        (msg: any) => msg.type === 'tool' && msg.content
-      );
-      console.log('Tool messages found:', toolMessages.length);
-      
-      if (toolMessages.length > 0) {
-        const lastToolMsg = toolMessages[toolMessages.length - 1];
-        console.log('Last tool message:', lastToolMsg);
-        
-        try {
-          const toolResult = JSON.parse(lastToolMsg.content);
-          console.log('Parsed last tool result:', toolResult);
-          
-          // Handle sequence selection results
-          if (lastToolMsg.name === 'sequence_selection' && toolResult.output && Array.isArray(toolResult.output)) {
-            console.log('Found selected sequences array:', toolResult.output);
-            return (
-              <div>
-                {toolResult.text && (
-                  <pre className="bg-light p-3 border rounded mb-3">{toolResult.text}</pre>
-                )}
-                <div className="bg-light p-3 border rounded mb-3">
-                  <h5>Selected Sequences</h5>
-                  <div className="table-responsive">
-                    <table className="table table-sm">
-                      <thead>
-                        <tr>
-                          <th>Name</th>
-                          <th>Sequence</th>
-                          <th>Length</th>
-                          <th>GC Content</th>
-                          <th>Gaps</th>
-                          <th>Conservation Score</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {toolResult.output.map((seq: any, index: number) => (
-                          <tr key={index}>
-                            <td>{seq.name}</td>
-                            <td className="font-monospace">{seq.sequence}</td>
-                            <td>{seq.statistics?.length || 'N/A'} bp</td>
-                            <td>{seq.statistics?.gc_content || 'N/A'}%</td>
-                            <td>{seq.statistics?.gap_count || 0} ({seq.statistics?.gap_percentage || 0}%)</td>
-                            <td>{seq.statistics?.conservation_score || 'N/A'}%</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-                {toolResult.selection_criteria && (
-                  <div className="bg-light p-3 border rounded mb-3">
-                    <h6>Selection Criteria</h6>
-                    <div className="row">
-                      {Object.entries(toolResult.selection_criteria).map(([key, value]) => (
-                        <div key={key} className="col-md-6 mb-2">
-                          <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                
-                {/* Debug Section - Consistent across all commands */}
-                {renderDebugInfo({ result: toolResult }, toolResult)}
-              </div>
-            );
-          }
-          
-          // Handle mutation results
-          if (lastToolMsg.name === 'mutate_sequence' && toolResult.output && toolResult.output.variants) {
-            console.log('Found mutation variants:', toolResult.output.variants);
-            return (
-              <div>
-                {toolResult.text && (
-                  <pre className="bg-light p-3 border rounded mb-3">{toolResult.text}</pre>
-                )}
-                <div className="bg-light p-3 border rounded mb-3">
-                  <h5>Mutation Results</h5>
-                  <div className="row">
-                    <div className="col-md-6">
-                      <h6>Statistics</h6>
-                      <ul>
-                        <li><strong>Total Variants:</strong> {toolResult.output.total_variants}</li>
-                        <li><strong>Substitutions:</strong> {toolResult.output.substitution_count}</li>
-                        <li><strong>Insertions:</strong> {toolResult.output.insertion_count}</li>
-                        <li><strong>Deletions:</strong> {toolResult.output.deletion_count}</li>
-                        <li><strong>Mutation Rate:</strong> {(toolResult.output.mutation_rate * 100).toFixed(2)}%</li>
-                      </ul>
-                    </div>
-                    <div className="col-md-6">
-                      <h6>First 10 Variants</h6>
-                      <div className="table-responsive">
-                        <table className="table table-sm">
-                          <thead>
-                            <tr>
-                              <th>#</th>
-                              <th>Sequence</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {toolResult.output.variants.slice(0, 10).map((variant: string, index: number) => (
-                              <tr key={index}>
-                                <td>{index + 1}</td>
-                                <td className="font-monospace">{variant}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                      {toolResult.output.variants.length > 10 && (
-                        <p className="text-muted">... and {toolResult.output.variants.length - 10} more variants</p>
-                      )}
-                    </div>
-                  </div>
-                  
-                  {/* Download and View All Variants */}
-                  <div className="mt-3">
-                    <div className="d-flex gap-2 flex-wrap">
-                      <button
-                        className="btn btn-primary btn-sm"
-                        onClick={() => {
-                          // Download all variants as FASTA file
-                          const fastaContent = toolResult.output.variants
-                            .map((variant: string, index: number) => `>variant_${index + 1}\n${variant}`)
-                            .join('\n');
-                          const blob = new Blob([fastaContent], { type: 'text/plain' });
-                          const url = URL.createObjectURL(blob);
-                          const a = document.createElement('a');
-                          a.href = url;
-                          a.download = `mutants_${toolResult.output.total_variants}_variants.fasta`;
-                          document.body.appendChild(a);
-                          a.click();
-                          document.body.removeChild(a);
-                          URL.revokeObjectURL(url);
-                        }}
-                      >
-                        📥 Download All Variants (FASTA)
-                      </button>
-                      <button
-                        className="btn btn-secondary btn-sm"
-                        onClick={() => {
-                          // Toggle view all variants
-                          const details = document.getElementById('all-variants-details');
-                          if (details) {
-                            details.style.display = details.style.display === 'none' ? 'block' : 'none';
-                          }
-                        }}
-                      >
-                        👁️ View All Variants
-                      </button>
-                    </div>
-                    
-                    {/* All Variants Section (initially hidden) */}
-                    <div id="all-variants-details" style={{ display: 'none' }} className="mt-3">
-                      <div className="bg-light p-3 border rounded">
-                        <h6>All {toolResult.output.variants.length} Variants</h6>
-                        <div className="table-responsive" style={{ maxHeight: '400px', overflowY: 'auto' }}>
-                          <table className="table table-sm table-striped">
-                            <thead className="table-light sticky-top">
-                              <tr>
-                                <th>#</th>
-                                <th>Sequence</th>
-                                <th>Length</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {toolResult.output.variants.map((variant: string, index: number) => (
-                                <tr key={index}>
-                                  <td>{index + 1}</td>
-                                  <td className="font-monospace small">{variant}</td>
-                                  <td>{variant.length} bp</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                
-                {/* Debug Section - Consistent across all commands */}
-                {renderDebugInfo({ result: toolResult }, toolResult)}
-              </div>
-            );
-          }
-          
-          // Handle alignment results
-          if (lastToolMsg.name === 'sequence_alignment' && toolResult.output && Array.isArray(toolResult.output)) {
-            console.log('Found alignment array:', toolResult.output);
-            return (
-              <div>
-                {toolResult.text && (
-                  <pre className="bg-light p-3 border rounded mb-3">{toolResult.text}</pre>
-                )}
-                <div className="bg-light p-3 border rounded mb-3">
-                  <h5>Alignment Result</h5>
-                  <div className="table-responsive">
-                    <table className="table table-sm">
-                      <thead>
-                        <tr>
-                          <th>Name</th>
-                          <th>Sequence</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {toolResult.output.map((seq: any, index: number) => (
-                          <tr key={index}>
-                            <td>{seq.name}</td>
-                            <td className="font-monospace">{seq.sequence}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-                {toolResult.statistics && (
-                  <div className="bg-light p-3 border rounded mb-3">
-                    <h6>Alignment Statistics</h6>
-                    <div className="row">
-                      {Object.entries(toolResult.statistics).map(([key, value]) => (
-                        <div key={key} className="col-md-6 mb-2">
-                          <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                
-                {/* Debug Section - Consistent across all commands */}
-                {renderDebugInfo({ result: toolResult }, toolResult)}
-              </div>
-            );
-          }
-          
-          // Handle plasmid visualization results
-          if (lastToolMsg.name === 'plasmid_visualization' && toolResult.plasmid_data) {
-            return (
-              <div>
-                {toolResult.text && (
-                  <pre className="bg-light p-3 border rounded mb-3">{toolResult.text}</pre>
-                )}
-                <div className="bg-light p-3 border rounded mb-3">
-                  <h5>Plasmid Visualization</h5>
-                  <div className="row">
-                    <div className="col-md-6">
-                      <h6>Plasmid Details</h6>
-                      <ul className="list-unstyled">
-                        <li><strong>Name:</strong> {toolResult.plasmid_data.name}</li>
-                        <li><strong>Size:</strong> {toolResult.plasmid_data.size} bp</li>
-                        <li><strong>Description:</strong> {toolResult.plasmid_data.description}</li>
-                        <li><strong>Visualization Type:</strong> {toolResult.visualization_type}</li>
-                      </ul>
-                    </div>
-                    <div className="col-md-6">
-                      <h6>Features</h6>
-                      {toolResult.plasmid_data.features && toolResult.plasmid_data.features.length > 0 ? (
-                        <ul className="list-unstyled">
-                          {toolResult.plasmid_data.features.map((feature: any, index: number) => (
-                            <li key={index}>
-                              <strong>{feature.name}:</strong> {feature.description} 
-                              (position {feature.start}-{feature.end})
-                            </li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <p className="text-muted">No features defined</p>
-                      )}
-                    </div>
-                  </div>
-                  {toolResult.metadata && (
-                    <div className="mt-3">
-                      <h6>Input Parameters</h6>
-                      <div className="row">
-                        {Object.entries(toolResult.metadata).map(([key, value]) => (
-                          <div key={key} className="col-md-6 mb-2">
-                            <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-                <div className="text-center mb-3">
-                  <button 
-                    className="btn btn-success btn-lg"
-                    onClick={() => {
-                      // Store plasmid data in workflow context and show plasmid viewer
-                      console.log('Opening plasmid viewer with data:', toolResult.plasmid_data);
-                      updateWorkflowContext('plasmid_visualization', toolResult.plasmid_data);
-                    }}
-                    style={{
-                      fontSize: '1.1rem',
-                      padding: '12px 24px',
-                      boxShadow: '0 4px 8px rgba(0,0,0,0.2)',
-                      borderRadius: '25px'
-                    }}
-                  >
-                    🧬 View Plasmid Visualization
-                  </button>
-                  <p className="text-muted mt-2">
-                    Click the button above to open the interactive plasmid viewer
-                  </p>
-                </div>
-                
-                {/* Debug Section - Consistent across all commands */}
-                {renderDebugInfo({ result: toolResult }, toolResult)}
-              </div>
-            );
-          }
-          
-          // Fallback: show any tool result as text
-          if (toolResult.text) {
-            return (
-              <div>
-                <pre className="bg-light p-3 border rounded mb-3">{toolResult.text}</pre>
-                {/* Debug Section - Consistent across all commands */}
-                {renderDebugInfo({ result: toolResult }, toolResult)}
-              </div>
-            );
-          }
-          
-        } catch (e) {
-          console.log('Error parsing tool result:', e);
-        }
-      }
-    }
-    
-    // Handle MCP responses
-    if (output.success !== undefined) {
-      if (!output.success) {
-        return (
-          <div className="alert alert-danger">
-            <strong>MCP Error:</strong> {output.error}
-          </div>
-        );
-      }
-      
-      const result = output.result;
-      console.log('result structure:', JSON.stringify(result, null, 2));
-      
-      // Handle nested result structure from natural language commands
-      console.log('actualResult structure:', JSON.stringify(actualResult, null, 2));
-
-      // --- NEW: Render phylogenetic tree if present in actualResult ---
-      if (actualResult && actualResult.tree_newick) {
-        return (
-          <div>
-            {actualResult.text && (
-              <pre className="bg-light p-3 border rounded mb-3">{actualResult.text}</pre>
-            )}
-
-            {/* Clustering Results */}
-            {actualResult.clustering_result && (
-              <div className="bg-light p-3 border rounded mb-3">
-                <h5>🧬 Clustering Analysis Results</h5>
-                <div className="row">
-                  <div className="col-md-6">
-                    <h6>Summary</h6>
-                    <ul className="list-unstyled">
-                      <li><strong>Total Sequences:</strong> {actualResult.clustering_result.total_sequences}</li>
-                      <li><strong>Number of Clusters:</strong> {actualResult.clustering_result.num_clusters}</li>
-                      <li><strong>Representatives:</strong> {actualResult.clustering_result.representatives?.join(', ')}</li>
-                    </ul>
-                  </div>
-                  <div className="col-md-6">
-                    <h6>Cluster Details</h6>
-                    {actualResult.clustering_result.clusters && (
-                      <div>
-                        {actualResult.clustering_result.clusters.map((cluster: any, index: number) => (
-                          <div key={index} className="mb-2">
-                            <strong>Cluster {cluster.cluster_id}:</strong>
-                            <ul className="list-unstyled ml-3">
-                              <li>Size: {cluster.size} sequences</li>
-                              <li>Representative: {cluster.representative}</li>
-                              <li>Average Distance: {cluster.average_distance?.toFixed(4)}</li>
-                            </ul>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Clustered Visualization */}
-            {actualResult.clustered_visualization && actualResult.clustered_visualization.svg && (
-              <div className="bg-light p-3 border rounded mb-3">
-                <h5>🧬 Clustered Phylogenetic Tree Visualization</h5>
-                <div dangerouslySetInnerHTML={{ __html: actualResult.clustered_visualization.svg }} />
-              </div>
-            )}
-
-            {/* ETE3 Visualization */}
-            {actualResult.ete_visualization && actualResult.ete_visualization.svg && (
-              <div className="bg-light p-3 border rounded mb-3">
-                <h5>🧬 ETE3 Phylogenetic Tree Visualization</h5>
-                <div dangerouslySetInnerHTML={{ __html: actualResult.ete_visualization.svg }} />
-              </div>
-            )}
-            
-                         {/* D3.js Visualization as fallback */}
-             <div className="bg-light p-3 border rounded mb-3">
-               <h5>🧬 Interactive Phylogenetic Tree (D3.js)</h5>
-               <PhylogeneticTree newick={actualResult.tree_newick} />
-             </div>
-            {actualResult.statistics && (
-              <div className="bg-light p-3 border rounded mb-3">
-                <h6>Tree Statistics</h6>
-                <div className="row">
-                  {Object.entries(actualResult.statistics).map(([key, value]) => (
-                    <div key={key} className="col-md-6 mb-2">
-                      <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-            
-            {/* Debug Section - Consistent across all commands */}
-            {renderDebugInfo(output, actualResult)}
-          </div>
-        );
-      }
-      // --- END NEW ---
-      
-      // --- NEW: Handle plasmid visualization results directly in actualResult ---
-      if (actualResult && actualResult.plasmid_data) {
-        return (
-          <div>
-            {actualResult.text && (
-              <pre className="bg-light p-3 border rounded mb-3">{actualResult.text}</pre>
-            )}
-            <div className="bg-light p-3 border rounded mb-3">
-              <h5>🧬 Plasmid Visualization</h5>
-              <PlasmidDataVisualizer data={actualResult.plasmid_data} />
-            </div>
-            
-            {/* Debug Section - Consistent across all commands */}
-            {renderDebugInfo(output, actualResult)}
-          </div>
-        );
-      }
-
-      // Handle plasmid for representatives results
-      if (actualResult.plasmid_results) {
-        return (
-          <div>
-            {actualResult.text && (
-              <pre className="bg-light p-3 border rounded mb-3">{actualResult.text}</pre>
-            )}
-            <PlasmidRepresentativesVisualizer 
-              plasmidResults={actualResult.plasmid_results}
-              vectorName={actualResult.vector_name || "pUC19"}
-              cloningSites={actualResult.cloning_sites || "EcoRI, BamHI, HindIII"}
-            />
-            
-            {/* Debug Section - Consistent across all commands */}
-            {renderDebugInfo(output, actualResult)}
-          </div>
-        );
-      }
-      // --- END NEW ---
-
-      // --- NEW: Handle alignment in ToolMessage for natural language commands ---
-      // Check if messages is in actualResult (nested) or directly in output
-      const messages = actualResult.messages || output.messages;
-      console.log('Looking for messages in:', { actualResultMessages: actualResult.messages, outputMessages: output.messages, finalMessages: messages });
-      
-      if (messages && Array.isArray(messages)) {
-        console.log('Found messages array with length:', messages.length);
-        console.log('Messages:', messages);
-        
-        // Find the last tool message (most recent tool result)
-        const toolMessages = messages.filter(
-          (msg: any) => msg.type === 'tool' && msg.content
-        );
-        console.log('Tool messages found:', toolMessages.length);
-        
-        if (toolMessages.length > 0) {
-          const lastToolMsg = toolMessages[toolMessages.length - 1];
-          console.log('Last tool message:', lastToolMsg);
-          
-          try {
-            const toolResult = JSON.parse(lastToolMsg.content);
-            console.log('Parsed last tool result:', toolResult);
-            
-            // Handle sequence selection results
-            if (lastToolMsg.name === 'sequence_selection' && toolResult.output && Array.isArray(toolResult.output)) {
-              console.log('Found selected sequences array:', toolResult.output);
-              return (
-                <div>
-                  {toolResult.text && (
-                    <pre className="bg-light p-3 border rounded mb-3">{toolResult.text}</pre>
-                  )}
-                  <div className="bg-light p-3 border rounded mb-3">
-                    <h5>Selected Sequences</h5>
-                    <div className="table-responsive">
-                      <table className="table table-sm">
-                        <thead>
-                          <tr>
-                            <th>Name</th>
-                            <th>Sequence</th>
-                            <th>Length</th>
-                            <th>GC Content</th>
-                            <th>Gaps</th>
-                            <th>Conservation Score</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {toolResult.output.map((seq: any, index: number) => (
-                            <tr key={index}>
-                              <td>{seq.name}</td>
-                              <td className="font-monospace">{seq.sequence}</td>
-                              <td>{seq.statistics?.length || 'N/A'} bp</td>
-                              <td>{seq.statistics?.gc_content || 'N/A'}%</td>
-                              <td>{seq.statistics?.gap_count || 0} ({seq.statistics?.gap_percentage || 0}%)</td>
-                              <td>{seq.statistics?.conservation_score || 'N/A'}%</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                  {toolResult.selection_criteria && (
-                    <div className="bg-light p-3 border rounded mb-3">
-                      <h6>Selection Criteria</h6>
-                      <div className="row">
-                        {Object.entries(toolResult.selection_criteria).map(([key, value]) => (
-                          <div key={key} className="col-md-6 mb-2">
-                            <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  
-                  {/* Debug Section - Consistent across all commands */}
-                  {renderDebugInfo({ result: toolResult }, toolResult)}
-                </div>
-              );
-            }
-            
-            // Handle mutation results
-            if (lastToolMsg.name === 'mutate_sequence' && toolResult.output && toolResult.output.variants) {
-              console.log('Found mutation variants:', toolResult.output.variants);
-              return (
-                <div>
-                  {toolResult.text && (
-                    <pre className="bg-light p-3 border rounded mb-3">{toolResult.text}</pre>
-                  )}
-                  <div className="bg-light p-3 border rounded mb-3">
-                    <h5>Mutation Results</h5>
-                    <div className="row">
-                      <div className="col-md-6">
-                        <h6>Statistics</h6>
-                        <ul>
-                          <li><strong>Total Variants:</strong> {toolResult.output.total_variants}</li>
-                          <li><strong>Substitutions:</strong> {toolResult.output.substitution_count}</li>
-                          <li><strong>Insertions:</strong> {toolResult.output.insertion_count}</li>
-                          <li><strong>Deletions:</strong> {toolResult.output.deletion_count}</li>
-                          <li><strong>Mutation Rate:</strong> {(toolResult.output.mutation_rate * 100).toFixed(2)}%</li>
-                        </ul>
-                      </div>
-                      <div className="col-md-6">
-                        <h6>First 10 Variants</h6>
-                        <div className="table-responsive">
-                          <table className="table table-sm">
-                            <thead>
-                              <tr>
-                                <th>#</th>
-                                <th>Sequence</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {toolResult.output.variants.slice(0, 10).map((variant: string, index: number) => (
-                                <tr key={index}>
-                                  <td>{index + 1}</td>
-                                  <td className="font-monospace">{variant}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                        {toolResult.output.variants.length > 10 && (
-                          <p className="text-muted">... and {toolResult.output.variants.length - 10} more variants</p>
-                        )}
-                      </div>
-                    </div>
-                    
-                    {/* Download and View All Variants */}
-                    <div className="mt-3">
-                      <div className="d-flex gap-2 flex-wrap">
-                        <button
-                          className="btn btn-primary btn-sm"
-                          onClick={() => {
-                            // Download all variants as FASTA file
-                            const fastaContent = toolResult.output.variants
-                              .map((variant: string, index: number) => `>variant_${index + 1}\n${variant}`)
-                              .join('\n');
-                            const blob = new Blob([fastaContent], { type: 'text/plain' });
-                            const url = URL.createObjectURL(blob);
-                            const a = document.createElement('a');
-                            a.href = url;
-                            a.download = `mutants_${toolResult.output.total_variants}_variants.fasta`;
-                            document.body.appendChild(a);
-                            a.click();
-                            document.body.removeChild(a);
-                            URL.revokeObjectURL(url);
-                          }}
-                        >
-                          📥 Download All Variants (FASTA)
-                        </button>
-                        <button
-                          className="btn btn-secondary btn-sm"
-                          onClick={() => {
-                            // Toggle view all variants
-                            const details = document.getElementById('all-variants-details-mcp');
-                            if (details) {
-                              details.style.display = details.style.display === 'none' ? 'block' : 'none';
-                            }
-                          }}
-                        >
-                          👁️ View All Variants
-                        </button>
-                      </div>
-                      
-                      {/* All Variants Section (initially hidden) */}
-                      <div id="all-variants-details-mcp" style={{ display: 'none' }} className="mt-3">
-                        <div className="bg-light p-3 border rounded">
-                          <h6>All {toolResult.output.variants.length} Variants</h6>
-                          <div className="table-responsive" style={{ maxHeight: '400px', overflowY: 'auto' }}>
-                            <table className="table table-sm table-striped">
-                              <thead className="table-light sticky-top">
-                                <tr>
-                                  <th>#</th>
-                                  <th>Sequence</th>
-                                  <th>Length</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {toolResult.output.variants.map((variant: string, index: number) => (
-                                  <tr key={index}>
-                                    <td>{index + 1}</td>
-                                    <td className="font-monospace small">{variant}</td>
-                                    <td>{variant.length} bp</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                  
-                  {/* Debug Section - Consistent across all commands */}
-                  {renderDebugInfo({ result: toolResult }, toolResult)}
-                </div>
-              );
-            }
-            
-            // Handle alignment results
-            if (lastToolMsg.name === 'sequence_alignment' && toolResult.output && Array.isArray(toolResult.output)) {
-              console.log('Found alignment array:', toolResult.output);
-              return (
-                <div>
-                  {toolResult.text && (
-                    <pre className="bg-light p-3 border rounded mb-3">{toolResult.text}</pre>
-                  )}
-                  <div className="bg-light p-3 border rounded mb-3">
-                    <h5>Alignment Result</h5>
-                    <div className="table-responsive">
-                      <table className="table table-sm">
-                        <thead>
-                          <tr>
-                            <th>Name</th>
-                            <th>Sequence</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {toolResult.output.map((seq: any, index: number) => (
-                            <tr key={index}>
-                              <td>{seq.name}</td>
-                              <td className="font-monospace">{seq.sequence}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                  {toolResult.statistics && (
-                    <div className="bg-light p-3 border rounded mb-3">
-                      <h6>Alignment Statistics</h6>
-                      <div className="row">
-                        {Object.entries(toolResult.statistics).map(([key, value]) => (
-                          <div key={key} className="col-md-6 mb-2">
-                            <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  
-                  {/* Debug Section - Consistent across all commands */}
-                  {renderDebugInfo({ result: toolResult }, toolResult)}
-                </div>
-              );
-            }
-            
-            // Handle vendor research results
-            if (lastToolMsg.name === 'dna_vendor_research') {
-              // Check multiple paths for vendor data
-              let vendors = null;
-              let recommendations = [];
-              
-              if (toolResult.output && toolResult.output.result && toolResult.output.result.vendors) {
-                vendors = toolResult.output.result.vendors;
-                recommendations = toolResult.output.result.recommendations || [];
-              } else if (toolResult.output && toolResult.output.vendors) {
-                vendors = toolResult.output.vendors;
-                recommendations = toolResult.output.recommendations || [];
-              } else if (toolResult.result && toolResult.result.vendors) {
-                vendors = toolResult.result.vendors;
-                recommendations = toolResult.result.recommendations || [];
-              }
-              
-              if (vendors) {
-                return (
-                  <div>
-                    {toolResult.text && (
-                      <pre className="bg-light p-3 border rounded mb-3">{toolResult.text}</pre>
-                    )}
-                    
-                    <div className="bg-light p-3 border rounded mb-3">
-                      <h5>DNA Synthesis Vendors</h5>
-                      <div className="row">
-                        {Object.entries(vendors).map(([vendorId, vendor]: [string, any]) => (
-                          <div key={vendorId} className="col-md-6 mb-3">
-                            <div className="card h-100">
-                              <div className="card-body">
-                                <h6 className="card-title">{vendor.name}</h6>
-                                <p className="card-text">
-                                  <strong>Services:</strong> {vendor.services?.join(', ') || 'N/A'}
-                                </p>
-                                <p className="card-text">
-                                  <strong>Pricing:</strong> {vendor.pricing_range || 'N/A'}
-                                </p>
-                                <p className="card-text">
-                                  <strong>Turnaround:</strong> {vendor.turnaround_time || 'N/A'}
-                                </p>
-                                <p className="card-text">
-                                  <strong>Max Length:</strong> {vendor.max_length || 'N/A'}
-                                </p>
-                                <p className="card-text">
-                                  <strong>Specialties:</strong> {vendor.specialties?.join(', ') || 'N/A'}
-                                </p>
-                                {vendor.website && (
-                                  <a href={vendor.website} target="_blank" rel="noopener noreferrer" className="btn btn-sm btn-outline-primary">
-                                    Visit Website
-                                  </a>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                    
-                    {recommendations.length > 0 && (
-                      <div className="bg-light p-3 border rounded mb-3">
-                        <h5>Recommendations</h5>
-                        <ul className="list-unstyled">
-                          {recommendations.map((rec: string, index: number) => (
-                            <li key={index} className="mb-2">
-                              <i className="bi bi-lightbulb text-warning me-2"></i>
-                              {rec}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                    
-                    {/* Debug Section - Consistent across all commands */}
-                    {renderDebugInfo({ result: toolResult }, toolResult)}
-                  </div>
-                );
-              }
-            }
-            
-            // Handle plasmid visualization results
-            if (lastToolMsg.name === 'plasmid_visualization' && toolResult.plasmid_data) {
-              return (
-                <div>
-                  {toolResult.text && (
-                    <pre className="bg-light p-3 border rounded mb-3">{toolResult.text}</pre>
-                  )}
-                  <div className="bg-light p-3 border rounded mb-3">
-                    <h5>Plasmid Visualization</h5>
-                    <div className="row">
-                      <div className="col-md-6">
-                        <h6>Plasmid Details</h6>
-                        <ul className="list-unstyled">
-                          <li><strong>Name:</strong> {toolResult.plasmid_data.name}</li>
-                          <li><strong>Size:</strong> {toolResult.plasmid_data.size} bp</li>
-                          <li><strong>Description:</strong> {toolResult.plasmid_data.description}</li>
-                          <li><strong>Visualization Type:</strong> {toolResult.visualization_type}</li>
-                        </ul>
-                      </div>
-                      <div className="col-md-6">
-                        <h6>Features</h6>
-                        {toolResult.plasmid_data.features && toolResult.plasmid_data.features.length > 0 ? (
-                          <ul className="list-unstyled">
-                            {toolResult.plasmid_data.features.map((feature: any, index: number) => (
-                              <li key={index}>
-                                <strong>{feature.name}:</strong> {feature.description} 
-                                (position {feature.start}-{feature.end})
-                              </li>
-                            ))}
-                          </ul>
-                        ) : (
-                          <p className="text-muted">No features defined</p>
-                        )}
-                      </div>
-                    </div>
-                    {toolResult.metadata && (
-                      <div className="mt-3">
-                        <h6>Input Parameters</h6>
-                        <div className="row">
-                          {Object.entries(toolResult.metadata).map(([key, value]) => (
-                            <div key={key} className="col-md-6 mb-2">
-                              <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                  <div className="my-3">
-                    <PlasmidDataVisualizer data={toolResult.plasmid_data} />
-                  </div>
-                </div>
-              );
-            }
-            
-            // Fallback: show any tool result as text
-            if (toolResult.text) {
-              return (
-                <div>
-                  <pre className="bg-light p-3 border rounded mb-3">{toolResult.text}</pre>
-                  {/* Debug Section - Consistent across all commands */}
-                  {renderDebugInfo({ result: toolResult }, toolResult)}
-                </div>
-              );
-            }
-            
-          } catch (e) {
-            console.log('Error parsing tool result:', e);
-            // Fallback to default rendering
-          }
-        } else {
-          console.log('No alignment tool message found');
-        }
-      } else {
-        console.log('No messages array found');
-      }
-      // --- END NEW ---
-      
-      return (
-        <div>
-          {actualResult.text && (
-            <pre className="bg-light p-3 border rounded mb-3">
-              {actualResult.text}
-            </pre>
-          )}
-          
-          {actualResult.selected_variants && Array.isArray(actualResult.selected_variants) && (
-            <div className="bg-light p-3 border rounded mb-3">
-              <h5>Selected Variants ({actualResult.num_variants_selected}/{actualResult.num_variants_requested})</h5>
-              <div className="table-responsive">
-                <table className="table table-sm">
-                  <thead>
-                    <tr>
-                      <th>Name</th>
-                      <th>Sequence</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {actualResult.selected_variants.map((variant: any, index: number) => (
-                      <tr key={index}>
-                        <td>{variant.name}</td>
-                        <td className="font-monospace">{variant.sequence}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-          
-          {actualResult.alignment && Array.isArray(actualResult.alignment) && (
-            <div className="bg-light p-3 border rounded mb-3">
-              <h5>Alignment Result</h5>
-              <div className="table-responsive">
-                <table className="table table-sm">
-                  <thead>
-                    <tr>
-                      <th>Name</th>
-                      <th>Sequence</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {actualResult.alignment.map((seq: any, index: number) => (
-                      <tr key={index}>
-                        <td>{seq.name}</td>
-                        <td className="font-monospace">{seq.sequence}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-          
-          {actualResult.analysis && (
-            <div className="bg-light p-3 border rounded mb-3">
-              <h5>Analysis Results</h5>
-              <div className="row">
-                <div className="col-md-6">
-                  <h6>Selection Statistics</h6>
-                  <ul className="list-unstyled">
-                    <li><strong>Criteria:</strong> {actualResult.analysis.criteria_used}</li>
-                    <li><strong>Selection Ratio:</strong> {actualResult.analysis.selection_ratio}</li>
-                    <li><strong>Total Variants:</strong> {actualResult.analysis.total_variants}</li>
-                    <li><strong>Selected Variants:</strong> {actualResult.analysis.selected_variants}</li>
-                  </ul>
-                </div>
-                {actualResult.analysis.length_stats && (
-                  <div className="col-md-6">
-                    <h6>Length Statistics</h6>
-                    <ul className="list-unstyled">
-                      <li><strong>Mean Length:</strong> {actualResult.analysis.length_stats.selected_variants.mean.toFixed(2)}</li>
-                      <li><strong>Length Range:</strong> {actualResult.analysis.length_stats.selected_variants.min} - {actualResult.analysis.length_stats.selected_variants.max}</li>
-                    </ul>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-          
-          {actualResult.output && (
-            <div className="bg-light p-3 border rounded mb-3">
-              <h5>Output Data</h5>
-              <pre className="mb-0">{JSON.stringify(actualResult.output, null, 2)}</pre>
-            </div>
-          )}
-          
-          {actualResult.plot && (
-            <Plot
-              data={actualResult.plot.data}
-              layout={actualResult.plot.layout}
-            />
-          )}
-          
-          {/* DNA Vendor Research Results */}
-          {(actualResult.result && actualResult.result.vendors) || (actualResult.output && actualResult.output.result && actualResult.output.result.vendors) ? (
-            <div className="bg-light p-3 border rounded mb-3">
-              <h5>DNA Synthesis Vendors</h5>
-              <div className="row">
-                {Object.entries((actualResult.result && actualResult.result.vendors) || (actualResult.output && actualResult.output.result && actualResult.output.result.vendors) || {}).map(([vendorId, vendor]: [string, any]) => (
-                  <div key={vendorId} className="col-md-6 mb-3">
-                    <div className="card h-100">
-                      <div className="card-body">
-                        <h6 className="card-title">{vendor.name}</h6>
-                        <p className="card-text">
-                          <strong>Services:</strong> {vendor.services.join(', ')}
-                        </p>
-                        <p className="card-text">
-                          <strong>Pricing:</strong> {vendor.pricing_range}
-                        </p>
-                        <p className="card-text">
-                          <strong>Turnaround:</strong> {vendor.turnaround_time}
-                        </p>
-                        <p className="card-text">
-                          <strong>Max Length:</strong> {vendor.max_length}
-                        </p>
-                        <p className="card-text">
-                          <strong>Specialties:</strong> {vendor.specialties.join(', ')}
-                        </p>
-                        <a href={vendor.website} target="_blank" rel="noopener noreferrer" className="btn btn-sm btn-outline-primary">
-                          Visit Website
-                        </a>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : null}
-          
-          {/* Testing Options Results */}
-          {actualResult.result && actualResult.result.testing_options && (
-            <div className="bg-light p-3 border rounded mb-3">
-              <h5>Testing Options</h5>
-              <div className="row">
-                {Object.entries(actualResult.result.testing_options).map(([testId, test]: [string, any]) => (
-                  <div key={testId} className="col-md-6 mb-3">
-                    <div className="card h-100">
-                      <div className="card-body">
-                        <h6 className="card-title">{test.name}</h6>
-                        <p className="card-text">
-                          <strong>Services:</strong> {test.services.join(', ')}
-                        </p>
-                        <p className="card-text">
-                          <strong>Vendors:</strong> {test.vendors.join(', ')}
-                        </p>
-                        <p className="card-text">
-                          <strong>Pricing:</strong> {test.pricing_range}
-                        </p>
-                        <p className="card-text">
-                          <strong>Turnaround:</strong> {test.turnaround_time}
-                        </p>
-                        <p className="card-text">
-                          <strong>Description:</strong> {test.description}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-          
-          {/* Recommendations */}
-          {(actualResult.result && actualResult.result.recommendations) || (actualResult.output && actualResult.output.result && actualResult.output.result.recommendations) ? (
-            <div className="bg-light p-3 border rounded mb-3">
-              <h5>Recommendations</h5>
-              <ul className="list-unstyled">
-                {((actualResult.result && actualResult.result.recommendations) || (actualResult.output && actualResult.output.result && actualResult.output.result.recommendations) || []).map((rec: string, index: number) => (
-                  <li key={index} className="mb-2">
-                    <i className="bi bi-lightbulb text-warning me-2"></i>
-                    {rec}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-          
-          {/* --- NEW: Handle plasmid visualization results directly in actualResult --- */}
-          {(() => {
-            console.log('Checking for plasmid data in actualResult:', actualResult);
-            if (actualResult && actualResult.plasmid_data) {
-              console.log('Found plasmid visualization data directly in actualResult:', actualResult.plasmid_data);
-              console.log('About to render PlasmidDataVisualizer component');
-              console.log('DEBUG: ActualResult structure:', JSON.stringify(actualResult, null, 2));
-              return true;
-            }
-            return false;
-          })() && (
-            <div>
-              {actualResult.text && (
-                <pre className="bg-light p-3 border rounded mb-3">{actualResult.text}</pre>
-              )}
-              <div className="bg-light p-3 border rounded mb-3">
-                <h5>🧬 Plasmid Visualization</h5>
-                <PlasmidDataVisualizer data={actualResult.plasmid_data} />
-              </div>
-            </div>
-          )}
-          {/* --- END NEW --- */}
-          
-          {/* Debug Section - Consistent across all commands */}
-          {renderDebugInfo(output, actualResult)}
-        </div>
-      );
-    }
-    
-    // Handle legacy responses - only if we don't have special structures
-    const hasSpecialStructures = (actualResult?.forward_reads || actualResult?.reverse_reads || 
-                                  actualResult?.merged_sequences ||
-                                  (output.result && output.result.forward_reads) ||
-                                  (output.result && output.result.reverse_reads) ||
-                                  (output.result && output.result.merged_sequences));
-    
-    if (output.text && !hasSpecialStructures) {
-      return (
-        <pre className="bg-light p-3 border rounded mb-3">
-          {output.text}
-        </pre>
-      );
-    }
-    
-    if (output.plot) {
-      return (
-        <div>
-          {output.text && (
-            <pre className="bg-light p-3 border rounded mb-3">{output.text}</pre>
-          )}
-          {output.statistics && (
-            <div className="bg-light p-3 border rounded mb-3">
-              <h6>Statistics</h6>
-              <div className="row">
-                {Object.entries(output.statistics).map(([key, value]) => (
-                  <div key={key} className="col-md-6 mb-2">
-                    <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-          <Plot
-            data={output.plot.data}
-            layout={output.plot.layout}
-          />
-          {/* Debug Section - Consistent across all commands */}
-          {renderDebugInfo(output, actualResult)}
-        </div>
-      );
-    }
-
-    if (output.tree_newick) {
-      console.log('🔍 Detected tree_newick in output:', output.tree_newick);
-      console.log('🔍 Full output structure:', output);
-      return (
-        <div>
-          {output.text && (
-            <pre className="bg-light p-3 border rounded mb-3">{output.text}</pre>
-          )}
-          
-          {/* ETE3 Visualization */}
-          {output.ete_visualization && output.ete_visualization.svg && (
-            <div className="bg-light p-3 border rounded mb-3">
-              <h5>🧬 ETE3 Phylogenetic Tree Visualization</h5>
-              <div dangerouslySetInnerHTML={{ __html: output.ete_visualization.svg }} />
-            </div>
-          )}
-          
-          {/* D3.js Visualization as fallback */}
-          <div className="bg-light p-3 border rounded mb-3">
-            <h5>🧬 Interactive Phylogenetic Tree (D3.js)</h5>
-            <PhylogeneticTree newick={output.tree_newick} />
-          </div>
-          
-          {output.statistics && (
-            <div className="bg-light p-3 border rounded mb-3">
-              <h6>Tree Statistics</h6>
-              <div className="row">
-                {Object.entries(output.statistics).map(([key, value]) => (
-                  <div key={key} className="col-md-6 mb-2">
-                    <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-          
-          {/* Debug Section - Consistent across all commands */}
-          {renderDebugInfo(output, actualResult)}
-        </div>
-      );
-    }
-    
-    // Intelligent fallback for unknown response types
-    const formatResponse = (data: any): React.ReactNode => {
-      // If it's a simple string or has a message
-      if (typeof data === 'string') {
-    return (
-          <div className="bg-light p-3 border rounded mb-3">
-            <p className="mb-0">{data}</p>
-          </div>
-        );
-      }
-      
-      // If it has a status and result
-      if (data.status && data.result) {
-        return (
-          <div className="bg-light p-3 border rounded mb-3">
-            <div className={`alert ${data.status === 'success' ? 'alert-success' : 'alert-warning'} mb-3`}>
-              <strong>Status:</strong> {data.status}
-            </div>
-            {typeof data.result === 'string' ? (
-              <p className="mb-0">{data.result}</p>
-            ) : (
-              <div>
-                <h6>Results:</h6>
-                <pre className="small">{JSON.stringify(data.result, null, 2)}</pre>
-              </div>
-            )}
-          </div>
-        );
-      }
-      
-      // If it has a text field
-      if (data.text) {
-        return (
-          <div className="bg-light p-3 border rounded mb-3">
-            <p className="mb-0">{data.text}</p>
-          </div>
-        );
-      }
-      
-      // If it has statistics
-      if (data.statistics) {
-        return (
-          <div className="bg-light p-3 border rounded mb-3">
-            <h6>Analysis Results</h6>
-            <div className="row">
-              {Object.entries(data.statistics).map(([key, value]) => (
-                <div key={key} className="col-md-6 mb-2">
-                  <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
-                </div>
-              ))}
-            </div>
-            {data.variants && (
-              <div className="mt-3">
-                <h6>Generated Variants:</h6>
-                <div className="small">
-                  {data.variants.slice(0, 5).map((variant: string, index: number) => (
-                    <div key={index} className="mb-1">
-                      <code>{variant}</code>
-                    </div>
-                  ))}
-                  {data.variants.length > 5 && (
-                    <p className="text-muted">... and {data.variants.length - 5} more variants</p>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        );
-      }
-      
-      // If it has sequences
-      if (data.sequences) {
-        return (
-          <div className="bg-light p-3 border rounded mb-3">
-            <h6>Sequences</h6>
-            <div className="small">
-              {data.sequences.map((seq: any, index: number) => (
-                <div key={index} className="mb-2">
-                  <strong>{seq.name || `Sequence ${index + 1}`}:</strong>
-                  <br />
-                  <code>{seq.sequence}</code>
-                </div>
-              ))}
-            </div>
-          </div>
-        );
-      }
-      
-      // If it has vendors
-      if (data.vendors) {
-        return (
-          <div className="bg-light p-3 border rounded mb-3">
-            <h6>DNA Synthesis Vendors</h6>
-            <div className="row">
-              {Object.entries(data.vendors).map(([vendorId, vendor]: [string, any]) => (
-                <div key={vendorId} className="col-md-6 mb-3">
-                  <div className="card h-100">
-                    <div className="card-body">
-                      <h6 className="card-title">{vendor.name}</h6>
-                      <p className="card-text">
-                        <strong>Services:</strong> {vendor.services?.join(', ') || 'N/A'}
-                      </p>
-                      <p className="card-text">
-                        <strong>Pricing:</strong> {vendor.pricing_range || 'N/A'}
-                      </p>
-                      <p className="card-text">
-                        <strong>Turnaround:</strong> {vendor.turnaround_time || 'N/A'}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        );
-      }
-      
-      // If it has testing options
-      if (data.testing_options) {
-        return (
-          <div className="bg-light p-3 border rounded mb-3">
-            <h6>Testing Options</h6>
-            <div className="row">
-              {Object.entries(data.testing_options).map(([testId, test]: [string, any]) => (
-                <div key={testId} className="col-md-6 mb-3">
-                  <div className="card h-100">
-                    <div className="card-body">
-                      <h6 className="card-title">{test.name}</h6>
-                      <p className="card-text">
-                        <strong>Services:</strong> {test.services?.join(', ') || 'N/A'}
-                      </p>
-                      <p className="card-text">
-                        <strong>Vendors:</strong> {test.vendors?.join(', ') || 'N/A'}
-                      </p>
-                      <p className="card-text">
-                        <strong>Pricing:</strong> {test.pricing_range || 'N/A'}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        );
-      }
-      
-      // If it has recommendations
-      if (data.recommendations) {
-        return (
-          <div className="bg-light p-3 border rounded mb-3">
-            <h6>Recommendations</h6>
-            <ul className="list-unstyled">
-              {data.recommendations.map((rec: string, index: number) => (
-                <li key={index} className="mb-2">
-                  <i className="bi bi-lightbulb text-warning me-2"></i>
-                  {rec}
-                </li>
-              ))}
-            </ul>
-          </div>
-        );
-      }
-      
-      // If it has error information
-      if (data.error) {
-        return (
-          <div className="alert alert-danger">
-            <h6>Error</h6>
-            <p className="mb-0">{data.error}</p>
-          </div>
-        );
-      }
-      
-      // If it has success information
-      if (data.success !== undefined) {
-        return (
-          <div className={`alert ${data.success ? 'alert-success' : 'alert-warning'}`}>
-            <h6>{data.success ? 'Success' : 'Warning'}</h6>
-            {data.message && <p className="mb-0">{data.message}</p>}
-            {data.result && (
-              <div className="mt-2">
-                <strong>Result:</strong>
-                <pre className="small mt-1">{JSON.stringify(data.result, null, 2)}</pre>
-              </div>
-            )}
-          </div>
-        );
-      }
-      
-      // Last resort: show formatted JSON with a note
-      return (
-        <div className="bg-light p-3 border rounded mb-3">
-          <div className="alert alert-info mb-3">
-            <i className="bi bi-info-circle me-2"></i>
-            Raw response data (for debugging)
-          </div>
-          <details>
-            <summary>View Raw Data</summary>
-            <pre className="small mt-2">{JSON.stringify(data, null, 2)}</pre>
-          </details>
-        </div>
-      );
-    };
-    
-    return formatResponse(output);
+    // Fallback for any other legacy types - also route through agent response handler
+    // since the response structure from /execute is standardized
+    return renderAgentResponse(output);
   };
+
 
   const renderWorkflowContextSection = () => {
     const hasContext = Boolean(
@@ -2803,12 +1398,16 @@ function App() {
           <div className="mb-3">
             <h1 className="mb-1">Helix.AI</h1>
             <div className="d-flex flex-column gap-2">
-              <span className={`badge ${serverStatus === 'healthy' ? 'bg-success' : 'bg-danger'}`} style={{ width: 'fit-content' }}>
+              <span className={`badge ${serverStatus === 'healthy' ? 'bg-success' : 'bg-danger'}`} style={{ width: '150px' }}>
                 Server: {serverStatus}
               </span>
               {sessionId && (
-                <span className="badge" style={{ width: 'fit-content', backgroundColor: theme.colors.blue, color: theme.colors.white }}>
-                  Session: {sessionId.substring(0, 8)}...
+                <span 
+                  className="badge" 
+                  style={{ width: '150px', backgroundColor: theme.colors.blue, color: theme.colors.white, cursor: 'pointer' }}
+                  onClick={handleSessionClick}
+                >
+                  Session Info
                 </span>
               )}
             </div>
@@ -2821,7 +1420,7 @@ function App() {
               onClick={handleToggleExamples}
               aria-label="Toggle examples"
             >
-              📚 Examples ▶
+              📚 Examples
             </Button>
             <Button
               variant="outline-secondary"
@@ -2829,7 +1428,7 @@ function App() {
               onClick={handleToggleJobs}
               aria-label="Toggle jobs"
             >
-              🧾 Jobs ▶{jobIds.length > 0 ? ` (${jobIds.length})` : ''}
+              🧾 Jobs{jobIds.length > 0 ? ` (${jobIds.length})` : ''}
             </Button>
           </div>
         </div>
@@ -2837,6 +1436,38 @@ function App() {
         <SelectedDesignComponent {...designProps} />
         <JobsPanel show={jobsOpen} onHide={() => setJobsOpen(false)} jobIds={jobIds} />
         <ExamplesPanel show={examplesOpen} onHide={() => setExamplesOpen(false)} onSelect={handleExampleClick} />
+        
+        {/* Session Info Modal */}
+        <Modal show={sessionModalOpen} onHide={() => setSessionModalOpen(false)} size="lg">
+          <Modal.Header closeButton>
+            <Modal.Title>Session Information</Modal.Title>
+          </Modal.Header>
+          <Modal.Body>
+            {sessionInfoLoading ? (
+              <div className="text-center py-4">
+                <div className="spinner-border" role="status">
+                  <span className="visually-hidden">Loading...</span>
+                </div>
+              </div>
+            ) : (
+              <pre style={{ 
+                backgroundColor: '#f8f9fa', 
+                padding: '1rem', 
+                borderRadius: '0.25rem',
+                overflow: 'auto',
+                maxHeight: '70vh',
+                fontSize: '0.875rem'
+              }}>
+                {JSON.stringify(sessionInfo, null, 2)}
+              </pre>
+            )}
+          </Modal.Body>
+          <Modal.Footer>
+            <Button variant="secondary" onClick={() => setSessionModalOpen(false)}>
+              Close
+            </Button>
+          </Modal.Footer>
+        </Modal>
       </div>
     );
   }
@@ -2854,14 +1485,20 @@ function App() {
                   <h1 className="mb-0">Helix.AI</h1>
                 </div>
                 <div className="col-12 mt-2">
-                  <span className={`badge ${serverStatus === 'healthy' ? 'bg-success' : 'bg-danger'}`}>
-                    Server: {serverStatus}
-                  </span>
-                  {sessionId && (
-                    <span className="badge bg-info ms-2">
-                      Session: {sessionId.substring(0, 8)}...
+                  <div className="d-flex flex-column gap-2" style={{ width: 'fit-content' }}>
+                    <span className={`badge ${serverStatus === 'healthy' ? 'bg-success' : 'bg-danger'}`} style={{ width: '150px' }}>
+                      Server: {serverStatus}
                     </span>
-                  )}
+                    {sessionId && (
+                      <span 
+                        className="badge bg-info" 
+                        style={{ width: '150px', cursor: 'pointer' }}
+                        onClick={handleSessionClick}
+                      >
+                        Session Info
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
@@ -3230,6 +1867,37 @@ function App() {
         </div>
       </div>
       
+      {/* Session Info Modal */}
+      <Modal show={sessionModalOpen} onHide={() => setSessionModalOpen(false)} size="lg">
+        <Modal.Header closeButton>
+          <Modal.Title>Session Information</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          {sessionInfoLoading ? (
+            <div className="text-center py-4">
+              <div className="spinner-border" role="status">
+                <span className="visually-hidden">Loading...</span>
+              </div>
+            </div>
+          ) : (
+            <pre style={{ 
+              backgroundColor: '#f8f9fa', 
+              padding: '1rem', 
+              borderRadius: '0.25rem',
+              overflow: 'auto',
+              maxHeight: '70vh',
+              fontSize: '0.875rem'
+            }}>
+              {JSON.stringify(sessionInfo, null, 2)}
+            </pre>
+          )}
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setSessionModalOpen(false)}>
+            Close
+          </Button>
+        </Modal.Footer>
+      </Modal>
 
     </div>
   );

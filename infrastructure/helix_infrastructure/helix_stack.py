@@ -15,11 +15,14 @@ from aws_cdk import (
     aws_cloudfront as cloudfront,
     aws_cloudfront_origins as origins,
     aws_logs as logs,
+    aws_certificatemanager as acm,
+    aws_secretsmanager as secretsmanager,
     CfnOutput,
     Duration,
     RemovalPolicy,
 )
 from constructs import Construct
+import os
 
 
 class HelixStack(Stack):
@@ -32,15 +35,50 @@ class HelixStack(Stack):
         project_name = "helix-ai"
         backend_port = 8001
         
+        # Custom domain configuration (optional)
+        # Can be set via environment variables or CDK context
+        # Environment variables take precedence
+        helix_domain = os.environ.get("HELIX_DOMAIN") or self.node.try_get_context("helixDomain") or None
+        helix_api_domain = os.environ.get("HELIX_API_DOMAIN") or self.node.try_get_context("helixApiDomain") or helix_domain
+        acm_cert_arn_cloudfront = os.environ.get("ACM_CERTIFICATE_ARN_CLOUDFRONT") or self.node.try_get_context("acmCertificateArnCloudFront") or None
+        acm_cert_arn_alb = os.environ.get("ACM_CERTIFICATE_ARN_ALB") or self.node.try_get_context("acmCertificateArnAlb") or None
+        
+        # Import certificates if provided (explicitly check for non-empty strings)
+        alb_certificate = None
+        cloudfront_certificate = None
+        
+        if acm_cert_arn_alb and acm_cert_arn_alb.strip():
+            # Certificate must be in the same region as the ALB
+            try:
+                alb_certificate = acm.Certificate.from_certificate_arn(
+                    self, "ALBCertificate", acm_cert_arn_alb.strip()
+                )
+            except Exception as e:
+                # Log but don't fail - certificate might not exist yet
+                print(f"Warning: Could not import ALB certificate: {e}")
+                alb_certificate = None
+        
+        if acm_cert_arn_cloudfront and acm_cert_arn_cloudfront.strip():
+            # CloudFront certificates must be in us-east-1
+            # We need to import from us-east-1 region
+            try:
+                cloudfront_certificate = acm.Certificate.from_certificate_arn(
+                    self, "CloudFrontCertificate", acm_cert_arn_cloudfront.strip()
+                )
+            except Exception as e:
+                # Log but don't fail - certificate might not exist yet
+                print(f"Warning: Could not import CloudFront certificate: {e}")
+                cloudfront_certificate = None
+        
         # ==========================================
         # 1. ECR Repository for Backend
         # ==========================================
-        ecr_repo = ecr.Repository(
+        # Reference existing repository instead of creating new one
+        # (to avoid ResourceExistenceCheck validation error)
+        ecr_repo = ecr.Repository.from_repository_name(
             self,
             "BackendRepository",
             repository_name=f"{project_name}-backend",
-            image_scan_on_push=True,
-            removal_policy=RemovalPolicy.RETAIN,  # Keep images when stack is deleted
         )
         
         CfnOutput(
@@ -53,10 +91,11 @@ class HelixStack(Stack):
         # ==========================================
         # 2. VPC and Networking
         # ==========================================
+        # Use available AZs for us-west-1 (us-west-1b and us-west-1c are available in this account)
         vpc = ec2.Vpc(
             self,
             "VPC",
-            max_azs=2,  # Use 2 availability zones for high availability
+            availability_zones=["us-west-1b", "us-west-1c"],  # Match available AZs in the stack
             nat_gateways=1,  # Single NAT gateway for cost savings (increase for production)
             subnet_configuration=[
                 ec2.SubnetConfiguration(
@@ -155,8 +194,41 @@ class HelixStack(Stack):
             assumed_by=iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
             description="Role for ECS tasks to access AWS services",
         )
+        
+        # Grant S3 permissions for file operations
+        # The backend needs to:
+        # - Read: Download uploaded files, access job results from EMR, access dataset files
+        # - Write: Copy job results to session paths, upload HTML visualizations
+        # Note: For production, consider restricting to specific buckets
+        task_role.add_to_policy(
+            iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=[
+                    "s3:GetObject",
+                    "s3:HeadObject",
+                    "s3:PutObject",
+                    "s3:CopyObject",
+                    "s3:ListBucket",
+                ],
+                resources=["*"],  # Allow access to all buckets - restrict in production if needed
+            )
+        )
+        
         # Add permissions for accessing other AWS services as needed
-        # e.g., S3, Secrets Manager, Parameter Store, etc.
+        # e.g., Secrets Manager, Parameter Store, EMR, etc.
+        
+        # Grant task execution role permission to read secrets from Secrets Manager
+        # This allows the container to access API keys stored in Secrets Manager
+        # Use the existing production secrets
+        task_execution_role.add_to_policy(
+            iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=["secretsmanager:GetSecretValue"],
+                resources=[
+                    f"arn:aws:secretsmanager:{self.region}:{self.account}:secret:helix-ai-production-*"
+                ]
+            )
+        )
 
         # Log Group
         log_group = logs.LogGroup(
@@ -177,6 +249,31 @@ class HelixStack(Stack):
             cpu=1024,  # 1 vCPU - adjust based on requirements
         )
 
+        # Reference API key secrets from Secrets Manager
+        # Use the existing secrets that were created for Copilot deployment
+        # These secrets already exist: helix-ai-production-OPENAI_API_KEY and helix-ai-production-DEEPSEEK_API_KEY
+        openai_secret_name = "helix-ai-production-OPENAI_API_KEY"
+        deepseek_secret_name = "helix-ai-production-DEEPSEEK_API_KEY"
+        
+        # Reference the existing secrets
+        openai_secret = secretsmanager.Secret.from_secret_name_v2(
+            self,
+            "OpenAISecret",
+            secret_name=openai_secret_name
+        )
+        
+        deepseek_secret = secretsmanager.Secret.from_secret_name_v2(
+            self,
+            "DeepSeekSecret",
+            secret_name=deepseek_secret_name
+        )
+        
+        # Build secrets dict for container
+        container_secrets = {
+            "OPENAI_API_KEY": ecs.Secret.from_secrets_manager(openai_secret),
+            "DEEPSEEK_API_KEY": ecs.Secret.from_secrets_manager(deepseek_secret),
+        }
+
         # Container Definition
         container = task_definition.add_container(
             "BackendContainer",
@@ -191,6 +288,7 @@ class HelixStack(Stack):
             environment={
                 "PYTHONUNBUFFERED": "1",
             },
+            secrets=container_secrets if container_secrets else None,  # Only add if secrets exist
             health_check=ecs.HealthCheck(
                 command=["CMD-SHELL", f"curl -f http://localhost:{backend_port}/health || exit 1"],
                 interval=Duration.seconds(30),
@@ -212,7 +310,7 @@ class HelixStack(Stack):
             "Service",
             cluster=cluster,
             task_definition=task_definition,
-            desired_count=1,  # Start with 1, scale as needed
+            desired_count=0,  # Set to 0 temporarily to allow stack deployment, then debug ECS service separately
             security_groups=[ecs_sg],
             vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS),
             health_check_grace_period=Duration.seconds(60),
@@ -267,12 +365,38 @@ class HelixStack(Stack):
         # Register ECS service with target group
         service.attach_to_application_target_group(target_group)
         
-        # HTTP Listener (redirect to HTTPS in production)
-        listener = alb.add_listener(
-            "HTTPListener",
-            port=80,
-            default_target_groups=[target_group],
-        )
+        # HTTPS Listener (if certificate is provided)
+        https_listener = None
+        if alb_certificate:
+            https_listener = alb.add_listener(
+                "HTTPSListener",
+                port=443,
+                protocol=elbv2.ApplicationProtocol.HTTPS,
+                certificates=[alb_certificate],
+                default_target_groups=[target_group],
+            )
+        
+        # HTTP Listener
+        # If HTTPS is configured, redirect HTTP to HTTPS
+        # Otherwise, forward to target group
+        if https_listener:
+            # Redirect HTTP to HTTPS
+            http_listener = alb.add_listener(
+                "HTTPListener",
+                port=80,
+                default_action=elbv2.ListenerAction.redirect(
+                    protocol="HTTPS",
+                    port="443",
+                    permanent=True,
+                ),
+            )
+        else:
+            # Forward HTTP to target group (no certificate configured)
+            http_listener = alb.add_listener(
+                "HTTPListener",
+                port=80,
+                default_target_groups=[target_group],
+            )
         
         CfnOutput(
             self,
@@ -280,26 +404,25 @@ class HelixStack(Stack):
             value=alb.load_balancer_dns_name,
             description="Application Load Balancer DNS Name",
         )
+        
+        # Output custom domain if configured
+        if helix_api_domain:
+            CfnOutput(
+                self,
+                "BackendCustomDomain",
+                value=helix_api_domain,
+                description="Backend API Custom Domain",
+            )
 
         # ==========================================
         # 6. S3 Bucket for Frontend
         # ==========================================
-        frontend_bucket = s3.Bucket(
+        # Reference existing bucket instead of creating new one
+        # (to avoid ResourceExistenceCheck validation error)
+        frontend_bucket = s3.Bucket.from_bucket_name(
             self,
             "FrontendBucket",
             bucket_name=f"{project_name}-frontend-{self.account}-{self.region}",
-            versioned=False,
-            public_read_access=True,
-            block_public_access=s3.BlockPublicAccess(
-                block_public_acls=False,
-                block_public_policy=False,
-                ignore_public_acls=False,
-                restrict_public_buckets=False,
-            ),
-            website_index_document="index.html",
-            website_error_document="index.html",  # For React Router
-            removal_policy=RemovalPolicy.RETAIN,  # Keep bucket when stack is deleted
-            auto_delete_objects=False,  # Set to True if you want auto-cleanup
         )
         
         CfnOutput(
@@ -331,10 +454,8 @@ class HelixStack(Stack):
 
         # CloudFront Distribution
         # Note: Default behavior with '*' pattern handles all routes for React Router
-        distribution = cloudfront.Distribution(
-            self,
-            "CloudFrontDistribution",
-            default_behavior=cloudfront.BehaviorOptions(
+        distribution_props = {
+            "default_behavior": cloudfront.BehaviorOptions(
                 origin=origins.S3Origin(
                     bucket=frontend_bucket,
                     origin_access_identity=oai,
@@ -345,8 +466,7 @@ class HelixStack(Stack):
                 compress=True,
                 cache_policy=cloudfront.CachePolicy.CACHING_OPTIMIZED,
             ),
-            # Custom error responses for React Router (SPA routing)
-            error_responses=[
+            "error_responses": [
                 cloudfront.ErrorResponse(
                     http_status=404,
                     response_http_status=200,
@@ -360,9 +480,20 @@ class HelixStack(Stack):
                     ttl=Duration.minutes(5),
                 ),
             ],
-            price_class=cloudfront.PriceClass.PRICE_CLASS_100,  # Use only North America and Europe
-            comment=f"CloudFront distribution for {project_name} frontend",
-            enable_logging=False,  # Enable if you want access logs
+            "price_class": cloudfront.PriceClass.PRICE_CLASS_100,  # Use only North America and Europe
+            "comment": f"CloudFront distribution for {project_name} frontend",
+            "enable_logging": False,  # Enable if you want access logs
+        }
+        
+        # Add custom domain and certificate if provided
+        if helix_domain and cloudfront_certificate:
+            distribution_props["domain_names"] = [helix_domain]
+            distribution_props["certificate"] = cloudfront_certificate
+        
+        distribution = cloudfront.Distribution(
+            self,
+            "CloudFrontDistribution",
+            **distribution_props
         )
         
         CfnOutput(
@@ -378,21 +509,51 @@ class HelixStack(Stack):
             value=distribution.distribution_domain_name,
             description="CloudFront Distribution Domain Name",
         )
+        
+        # Output custom domain if configured
+        if helix_domain:
+            CfnOutput(
+                self,
+                "FrontendCustomDomain",
+                value=helix_domain,
+                description="Frontend Custom Domain",
+            )
 
         # ==========================================
         # 8. Outputs
         # ==========================================
+        # Backend URL - use HTTPS if certificate is configured, otherwise HTTP
+        backend_protocol = "https" if alb_certificate else "http"
         CfnOutput(
             self,
             "BackendAPIURL",
-            value=f"http://{alb.load_balancer_dns_name}",
+            value=f"{backend_protocol}://{alb.load_balancer_dns_name}",
             description="Backend API URL",
         )
         
+        # If custom domain is configured, also output that
+        if helix_api_domain and alb_certificate:
+            CfnOutput(
+                self,
+                "BackendAPIURLCustom",
+                value=f"https://{helix_api_domain}",
+                description="Backend API URL (Custom Domain)",
+            )
+        
+        # Frontend URL - always HTTPS (CloudFront)
         CfnOutput(
             self,
             "FrontendURL",
             value=f"https://{distribution.distribution_domain_name}",
             description="Frontend URL (CloudFront)",
         )
+        
+        # If custom domain is configured, also output that
+        if helix_domain:
+            CfnOutput(
+                self,
+                "FrontendURLCustom",
+                value=f"https://{helix_domain}",
+                description="Frontend URL (Custom Domain)",
+            )
 

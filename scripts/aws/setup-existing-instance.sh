@@ -104,3 +104,6 @@ echo "You can now use the instance with:"
 echo "  export HELIX_EC2_INSTANCE_ID=$INSTANCE_ID"
 echo "  export HELIX_USE_EC2=true"
 
+
+
+

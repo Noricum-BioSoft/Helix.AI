@@ -1,31 +1,16 @@
 {
   "version": "48.0.0",
   "files": {
-    "7fa1e366ee8a9ded01fc355f704cff92bfd179574e6f9cfee800a3541df1b200": {
-      "displayName": "HelixAIStack/Custom::VpcRestrictDefaultSGCustomResourceProvider Code",
-      "source": {
-        "path": "asset.7fa1e366ee8a9ded01fc355f704cff92bfd179574e6f9cfee800a3541df1b200",
-        "packaging": "zip"
-      },
-      "destinations": {
-        "794270057041-us-west-1-0676bfe6": {
-          "bucketName": "cdk-hnb659fds-assets-794270057041-us-west-1",
-          "objectKey": "7fa1e366ee8a9ded01fc355f704cff92bfd179574e6f9cfee800a3541df1b200.zip",
-          "region": "us-west-1",
-          "assumeRoleArn": "arn:${AWS::Partition}:iam::794270057041:role/cdk-hnb659fds-file-publishing-role-794270057041-us-west-1"
-        }
-      }
-    },
-    "0a30f91676996a1b6a1eb26d8d42afa36b0d7b42fb81c7f41f0fe500c09f78bc": {
+    "4be0e3c6fc0a71eaf3a97107e33a11c0b62c9944d59e0132dd6587734d76290c": {
       "displayName": "HelixAIStack Template",
       "source": {
         "path": "HelixAIStack.template.json",
         "packaging": "file"
       },
       "destinations": {
-        "794270057041-us-west-1-0337ecc1": {
+        "794270057041-us-west-1-3f8e179e": {
           "bucketName": "cdk-hnb659fds-assets-794270057041-us-west-1",
-          "objectKey": "0a30f91676996a1b6a1eb26d8d42afa36b0d7b42fb81c7f41f0fe500c09f78bc.json",
+          "objectKey": "4be0e3c6fc0a71eaf3a97107e33a11c0b62c9944d59e0132dd6587734d76290c.json",
           "region": "us-west-1",
           "assumeRoleArn": "arn:${AWS::Partition}:iam::794270057041:role/cdk-hnb659fds-file-publishing-role-794270057041-us-west-1"
         }

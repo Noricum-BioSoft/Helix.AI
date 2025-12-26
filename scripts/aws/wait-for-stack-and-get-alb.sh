@@ -167,3 +167,6 @@ echo ""
 print_info "To check ECS service status:"
 echo "  cd scripts/aws && ./check-stack-status.sh ${STACK_NAME}"
 
+
+
+

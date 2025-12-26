@@ -73,7 +73,9 @@ class HistoryManager:
         self.sessions: Dict[str, Dict[str, Any]] = {}
         self.s3_bucket_name = S3_BUCKET_NAME
         self._s3_client = None
-        self._load_existing_sessions()
+        self._sessions_loaded = False  # Lazy loading flag
+        # Don't load sessions at import time - load lazily on first access
+        # This speeds up server startup when there are many session files
     
     def _get_s3_client(self):
         """Get or create S3 client. Returns None if boto3 is not available or AWS credentials are missing."""
@@ -125,6 +127,13 @@ class HistoryManager:
         except Exception as e:
             logger.error(f"Failed to create S3 path for session {session_id}: {e}")
             return None
+    
+    def _ensure_sessions_loaded(self):
+        """Lazily load existing session data from disk on first access."""
+        if self._sessions_loaded:
+            return
+        self._load_existing_sessions()
+        self._sessions_loaded = True
     
     def _load_existing_sessions(self):
         """Load existing session data from disk."""
@@ -178,6 +187,7 @@ class HistoryManager:
         If session doesn't exist in memory but directory exists, load it.
         Also ensures the session directory exists.
         """
+        self._ensure_sessions_loaded()
         if session_id in self.sessions:
             session = self.sessions.get(session_id)
             # Ensure directory exists even if session is in memory
@@ -217,6 +227,8 @@ class HistoryManager:
     
     def add_history_entry(self, session_id: str, command: str, tool: str, 
                          result: Dict[str, Any], metadata: Optional[Dict[str, Any]] = None):
+        """Add a new history entry to a session."""
+        self._ensure_sessions_loaded()
         """Add a new history entry to a session."""
         import time
         start_time = time.time()
@@ -293,6 +305,7 @@ class HistoryManager:
     
     def get_session_summary(self, session_id: str) -> Dict[str, Any]:
         """Get a summary of session activity."""
+        self._ensure_sessions_loaded()
         if session_id not in self.sessions:
             return {}
         
@@ -411,6 +424,7 @@ class HistoryManager:
         - size: File size in bytes
         - dataset_id: (optional) Dataset ID for references
         """
+        self._ensure_sessions_loaded()
         if session_id not in self.sessions:
             return []
         

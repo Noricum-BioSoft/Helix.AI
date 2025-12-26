@@ -121,3 +121,6 @@ echo "Step ID: $STEP_ID"
 echo "Results prefix: ${OUTPUT_S3_PREFIX}${STEP_ID}/"
 
 
+
+
+

@@ -66,13 +66,13 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
     },
     {
         "name": "phylogenetic_tree",
-        "description": "Create a phylogenetic tree from aligned sequences.",
-        "tags": ["phylogeny", "tree", "newick"],
-        "outputs": {"type": "object", "description": "Tree representation (e.g. Newick) plus metrics/plots."},
+        "description": "Create a phylogenetic tree visualization from sequences. Accepts either aligned or unaligned sequences in FASTA format. If sequences are unaligned, automatically aligns them first, then builds the tree and creates visualizations. Use this for any request involving phylogenetic trees, evolutionary trees, or tree visualizations.",
+        "tags": ["phylogeny", "tree", "newick", "visualize", "evolutionary", "phylogenetic"],
+        "outputs": {"type": "object", "description": "Tree representation (e.g. Newick) plus metrics/plots and visualizations."},
         "inputs": {
             "type": "object",
             "properties": {
-                "aligned_sequences": {"type": "string", "description": "FASTA formatted sequences"},
+                "aligned_sequences": {"type": "string", "description": "FASTA formatted sequences (can be aligned or unaligned - will be aligned automatically if needed)"},
             },
             "required": ["aligned_sequences"],
         },

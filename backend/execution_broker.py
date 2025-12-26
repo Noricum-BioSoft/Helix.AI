@@ -3,11 +3,14 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import logging
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 from pathlib import Path
 
 from backend.plan_ir import Plan
+
+logger = logging.getLogger(__name__)
 
 
 ToolExecutor = Callable[[str, Dict[str, Any]], Awaitable[Dict[str, Any]]]
@@ -134,7 +137,10 @@ class ExecutionBroker:
             )
 
         # Default: sync execution via existing tool executor (local/EC2/tool-generator).
-        output = await self._tool_executor(req.tool_name, req.arguments)
+        # Mark that we're calling from the broker to prevent infinite loops
+        tool_args = dict(req.arguments) if req.arguments else {}
+        tool_args["_from_broker"] = True
+        output = await self._tool_executor(req.tool_name, tool_args)
         return self._wrap_result(
             tool_name=req.tool_name,
             mode="sync",
@@ -476,16 +482,76 @@ class ExecutionBroker:
             return None
 
     def _try_get_s3_size(self, uri: str) -> Optional[int]:
+        """
+        Attempt to get S3 object size by calling head_object.
+        
+        Returns None if:
+        - URI doesn't match S3 pattern
+        - boto3 is not available
+        - AWS credentials are not configured
+        - IAM role lacks permissions
+        - Object doesn't exist
+        - Network/other errors occur
+        
+        Note: This method uses the default region. For cross-region buckets,
+        the operation may fail silently. Consider enhancing with region detection.
+        """
         m = S3_URI_RE.match(uri or "")
         if not m:
             return None
         bucket, key = m.group(1), m.group(2)
         try:
             import boto3  # type: ignore
-            client = boto3.client("s3")
-            resp = client.head_object(Bucket=bucket, Key=key)
-            return int(resp.get("ContentLength")) if resp and "ContentLength" in resp else None
-        except Exception:
+            from botocore.exceptions import ClientError
+            
+            # Try default region first (works for most cases)
+            default_region = os.getenv('AWS_REGION', os.getenv('AWS_DEFAULT_REGION', 'us-east-1'))
+            client = boto3.client("s3", region_name=default_region)
+            
+            try:
+                resp = client.head_object(Bucket=bucket, Key=key)
+                size = int(resp.get("ContentLength")) if resp and "ContentLength" in resp else None
+                if size is not None:
+                    logger.debug(f"Retrieved S3 object size for {uri}: {size} bytes")
+                return size
+            except ClientError as e:
+                error_code = e.response.get('Error', {}).get('Code', '')
+                # If region error, try to detect bucket region
+                if error_code in ['PermanentRedirect', '301']:
+                    try:
+                        # Get bucket region
+                        bucket_location = client.get_bucket_location(Bucket=bucket)
+                        region = bucket_location.get('LocationConstraint') or 'us-east-1'
+                        if region != default_region:
+                            logger.debug(f"Bucket {bucket} is in {region}, retrying with correct region")
+                            client = boto3.client("s3", region_name=region)
+                            resp = client.head_object(Bucket=bucket, Key=key)
+                            size = int(resp.get("ContentLength")) if resp and "ContentLength" in resp else None
+                            if size is not None:
+                                logger.debug(f"Retrieved S3 object size for {uri}: {size} bytes")
+                            return size
+                    except Exception:
+                        pass  # Fall through to error handling
+                
+                # Log specific error types for debugging
+                if error_code == '403' or 'AccessDenied' in error_code or 'Forbidden' in error_code:
+                    logger.debug(f"Access denied to {uri}, cannot get size (check IAM permissions)")
+                elif error_code == '404' or 'NoSuchKey' in error_code:
+                    logger.debug(f"Object not found: {uri}")
+                else:
+                    logger.debug(f"Failed to get size for {uri}: {error_code}: {str(e)[:100]}")
+                return None
+                
+        except ImportError:
+            logger.debug(f"boto3 not available, cannot get size for {uri}")
+            return None
+        except Exception as e:
+            # Log other exceptions
+            error_type = type(e).__name__
+            if "NoCredentialsError" in error_type or "Credentials" in str(e):
+                logger.debug(f"AWS credentials not configured, cannot get size for {uri}")
+            else:
+                logger.debug(f"Failed to get size for {uri}: {error_type}: {str(e)[:100]}")
             return None
 
     def _session_file_to_s3_uri(self, file_info: Dict[str, Any], session_context: Dict[str, Any]) -> Optional[str]:

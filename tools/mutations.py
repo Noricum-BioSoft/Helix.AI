@@ -147,7 +147,7 @@ First 5 variants:
         }
     }
 
-from langchain.agents import tool
+from langchain_core.tools import tool
 
 @tool
 def run_mutation(sequence: str, num_variants: int = 96):

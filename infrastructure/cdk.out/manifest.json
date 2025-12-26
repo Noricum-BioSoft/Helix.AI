@@ -18,7 +18,7 @@
         "validateOnSynth": false,
         "assumeRoleArn": "arn:${AWS::Partition}:iam::794270057041:role/cdk-hnb659fds-deploy-role-794270057041-us-west-1",
         "cloudFormationExecutionRoleArn": "arn:${AWS::Partition}:iam::794270057041:role/cdk-hnb659fds-cfn-exec-role-794270057041-us-west-1",
-        "stackTemplateAssetObjectUrl": "s3://cdk-hnb659fds-assets-794270057041-us-west-1/0a30f91676996a1b6a1eb26d8d42afa36b0d7b42fb81c7f41f0fe500c09f78bc.json",
+        "stackTemplateAssetObjectUrl": "s3://cdk-hnb659fds-assets-794270057041-us-west-1/4be0e3c6fc0a71eaf3a97107e33a11c0b62c9944d59e0132dd6587734d76290c.json",
         "requiresBootstrapStackVersion": 6,
         "bootstrapStackVersionSsmParameter": "/cdk-bootstrap/hnb659fds/version",
         "additionalDependencies": [
@@ -34,12 +34,6 @@
         "HelixAIStack.assets"
       ],
       "metadata": {
-        "/HelixAIStack/BackendRepository/Resource": [
-          {
-            "type": "aws:cdk:logicalId",
-            "data": "BackendRepository9B711290"
-          }
-        ],
         "/HelixAIStack/ECRRepositoryURI": [
           {
             "type": "aws:cdk:logicalId",
@@ -172,30 +166,6 @@
             "data": "VPCVPCGW99B986DC"
           }
         ],
-        "/HelixAIStack/VPC/RestrictDefaultSecurityGroupCustomResource/Default": [
-          {
-            "type": "aws:cdk:logicalId",
-            "data": "VPCRestrictDefaultSecurityGroupCustomResource59474679"
-          }
-        ],
-        "/HelixAIStack/Custom::VpcRestrictDefaultSGCustomResourceProvider": [
-          {
-            "type": "aws:cdk:is-custom-resource-handler-customResourceProvider",
-            "data": true
-          }
-        ],
-        "/HelixAIStack/Custom::VpcRestrictDefaultSGCustomResourceProvider/Role": [
-          {
-            "type": "aws:cdk:logicalId",
-            "data": "CustomVpcRestrictDefaultSGCustomResourceProviderRole26592FE0"
-          }
-        ],
-        "/HelixAIStack/Custom::VpcRestrictDefaultSGCustomResourceProvider/Handler": [
-          {
-            "type": "aws:cdk:logicalId",
-            "data": "CustomVpcRestrictDefaultSGCustomResourceProviderHandlerDC833E5E"
-          }
-        ],
         "/HelixAIStack/VPCId": [
           {
             "type": "aws:cdk:logicalId",
@@ -250,6 +220,12 @@
             "data": "TaskRole30FC0FBB"
           }
         ],
+        "/HelixAIStack/TaskRole/DefaultPolicy/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "TaskRoleDefaultPolicy07FC53DE"
+          }
+        ],
         "/HelixAIStack/LogGroup/Resource": [
           {
             "type": "aws:cdk:logicalId",
@@ -302,18 +278,6 @@
           {
             "type": "aws:cdk:logicalId",
             "data": "ALBDNSName"
-          }
-        ],
-        "/HelixAIStack/FrontendBucket/Resource": [
-          {
-            "type": "aws:cdk:logicalId",
-            "data": "FrontendBucketEFE2E19C"
-          }
-        ],
-        "/HelixAIStack/FrontendBucket/Policy/Resource": [
-          {
-            "type": "aws:cdk:logicalId",
-            "data": "FrontendBucketPolicy1DFF75D9"
           }
         ],
         "/HelixAIStack/FrontendBucketName": [
@@ -583,7 +547,7 @@
             "explanation": "Enable AmazonEMRServicePolicy_v2 managed policies"
           },
           "@aws-cdk/aws-ec2:restrictDefaultSecurityGroup": {
-            "userValue": true,
+            "userValue": false,
             "recommendedValue": true,
             "explanation": "Restrict access to the VPC default security group"
           },

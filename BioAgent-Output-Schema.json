@@ -1,0 +1,609 @@
+# Companion JSON Schema for BioAgent Output (Draft 2020-12)
+
+> Notes
+> - This schema validates the **top-level response object** and the **artifact shapes**.
+> - It is intentionally strict on required fields and enumerations, but permissive where real pipelines vary (e.g., tool metadata).
+> - You can extend by adding new artifact types or tightening specific fields.
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.org/bioagent/response.schema.json",
+  "title": "BioAgentResponse",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "domain",
+    "task_type",
+    "status",
+    "user_friendly_summary",
+    "details_markdown",
+    "data_inventory",
+    "artifacts",
+    "errors",
+    "provenance"
+  ],
+  "properties": {
+    "domain": {
+      "type": "string",
+      "enum": ["bioinformatics", "non_bioinformatics"]
+    },
+    "task_type": {
+      "type": "string",
+      "enum": ["qa", "analysis", "mixed"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["success", "partial_success", "failed", "declined"]
+    },
+    "user_friendly_summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "details_markdown": {
+      "type": "string"
+    },
+    "data_inventory": {
+      "$ref": "#/$defs/DataInventory"
+    },
+    "artifacts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/Artifact" }
+    },
+    "errors": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/ErrorItem" }
+    },
+    "provenance": {
+      "$ref": "#/$defs/Provenance"
+    }
+  },
+  "$defs": {
+    "DataInventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inputs_detected", "assumptions", "qc_warnings"],
+      "properties": {
+        "inputs_detected": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/InputDetected" }
+        },
+        "assumptions": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "qc_warnings": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+
+    "InputDetected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "kind"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "fasta",
+            "fastq",
+            "gff",
+            "gtf",
+            "vcf",
+            "bcf",
+            "bam",
+            "cram",
+            "newick",
+            "h5ad",
+            "mtx",
+            "loom",
+            "table",
+            "unknown"
+          ]
+        },
+        "uri": { "type": "string" },
+        "size_bytes": { "type": "integer", "minimum": 0 },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        },
+        "compression": {
+          "type": "string",
+          "enum": ["none", "gz", "bz2", "xz", "zip", "unknown"]
+        },
+        "paired_end": { "type": "boolean" },
+        "notes": { "type": "string" }
+      }
+    },
+
+    "ErrorItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 },
+        "severity": {
+          "type": "string",
+          "enum": ["info", "warning", "error"]
+        },
+        "details": { "type": "object" }
+      }
+    },
+
+    "Provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tools_used", "references", "commands_run", "environment"],
+      "properties": {
+        "tools_used": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ToolUsed" }
+        },
+        "references": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ReferenceResource" }
+        },
+        "commands_run": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/CommandRun" }
+        },
+        "environment": {
+          "$ref": "#/$defs/Environment"
+        }
+      }
+    },
+
+    "ToolUsed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "purpose"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "string" },
+        "purpose": { "type": "string", "minLength": 1 },
+        "inputs_summary": { "type": "string" },
+        "outputs_summary": { "type": "string" },
+        "runtime": { "$ref": "#/$defs/RuntimeMetrics" }
+      }
+    },
+
+    "RuntimeMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "wall_time_seconds": { "type": "number", "minimum": 0 },
+        "cpu_seconds": { "type": "number", "minimum": 0 },
+        "max_rss_mb": { "type": "number", "minimum": 0 },
+        "threads": { "type": "integer", "minimum": 1 }
+      }
+    },
+
+    "ReferenceResource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "string" },
+        "build": { "type": "string" },
+        "uri": { "type": "string" },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        },
+        "notes": { "type": "string" }
+      }
+    },
+
+    "CommandRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool", "command"],
+      "properties": {
+        "tool": { "type": "string", "minLength": 1 },
+        "command": { "type": "string", "minLength": 1 },
+        "cwd": { "type": "string" },
+        "exit_code": { "type": "integer" },
+        "stdout_preview": { "type": "string" },
+        "stderr_preview": { "type": "string" },
+        "inputs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/FileRef" }
+        },
+        "outputs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/FileRef" }
+        }
+      }
+    },
+
+    "Environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "container_or_env"],
+      "properties": {
+        "os": { "type": "string", "minLength": 1 },
+        "container_or_env": { "type": "string", "minLength": 1 },
+        "conda_env_export": { "type": "string" },
+        "pip_freeze": { "type": "string" }
+      }
+    },
+
+    "FileRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "uri": { "type": "string" },
+        "size_bytes": { "type": "integer", "minimum": 0 },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        }
+      }
+    },
+
+    "ArtifactBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "title", "description", "data"],
+      "properties": {
+        "type": { "type": "string" },
+        "title": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "data": { "type": "object" }
+      }
+    },
+
+    "Artifact": {
+      "oneOf": [
+        { "$ref": "#/$defs/SequenceArtifact" },
+        { "$ref": "#/$defs/TableArtifact" },
+        { "$ref": "#/$defs/ChartArtifact" },
+        { "$ref": "#/$defs/TreeArtifact" },
+        { "$ref": "#/$defs/GenomeTrackArtifact" },
+        { "$ref": "#/$defs/PlasmidMapArtifact" },
+        { "$ref": "#/$defs/ImageArtifact" },
+        { "$ref": "#/$defs/LogArtifact" },
+        { "$ref": "#/$defs/GenericArtifact" }
+      ]
+    },
+
+    "SequenceArtifact": {
+      "allOf": [
+        { "$ref": "#/$defs/ArtifactBase" },
+        {
+          "properties": {
+            "type": { "const": "sequence" },
+            "data": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["format", "content"],
+              "properties": {
+                "format": {
+                  "type": "string",
+                  "enum": ["fasta", "fastq", "clustal", "stockholm", "msa", "other"]
+                },
+                "content": { "type": "string", "minLength": 1 },
+                "alphabet": {
+                  "type": "string",
+                  "enum": ["dna", "rna", "protein", "unknown"]
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+
+    "TableArtifact": {
+      "allOf": [
+        { "$ref": "#/$defs/ArtifactBase" },
+        {
+          "properties": {
+            "type": { "const": "table" },
+            "data": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["columns", "rows"],
+              "properties": {
+                "columns": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": { "type": "string" }
+                },
+                "rows": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "items": {}
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+
+    "ChartArtifact": {
+      "allOf": [
+        { "$ref": "#/$defs/ArtifactBase" },
+        {
+          "properties": {
+            "type": { "const": "chart" },
+            "data": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["chart_kind", "axes", "series"],
+              "properties": {
+                "chart_kind": {
+                  "type": "string",
+                  "enum": [
+                    "scatter",
+                    "line",
+                    "bar",
+                    "histogram",
+                    "box",
+                    "violin",
+                    "heatmap",
+                    "volcano",
+                    "ma_plot",
+                    "pca",
+                    "umap",
+                    "tsne",
+                    "manhattan",
+                    "other"
+                  ]
+                },
+                "axes": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["x", "y"],
+                  "properties": {
+                    "x": { "$ref": "#/$defs/AxisSpec" },
+                    "y": { "$ref": "#/$defs/AxisSpec" },
+                    "z": { "$ref": "#/$defs/AxisSpec" }
+                  }
+                },
+                "series": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": { "$ref": "#/$defs/ChartSeries" }
+                },
+                "notes": { "type": "string" }
+              }
+            }
+          }
+        }
+      ]
+    },
+
+    "AxisSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label"],
+      "properties": {
+        "label": { "type": "string", "minLength": 1 },
+        "scale": { "type": "string", "enum": ["linear", "log10", "log2", "symlog"] },
+        "units": { "type": "string" },
+        "min": { "type": "number" },
+        "max": { "type": "number" }
+      }
+    },
+
+    "ChartSeries": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "points"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "points": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Point" }
+        },
+        "style_hint": {
+          "type": "object",
+          "description": "Optional frontend hints (do not rely on these for correctness)."
+        },
+        "metadata": { "type": "object" }
+      }
+    },
+
+    "Point": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y"],
+      "properties": {
+        "x": {},
+        "y": {},
+        "z": {},
+        "label": { "type": "string" },
+        "group": { "type": "string" },
+        "size": { "type": "number" }
+      }
+    },
+
+    "TreeArtifact": {
+      "allOf": [
+        { "$ref": "#/$defs/ArtifactBase" },
+        {
+          "properties": {
+            "type": { "const": "tree" },
+            "data": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["format", "newick"],
+              "properties": {
+                "format": { "const": "newick" },
+                "newick": { "type": "string", "minLength": 1 },
+                "metadata": { "type": "object" }
+              }
+            }
+          }
+        }
+      ]
+    },
+
+    "GenomeTrackArtifact": {
+      "allOf": [
+        { "$ref": "#/$defs/ArtifactBase" },
+        {
+          "properties": {
+            "type": { "const": "genome_track" },
+            "data": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["format", "content_or_uri"],
+              "properties": {
+                "format": {
+                  "type": "string",
+                  "enum": ["bed", "bedgraph", "bigwig", "wig", "gff", "gtf", "other"]
+                },
+                "content_or_uri": { "type": "string", "minLength": 1 },
+                "genome_build": { "type": "string" }
+              }
+            }
+          }
+        }
+      ]
+    },
+
+    "PlasmidMapArtifact": {
+      "allOf": [
+        { "$ref": "#/$defs/ArtifactBase" },
+        {
+          "properties": {
+            "type": { "const": "plasmid_map" },
+            "data": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["features", "length_bp"],
+              "properties": {
+                "length_bp": { "type": "integer", "minimum": 1 },
+                "sequence_uri_or_inline": { "type": "string" },
+                "features": {
+                  "type": "array",
+                  "items": { "$ref": "#/$defs/PlasmidFeature" }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+
+    "PlasmidFeature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "start", "end", "strand", "type"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "type": { "type": "string", "minLength": 1 },
+        "start": { "type": "integer", "minimum": 1 },
+        "end": { "type": "integer", "minimum": 1 },
+        "strand": { "type": "string", "enum": ["+", "-", "0", "?"] },
+        "color_hint": { "type": "string" },
+        "notes": { "type": "string" }
+      }
+    },
+
+    "ImageArtifact": {
+      "allOf": [
+        { "$ref": "#/$defs/ArtifactBase" },
+        {
+          "properties": {
+            "type": { "const": "image" },
+            "data": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["uri"],
+              "properties": {
+                "uri": { "type": "string", "minLength": 1 },
+                "caption": { "type": "string" },
+                "mime_type": {
+                  "type": "string",
+                  "enum": ["image/png", "image/jpeg", "image/webp", "image/svg+xml", "unknown"]
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+
+    "LogArtifact": {
+      "allOf": [
+        { "$ref": "#/$defs/ArtifactBase" },
+        {
+          "properties": {
+            "type": { "const": "log" },
+            "data": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["steps"],
+              "properties": {
+                "steps": {
+                  "type": "array",
+                  "items": { "$ref": "#/$defs/LogStep" }
+                },
+                "warnings": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "debug": { "type": "object" }
+              }
+            }
+          }
+        }
+      ]
+    },
+
+    "LogStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "status"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "status": { "type": "string", "enum": ["ok", "skipped", "warning", "failed"] },
+        "message": { "type": "string" },
+        "started_at": { "type": "string", "format": "date-time" },
+        "ended_at": { "type": "string", "format": "date-time" }
+      }
+    },
+
+    "GenericArtifact": {
+      "allOf": [
+        { "$ref": "#/$defs/ArtifactBase" },
+        {
+          "properties": {
+            "type": {
+              "type": "string",
+              "not": {
+                "enum": [
+                  "sequence",
+                  "table",
+                  "chart",
+                  "tree",
+                  "genome_track",
+                  "plasmid_map",
+                  "image",
+                  "log"
+                ]
+              }
+            },
+            "data": {
+              "type": "object",
+              "description": "Fallback for experimental artifact types; prefer adding a dedicated schema."
+            }
+          }
+        }
+      ]
+    }
+  }
+}

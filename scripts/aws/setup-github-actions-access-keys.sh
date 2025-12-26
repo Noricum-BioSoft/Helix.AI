@@ -168,3 +168,6 @@ echo "  2. Add the secrets above to GitHub"
 echo ""
 echo "Or see: docs/GITHUB_OIDC_SETUP.md for OIDC setup instructions"
 
+
+
+

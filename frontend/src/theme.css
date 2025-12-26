@@ -267,6 +267,15 @@ a:hover {
 .prompt-toolbar-button {
   border-radius: 12px !important;
   box-shadow: 0 8px 16px rgba(58, 96, 168, 0.08);
+  min-width: 160px;
+  height: 44px;
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  font-size: 1.05rem;
+  font-weight: 600;
+  padding: 0 1rem;
 }
 
 .helix-header-actions {

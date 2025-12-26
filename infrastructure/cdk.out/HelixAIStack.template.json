@@ -1,20 +1,114 @@
 {
  "Description": "Helix.AI Bioinformatics Platform Infrastructure",
- "Resources": {
-  "BackendRepository9B711290": {
-   "Type": "AWS::ECR::Repository",
-   "Properties": {
-    "ImageScanningConfiguration": {
-     "ScanOnPush": true
-    },
-    "RepositoryName": "helix-ai-backend"
-   },
-   "UpdateReplacePolicy": "Retain",
-   "DeletionPolicy": "Retain",
-   "Metadata": {
-    "aws:cdk:path": "HelixAIStack/BackendRepository/Resource"
+ "Outputs": {
+  "ECRRepositoryURI": {
+   "Description": "ECR Repository URI for backend Docker images",
+   "Value": {
+    "Fn::Join": [
+     "",
+     [
+      "794270057041.dkr.ecr.us-west-1.",
+      {
+       "Ref": "AWS::URLSuffix"
+      },
+      "/helix-ai-backend"
+     ]
+    ]
    }
   },
+  "VPCId": {
+   "Description": "VPC ID",
+   "Value": {
+    "Ref": "VPCB9E5F0B4"
+   }
+  },
+  "ECSClusterName": {
+   "Description": "ECS Cluster Name",
+   "Value": {
+    "Ref": "ClusterEB0386A7"
+   }
+  },
+  "ECSServiceName": {
+   "Description": "ECS Service Name",
+   "Value": {
+    "Fn::GetAtt": [
+     "ServiceD69D759B",
+     "Name"
+    ]
+   }
+  },
+  "ECSTaskDefinitionFamily": {
+   "Description": "ECS Task Definition Family",
+   "Value": "HelixAIStackTaskDefinition9C619311"
+  },
+  "ALBDNSName": {
+   "Description": "Application Load Balancer DNS Name",
+   "Value": {
+    "Fn::GetAtt": [
+     "ALBAEE750D2",
+     "DNSName"
+    ]
+   }
+  },
+  "FrontendBucketName": {
+   "Description": "S3 Bucket Name for Frontend",
+   "Value": "helix-ai-frontend-794270057041-us-west-1"
+  },
+  "FrontendBucketWebsiteURL": {
+   "Description": "Frontend Website URL (S3)",
+   "Value": "http://helix-ai-frontend-794270057041-us-west-1.s3-website-us-west-1.amazonaws.com"
+  },
+  "CloudFrontDistributionId": {
+   "Description": "CloudFront Distribution ID",
+   "Value": {
+    "Ref": "CloudFrontDistributionBA64CE3A"
+   }
+  },
+  "CloudFrontDomainName": {
+   "Description": "CloudFront Distribution Domain Name",
+   "Value": {
+    "Fn::GetAtt": [
+     "CloudFrontDistributionBA64CE3A",
+     "DomainName"
+    ]
+   }
+  },
+  "BackendAPIURL": {
+   "Description": "Backend API URL",
+   "Value": {
+    "Fn::Join": [
+     "",
+     [
+      "http://",
+      {
+       "Fn::GetAtt": [
+        "ALBAEE750D2",
+        "DNSName"
+       ]
+      }
+     ]
+    ]
+   }
+  },
+  "FrontendURL": {
+   "Description": "Frontend URL (CloudFront)",
+   "Value": {
+    "Fn::Join": [
+     "",
+     [
+      "https://",
+      {
+       "Fn::GetAtt": [
+        "CloudFrontDistributionBA64CE3A",
+        "DomainName"
+       ]
+      }
+     ]
+    ]
+   }
+  }
+ },
+ "Resources": {
   "VPCB9E5F0B4": {
    "Type": "AWS::EC2::VPC",
    "Properties": {
@@ -405,117 +499,6 @@
     "aws:cdk:path": "HelixAIStack/VPC/VPCGW"
    }
   },
-  "VPCRestrictDefaultSecurityGroupCustomResource59474679": {
-   "Type": "Custom::VpcRestrictDefaultSG",
-   "Properties": {
-    "ServiceToken": {
-     "Fn::GetAtt": [
-      "CustomVpcRestrictDefaultSGCustomResourceProviderHandlerDC833E5E",
-      "Arn"
-     ]
-    },
-    "DefaultSecurityGroupId": {
-     "Fn::GetAtt": [
-      "VPCB9E5F0B4",
-      "DefaultSecurityGroup"
-     ]
-    },
-    "Account": "794270057041"
-   },
-   "UpdateReplacePolicy": "Delete",
-   "DeletionPolicy": "Delete",
-   "Metadata": {
-    "aws:cdk:path": "HelixAIStack/VPC/RestrictDefaultSecurityGroupCustomResource/Default"
-   }
-  },
-  "CustomVpcRestrictDefaultSGCustomResourceProviderRole26592FE0": {
-   "Type": "AWS::IAM::Role",
-   "Properties": {
-    "AssumeRolePolicyDocument": {
-     "Version": "2012-10-17",
-     "Statement": [
-      {
-       "Action": "sts:AssumeRole",
-       "Effect": "Allow",
-       "Principal": {
-        "Service": "lambda.amazonaws.com"
-       }
-      }
-     ]
-    },
-    "ManagedPolicyArns": [
-     {
-      "Fn::Sub": "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
-     }
-    ],
-    "Policies": [
-     {
-      "PolicyName": "Inline",
-      "PolicyDocument": {
-       "Version": "2012-10-17",
-       "Statement": [
-        {
-         "Effect": "Allow",
-         "Action": [
-          "ec2:AuthorizeSecurityGroupIngress",
-          "ec2:AuthorizeSecurityGroupEgress",
-          "ec2:RevokeSecurityGroupIngress",
-          "ec2:RevokeSecurityGroupEgress"
-         ],
-         "Resource": [
-          {
-           "Fn::Join": [
-            "",
-            [
-             "arn:aws:ec2:us-west-1:794270057041:security-group/",
-             {
-              "Fn::GetAtt": [
-               "VPCB9E5F0B4",
-               "DefaultSecurityGroup"
-              ]
-             }
-            ]
-           ]
-          }
-         ]
-        }
-       ]
-      }
-     }
-    ]
-   },
-   "Metadata": {
-    "aws:cdk:path": "HelixAIStack/Custom::VpcRestrictDefaultSGCustomResourceProvider/Role"
-   }
-  },
-  "CustomVpcRestrictDefaultSGCustomResourceProviderHandlerDC833E5E": {
-   "Type": "AWS::Lambda::Function",
-   "Properties": {
-    "Code": {
-     "S3Bucket": "cdk-hnb659fds-assets-794270057041-us-west-1",
-     "S3Key": "7fa1e366ee8a9ded01fc355f704cff92bfd179574e6f9cfee800a3541df1b200.zip"
-    },
-    "Timeout": 900,
-    "MemorySize": 128,
-    "Handler": "__entrypoint__.handler",
-    "Role": {
-     "Fn::GetAtt": [
-      "CustomVpcRestrictDefaultSGCustomResourceProviderRole26592FE0",
-      "Arn"
-     ]
-    },
-    "Runtime": "nodejs22.x",
-    "Description": "Lambda function for removing all inbound/outbound rules from the VPC default security group"
-   },
-   "DependsOn": [
-    "CustomVpcRestrictDefaultSGCustomResourceProviderRole26592FE0"
-   ],
-   "Metadata": {
-    "aws:cdk:path": "HelixAIStack/Custom::VpcRestrictDefaultSGCustomResourceProvider/Handler",
-    "aws:asset:path": "asset.7fa1e366ee8a9ded01fc355f704cff92bfd179574e6f9cfee800a3541df1b200",
-    "aws:asset:property": "Code"
-   }
-  },
   "ALBSecurityGroup29A3BDEF": {
    "Type": "AWS::EC2::SecurityGroup",
    "Properties": {
@@ -649,17 +632,17 @@
         "ecr:GetDownloadUrlForLayer"
        ],
        "Effect": "Allow",
-       "Resource": {
-        "Fn::GetAtt": [
-         "BackendRepository9B711290",
-         "Arn"
-        ]
-       }
+       "Resource": "arn:aws:ecr:us-west-1:794270057041:repository/helix-ai-backend"
       },
       {
        "Action": "ecr:GetAuthorizationToken",
        "Effect": "Allow",
        "Resource": "*"
+      },
+      {
+       "Action": "secretsmanager:GetSecretValue",
+       "Effect": "Allow",
+       "Resource": "arn:aws:secretsmanager:us-west-1:794270057041:secret:helix-ai-production-*"
       },
       {
        "Action": [
@@ -673,6 +656,17 @@
          "Arn"
         ]
        }
+      },
+      {
+       "Action": [
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:GetSecretValue"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        "arn:aws:secretsmanager:us-west-1:794270057041:secret:helix-ai-production-DEEPSEEK_API_KEY-??????",
+        "arn:aws:secretsmanager:us-west-1:794270057041:secret:helix-ai-production-OPENAI_API_KEY-??????"
+       ]
       }
      ],
      "Version": "2012-10-17"
@@ -707,6 +701,36 @@
    },
    "Metadata": {
     "aws:cdk:path": "HelixAIStack/TaskRole/Resource"
+   }
+  },
+  "TaskRoleDefaultPolicy07FC53DE": {
+   "Type": "AWS::IAM::Policy",
+   "Properties": {
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": [
+        "s3:CopyObject",
+        "s3:GetObject",
+        "s3:HeadObject",
+        "s3:ListBucket",
+        "s3:PutObject"
+       ],
+       "Effect": "Allow",
+       "Resource": "*"
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "PolicyName": "TaskRoleDefaultPolicy07FC53DE",
+    "Roles": [
+     {
+      "Ref": "TaskRole30FC0FBB"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "HelixAIStack/TaskRole/DefaultPolicy/Resource"
    }
   },
   "LogGroupF5B46931": {
@@ -747,48 +771,11 @@
        "Fn::Join": [
         "",
         [
-         {
-          "Fn::Select": [
-           4,
-           {
-            "Fn::Split": [
-             ":",
-             {
-              "Fn::GetAtt": [
-               "BackendRepository9B711290",
-               "Arn"
-              ]
-             }
-            ]
-           }
-          ]
-         },
-         ".dkr.ecr.",
-         {
-          "Fn::Select": [
-           3,
-           {
-            "Fn::Split": [
-             ":",
-             {
-              "Fn::GetAtt": [
-               "BackendRepository9B711290",
-               "Arn"
-              ]
-             }
-            ]
-           }
-          ]
-         },
-         ".",
+         "794270057041.dkr.ecr.us-west-1.",
          {
           "Ref": "AWS::URLSuffix"
          },
-         "/",
-         {
-          "Ref": "BackendRepository9B711290"
-         },
-         ":latest"
+         "/helix-ai-backend:latest"
         ]
        ]
       },
@@ -807,6 +794,16 @@
        {
         "ContainerPort": 8001,
         "Protocol": "tcp"
+       }
+      ],
+      "Secrets": [
+       {
+        "Name": "OPENAI_API_KEY",
+        "ValueFrom": "arn:aws:secretsmanager:us-west-1:794270057041:secret:helix-ai-production-OPENAI_API_KEY"
+       },
+       {
+        "Name": "DEEPSEEK_API_KEY",
+        "ValueFrom": "arn:aws:secretsmanager:us-west-1:794270057041:secret:helix-ai-production-DEEPSEEK_API_KEY"
        }
       ]
      }
@@ -845,7 +842,7 @@
      "MaximumPercent": 200,
      "MinimumHealthyPercent": 100
     },
-    "DesiredCount": 1,
+    "DesiredCount": 0,
     "EnableECSManagedTags": false,
     "HealthCheckGracePeriodSeconds": 60,
     "LaunchType": "FARGATE",
@@ -885,6 +882,7 @@
    },
    "DependsOn": [
     "ALBHTTPListener8F9F719B",
+    "TaskRoleDefaultPolicy07FC53DE",
     "TaskRole30FC0FBB"
    ],
    "Metadata": {
@@ -979,102 +977,6 @@
     "aws:cdk:path": "HelixAIStack/TargetGroup/Resource"
    }
   },
-  "FrontendBucketEFE2E19C": {
-   "Type": "AWS::S3::Bucket",
-   "Properties": {
-    "BucketName": "helix-ai-frontend-794270057041-us-west-1",
-    "PublicAccessBlockConfiguration": {
-     "BlockPublicAcls": false,
-     "BlockPublicPolicy": false,
-     "IgnorePublicAcls": false,
-     "RestrictPublicBuckets": false
-    },
-    "WebsiteConfiguration": {
-     "ErrorDocument": "index.html",
-     "IndexDocument": "index.html"
-    }
-   },
-   "UpdateReplacePolicy": "Retain",
-   "DeletionPolicy": "Retain",
-   "Metadata": {
-    "aws:cdk:path": "HelixAIStack/FrontendBucket/Resource"
-   }
-  },
-  "FrontendBucketPolicy1DFF75D9": {
-   "Type": "AWS::S3::BucketPolicy",
-   "Properties": {
-    "Bucket": {
-     "Ref": "FrontendBucketEFE2E19C"
-    },
-    "PolicyDocument": {
-     "Statement": [
-      {
-       "Action": "s3:GetObject",
-       "Effect": "Allow",
-       "Principal": {
-        "AWS": "*"
-       },
-       "Resource": {
-        "Fn::Join": [
-         "",
-         [
-          {
-           "Fn::GetAtt": [
-            "FrontendBucketEFE2E19C",
-            "Arn"
-           ]
-          },
-          "/*"
-         ]
-        ]
-       }
-      },
-      {
-       "Action": [
-        "s3:GetBucket*",
-        "s3:GetObject*",
-        "s3:List*"
-       ],
-       "Effect": "Allow",
-       "Principal": {
-        "CanonicalUser": {
-         "Fn::GetAtt": [
-          "CloudFrontOAI9EBF49FD",
-          "S3CanonicalUserId"
-         ]
-        }
-       },
-       "Resource": [
-        {
-         "Fn::GetAtt": [
-          "FrontendBucketEFE2E19C",
-          "Arn"
-         ]
-        },
-        {
-         "Fn::Join": [
-          "",
-          [
-           {
-            "Fn::GetAtt": [
-             "FrontendBucketEFE2E19C",
-             "Arn"
-            ]
-           },
-           "/*"
-          ]
-         ]
-        }
-       ]
-      }
-     ],
-     "Version": "2012-10-17"
-    }
-   },
-   "Metadata": {
-    "aws:cdk:path": "HelixAIStack/FrontendBucket/Policy/Resource"
-   }
-  },
   "CloudFrontOAI9EBF49FD": {
    "Type": "AWS::CloudFront::CloudFrontOriginAccessIdentity",
    "Properties": {
@@ -1125,29 +1027,21 @@
      "IPV6Enabled": true,
      "Origins": [
       {
-       "CustomOriginConfig": {
-        "OriginProtocolPolicy": "http-only",
-        "OriginSSLProtocols": [
-         "TLSv1.2"
-        ]
-       },
-       "DomainName": {
-        "Fn::Select": [
-         2,
-         {
-          "Fn::Split": [
-           "/",
+       "DomainName": "helix-ai-frontend-794270057041-us-west-1.s3.us-west-1.amazonaws.com",
+       "Id": "HelixAIStackCloudFrontDistributionOrigin154C06600",
+       "S3OriginConfig": {
+        "OriginAccessIdentity": {
+         "Fn::Join": [
+          "",
+          [
+           "origin-access-identity/cloudfront/",
            {
-            "Fn::GetAtt": [
-             "FrontendBucketEFE2E19C",
-             "WebsiteURL"
-            ]
+            "Ref": "CloudFrontOAI9EBF49FD"
            }
           ]
-         }
-        ]
-       },
-       "Id": "HelixAIStackCloudFrontDistributionOrigin154C06600"
+         ]
+        }
+       }
       }
      ],
      "PriceClass": "PriceClass_100"
@@ -1160,161 +1054,10 @@
   "CDKMetadata": {
    "Type": "AWS::CDK::Metadata",
    "Properties": {
-    "Analytics": "v2:deflate64:H4sIAAAAAAAA/31TXU/DMAz8LbxnAW0SEo/b+NCkiVUb4hWlqVfMuqRykqGp6n/HaVZaEOIp5/O1PZ/TqZzObuTNlfp0E10cJhXmstl5pQ+CqbcGNMlmC7V16C2dxXJvhqoVoKeyea115F+zpchCXqHehdyAj9yAtjZ4eFF5BQM/cHPnrEbl0ZpvcQQPqywez8o/KQ+f6iwywhPD4cUr44EY94Lk5FLNPY/yfgTjxQ50IPTnJ7Kh7jz8S6xMSeBcHNHJZlkFx5+Jqh4+KipVtO8O97BHg73534w1XqEBGnGXZ3dAJ9QpkARbgerIgdsUU3dmliPt5kqoFZUt2dPalt/We8x2K+U86sqqIleVMhpNeeIlzeuaH+4SXnNv0fXSRD/qsQ55UHPR9HjUf+EpOPfew6hshZvJZhH0Ie3ogtIxzDOuW8GeQ7Enjks2G8ISzVxrXsGq4PXxWlL4rHmMmj8V9+ySMA/9KsZ120ZmE3wdvNiCs4Fi9LxMexzKeL3/bGVkT1gALZQDwdcVPP8l7KBsRXb279Zcz+SdvL36cIgTCuznCHKbzi9dDCoHZQMAAA=="
+    "Analytics": "v2:deflate64:H4sIAAAAAAAA/31SXW/CMAz8LbyHDIE0aY98DISERlUQr1MaTPEoSZU4IFT1v89tKXTTtCefz5f0fOlQDkcDOeipq+/r/amfYSKLDSl9Ekx9FqCdjCG3Hsm620R5EKCHstjlWkwPZhdNRRSSDPUmJAao4p4otoFgq5IMnvyTG3tvNSpCax7iCrwvo6p8KFoogqu6icjhheHz4qUhcIxbQePk3o2J7R/PYEhsQAeHdFs4G/Law7/E0qQOvC95RS+LaRY8f6ZStXCuXKoq+/40gwMabM3/ZqwhhQZch7uf3YC7oG4CaWApUJ1lEdsmprpGliOt92pQKTKbsqeVTR/WW8x2M+UJdWbVPlGZMhpNeuFHGuc5H64TXvFsUs+ajX70XR3youauaXFnvuUtOPfWQ6cthR/JSdAnoPo3YTthf3CchCzWDlM0Y6053eWeX4YTb3JlzbzS/KmYsQGHSWhT7vZlWTHrQHkgEYO3wVVRRjc6WvMykm/ytfflEfsu8GVnkHFTvwGobKsC8QIAAA=="
    },
    "Metadata": {
     "aws:cdk:path": "HelixAIStack/CDKMetadata/Default"
-   }
-  }
- },
- "Outputs": {
-  "ECRRepositoryURI": {
-   "Description": "ECR Repository URI for backend Docker images",
-   "Value": {
-    "Fn::Join": [
-     "",
-     [
-      {
-       "Fn::Select": [
-        4,
-        {
-         "Fn::Split": [
-          ":",
-          {
-           "Fn::GetAtt": [
-            "BackendRepository9B711290",
-            "Arn"
-           ]
-          }
-         ]
-        }
-       ]
-      },
-      ".dkr.ecr.",
-      {
-       "Fn::Select": [
-        3,
-        {
-         "Fn::Split": [
-          ":",
-          {
-           "Fn::GetAtt": [
-            "BackendRepository9B711290",
-            "Arn"
-           ]
-          }
-         ]
-        }
-       ]
-      },
-      ".",
-      {
-       "Ref": "AWS::URLSuffix"
-      },
-      "/",
-      {
-       "Ref": "BackendRepository9B711290"
-      }
-     ]
-    ]
-   }
-  },
-  "VPCId": {
-   "Description": "VPC ID",
-   "Value": {
-    "Ref": "VPCB9E5F0B4"
-   }
-  },
-  "ECSClusterName": {
-   "Description": "ECS Cluster Name",
-   "Value": {
-    "Ref": "ClusterEB0386A7"
-   }
-  },
-  "ECSServiceName": {
-   "Description": "ECS Service Name",
-   "Value": {
-    "Fn::GetAtt": [
-     "ServiceD69D759B",
-     "Name"
-    ]
-   }
-  },
-  "ECSTaskDefinitionFamily": {
-   "Description": "ECS Task Definition Family",
-   "Value": "HelixAIStackTaskDefinition9C619311"
-  },
-  "ALBDNSName": {
-   "Description": "Application Load Balancer DNS Name",
-   "Value": {
-    "Fn::GetAtt": [
-     "ALBAEE750D2",
-     "DNSName"
-    ]
-   }
-  },
-  "FrontendBucketName": {
-   "Description": "S3 Bucket Name for Frontend",
-   "Value": {
-    "Ref": "FrontendBucketEFE2E19C"
-   }
-  },
-  "FrontendBucketWebsiteURL": {
-   "Description": "Frontend Website URL (S3)",
-   "Value": {
-    "Fn::GetAtt": [
-     "FrontendBucketEFE2E19C",
-     "WebsiteURL"
-    ]
-   }
-  },
-  "CloudFrontDistributionId": {
-   "Description": "CloudFront Distribution ID",
-   "Value": {
-    "Ref": "CloudFrontDistributionBA64CE3A"
-   }
-  },
-  "CloudFrontDomainName": {
-   "Description": "CloudFront Distribution Domain Name",
-   "Value": {
-    "Fn::GetAtt": [
-     "CloudFrontDistributionBA64CE3A",
-     "DomainName"
-    ]
-   }
-  },
-  "BackendAPIURL": {
-   "Description": "Backend API URL",
-   "Value": {
-    "Fn::Join": [
-     "",
-     [
-      "http://",
-      {
-       "Fn::GetAtt": [
-        "ALBAEE750D2",
-        "DNSName"
-       ]
-      }
-     ]
-    ]
-   }
-  },
-  "FrontendURL": {
-   "Description": "Frontend URL (CloudFront)",
-   "Value": {
-    "Fn::Join": [
-     "",
-     [
-      "https://",
-      {
-       "Fn::GetAtt": [
-        "CloudFrontDistributionBA64CE3A",
-        "DomainName"
-       ]
-      }
-     ]
-    ]
    }
   }
  },

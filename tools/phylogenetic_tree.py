@@ -4,7 +4,6 @@ import numpy as np
 from typing import List, Dict, Any
 from Bio import AlignIO, Phylo
 from Bio.Phylo.TreeConstruction import DistanceCalculator, DistanceTreeConstructor
-from Bio.Align.Applications import ClustalwCommandline
 import subprocess
 import tempfile
 import os
@@ -210,17 +209,24 @@ def run_phylogenetic_tree_raw(aligned_sequences: str):
     
     return create_phylogenetic_tree(sequences)
 
-from langchain.agents import tool
+from langchain_core.tools import tool
 
 @tool
 def run_phylogenetic_tree(aligned_sequences: str):
-    """Create a phylogenetic tree from aligned sequences.
+    """Create a phylogenetic tree from sequences (aligned or unaligned).
+    
+    This function accepts FASTA format sequences that can be either aligned or unaligned.
+    If sequences are unaligned, they will be automatically aligned first, then the
+    phylogenetic tree will be built and visualized.
     
     Args:
-        aligned_sequences: FASTA format sequences to analyze
+        aligned_sequences: FASTA format sequences to analyze (can be unaligned - will be aligned automatically)
         
     Returns:
-        Phylogenetic tree visualization and analysis results
+        Phylogenetic tree visualization and analysis results including:
+        - tree_newick: Newick format tree string
+        - ete_visualization: HTML visualization
+        - aligned_sequences: The aligned sequences used
     """
     return run_phylogenetic_tree_raw(aligned_sequences)
 

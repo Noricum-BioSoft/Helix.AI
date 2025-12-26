@@ -15,10 +15,18 @@ export const PhylogeneticTree: React.FC<PhylogeneticTreeProps> = ({ newick }) =>
   const svgRef = useRef<SVGSVGElement>(null);
 
   console.log('PhylogeneticTree component rendered with newick:', newick);
+  console.log('Newick type:', typeof newick);
+  console.log('Newick length:', newick?.length);
+  console.log('Newick preview:', newick?.substring(0, 100));
   
   if (!newick) {
     console.log('No newick data provided');
     return <div className="alert alert-warning">No tree data provided.</div>;
+  }
+  
+  if (typeof newick !== 'string') {
+    console.error('Newick is not a string:', typeof newick, newick);
+    return <div className="alert alert-danger">Invalid tree data format. Expected string, got {typeof newick}.</div>;
   }
 
   // Improved Newick parser
@@ -117,11 +125,25 @@ export const PhylogeneticTree: React.FC<PhylogeneticTreeProps> = ({ newick }) =>
       d3.select(svgRef.current).selectAll("*").remove();
       
       // Parse the Newick string
+      console.log('🔍 Parsing Newick string, length:', newick.length);
+      console.log('🔍 Newick string:', newick);
       const treeData = parseNewick(newick);
-      console.log('Parsed tree data:', treeData);
+      console.log('🔍 Parsed tree data:', JSON.stringify(treeData, null, 2));
+      
+      // Validate parsed tree
+      if (!treeData || !treeData.children || treeData.children.length === 0) {
+        console.error('❌ Parsed tree has no children:', treeData);
+        throw new Error('Failed to parse tree structure - no children found');
+      }
       
       // Create hierarchy
       const hierarchy = d3.hierarchy(treeData);
+      console.log('🔍 Created hierarchy, nodes:', hierarchy.descendants().length);
+      
+      // Validate hierarchy
+      if (!hierarchy || hierarchy.descendants().length === 0) {
+        throw new Error('Hierarchy has no nodes');
+      }
       
       // Calculate max label length from hierarchy data
       const getAllNames = (node: any): string[] => {
@@ -135,78 +157,126 @@ export const PhylogeneticTree: React.FC<PhylogeneticTreeProps> = ({ newick }) =>
       };
       const allNames = getAllNames(hierarchy);
       const maxLabelLength = Math.max(...allNames.map(name => name.length), 10);
+      console.log('🔍 Max label length:', maxLabelLength);
       
       // Set up the tree layout with dynamic dimensions based on label length
       const baseWidth = 600;
       const labelWidth = Math.max(maxLabelLength * 8, 200); // 8px per character, minimum 200px
       const width = baseWidth + labelWidth;
-      const height = 400;
+      const height = Math.max(400, hierarchy.leaves().length * 50); // Dynamic height based on number of leaves
+      console.log('🔍 Tree dimensions:', { width, height, labelWidth });
+      
       const treeLayout = d3.tree()
-        .size([height, width - labelWidth - 50]); // Leave room for labels on the right
+        .size([height - 100, width - labelWidth - 50]); // Leave room for labels on the right
       
       const tree = treeLayout(hierarchy as any);
+      console.log('🔍 Tree layout computed, links:', tree.links().length, 'nodes:', tree.descendants().length);
       
       // Update SVG width to accommodate labels
-      svgRef.current!.setAttribute('width', String(width + 100));
+      const svgWidth = width + 100;
+      const svgHeight = height + 100;
+      svgRef.current!.setAttribute('width', String(svgWidth));
+      svgRef.current!.setAttribute('height', String(svgHeight));
+      console.log('🔍 SVG dimensions set:', { svgWidth, svgHeight });
       
-      // Create SVG
+      // Create SVG - ensure it's cleared first
       const svg = d3.select(svgRef.current);
+      if (!svgRef.current) {
+        throw new Error('SVG ref is null');
+      }
+      
+      // Clear any existing content
+      svg.selectAll("*").remove();
+      console.log('🔍 SVG cleared');
+      
+      // Set SVG background
+      svg.attr('style', 'background-color: #fff; display: block;');
+      
       const g = svg.append('g')
         .attr('transform', 'translate(50, 50)');
+      console.log('🔍 SVG group created');
       
       // Add links with error checking
-      g.selectAll('.link')
-        .data(tree.links())
+      const links = tree.links();
+      console.log('🔍 Adding', links.length, 'links');
+      const linkSelection = g.selectAll('.link')
+        .data(links)
         .enter()
         .append('path')
         .attr('class', 'link')
         .attr('fill', 'none')
         .attr('stroke', '#555')
-        .attr('stroke-width', 1)
-        .attr('d', (d: any) => {
-          // Check for valid coordinates
-          if (isNaN(d.source.x) || isNaN(d.source.y) || isNaN(d.target.x) || isNaN(d.target.y)) {
-            console.error('Invalid coordinates in tree:', d);
-            return '';
-          }
-          return d3.linkHorizontal()
-            .x((d: any) => d.y)
-            .y((d: any) => d.x)(d as any);
-        });
+        .attr('stroke-width', 2);
+      
+      linkSelection.attr('d', (d: any) => {
+        // Check for valid coordinates
+        if (isNaN(d.source.x) || isNaN(d.source.y) || isNaN(d.target.x) || isNaN(d.target.y)) {
+          console.error('❌ Invalid coordinates in tree link:', d);
+          return '';
+        }
+        const linkGenerator = d3.linkHorizontal()
+          .x((d: any) => d.y)
+          .y((d: any) => d.x);
+        const path = linkGenerator(d as any);
+        console.log('🔍 Link path:', path, 'from', d.source.data.name, 'to', d.target.data.name);
+        return path;
+      });
+      console.log('🔍 Links added');
       
       // Add nodes with error checking
-      const node = g.selectAll('.node')
-        .data(tree.descendants())
+      const nodes = tree.descendants();
+      console.log('🔍 Adding', nodes.length, 'nodes');
+      const nodeSelection = g.selectAll('.node')
+        .data(nodes)
         .enter()
         .append('g')
         .attr('class', 'node')
         .attr('transform', (d: any) => {
           // Check for valid coordinates
           if (isNaN(d.x) || isNaN(d.y)) {
-            console.error('Invalid node coordinates:', d);
+            console.error('❌ Invalid node coordinates:', d);
             return 'translate(0,0)';
           }
-          return `translate(${d.y},${d.x})`;
+          const transform = `translate(${d.y},${d.x})`;
+          console.log('🔍 Node transform:', transform, 'for', d.data.name);
+          return transform;
         });
       
       // Add circles for nodes
-      node.append('circle')
-        .attr('r', 3)
-        .attr('fill', (d: any) => d.children ? '#555' : '#69b3a2');
+      nodeSelection.append('circle')
+        .attr('r', 4)
+        .attr('fill', (d: any) => {
+          const color = d.children ? '#555' : '#69b3a2';
+          console.log('🔍 Node color:', color, 'for', d.data.name, 'has children:', !!d.children);
+          return color;
+        })
+        .attr('stroke', '#fff')
+        .attr('stroke-width', 1);
       
       // Add labels - show full names, no truncation
-      const labels = node.append('text')
+      const labels = nodeSelection.append('text')
         .attr('dy', '.31em')
-        .attr('x', (d: any) => d.children ? -8 : 8)
+        .attr('x', (d: any) => {
+          const offset = d.children ? -10 : 10;
+          console.log('🔍 Label offset:', offset, 'for', d.data.name);
+          return offset;
+        })
         .attr('text-anchor', (d: any) => d.children ? 'end' : 'start')
-        .text((d: any) => d.data.name || '')
-        .style('font-size', '11px')
+        .text((d: any) => {
+          const name = d.data.name || '';
+          console.log('🔍 Label text:', name);
+          return name;
+        })
+        .style('font-size', '12px')
         .style('font-family', 'monospace')
+        .style('fill', '#333')
         .style('cursor', 'pointer');
       
       // Add tooltips to show full names on hover (helpful for very long names)
       labels.append('title')
         .text((d: any) => d.data.name || '');
+      
+      console.log('✅ Tree rendering complete');
         
           } catch (error) {
         console.error('Error rendering phylogenetic tree:', error);
@@ -223,14 +293,24 @@ export const PhylogeneticTree: React.FC<PhylogeneticTreeProps> = ({ newick }) =>
   return (
     <div className="bg-light p-3 border rounded mb-3">
       <h5>Phylogenetic Tree</h5>
-      <div style={{ height: '500px', width: '100%', overflow: 'auto' }}>
-        <svg
-          ref={svgRef}
-          width="800"
-          height="500"
-          style={{ border: '1px solid #ccc', minWidth: '800px' }}
-        />
-      </div>
+      {!newick && (
+        <div className="alert alert-warning">No tree data available</div>
+      )}
+      {newick && (
+        <div style={{ height: '600px', width: '100%', overflow: 'auto', backgroundColor: '#fff' }}>
+          <svg
+            ref={svgRef}
+            width="800"
+            height="600"
+            style={{ 
+              border: '1px solid #ccc', 
+              minWidth: '800px',
+              display: 'block',
+              backgroundColor: '#fff'
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }; 

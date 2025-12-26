@@ -4,11 +4,18 @@ import re
 from typing import List, Dict, Any
 from Bio import AlignIO, SeqIO
 from Bio.Align import AlignInfo
-from Bio.Align.Applications import ClustalwCommandline
 import subprocess
 import tempfile
 import os
 from io import StringIO
+
+# Try to import ClustalwCommandline - it was removed in Biopython 1.78+
+try:
+    from Bio.Align.Applications import ClustalwCommandline
+    CLUSTALW_AVAILABLE = True
+except ImportError:
+    CLUSTALW_AVAILABLE = False
+    ClustalwCommandline = None
 
 def parse_fasta_string(fasta_string: str) -> List[Dict[str, str]]:
     """Parse FASTA format string into list of sequences."""
@@ -152,17 +159,45 @@ def run_alignment(sequences: str):
         temp_output_path = temp_output.name
     
     try:
-        # Try to use ClustalW for alignment
-        try:
-            clustalw_cline = ClustalwCommandline("clustalw", infile=temp_fasta_path, outfile=temp_output_path)
-            stdout, stderr = clustalw_cline()
-            
-            # Read the alignment
-            alignment = AlignIO.read(temp_output_path, "clustal")
-            alignment_method = "ClustalW"
-            
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            # Fallback to Muscle if ClustalW is not available
+        alignment = None
+        alignment_method = None
+        
+        # Try to use ClustalW for alignment (if available)
+        if CLUSTALW_AVAILABLE and ClustalwCommandline is not None:
+            try:
+                clustalw_cline = ClustalwCommandline("clustalw", infile=temp_fasta_path, outfile=temp_output_path)
+                stdout, stderr = clustalw_cline()
+                
+                # Validate that the output file exists and contains aligned sequences
+                if os.path.exists(temp_output_path) and os.path.getsize(temp_output_path) > 0:
+                    try:
+                        # Try to read the alignment
+                        alignment = AlignIO.read(temp_output_path, "clustal")
+                        # Verify all sequences have the same length (aligned)
+                        if alignment and len(set(len(record.seq) for record in alignment)) == 1:
+                            alignment_method = "ClustalW"
+                        else:
+                            # Sequences are not properly aligned - fall through to Muscle fallback
+                            print(f"⚠️ ClustalW output contains sequences of different lengths, trying Muscle")
+                            alignment = None
+                    except (ValueError, AssertionError, Exception) as e:
+                        # AlignIO.read() failed - likely unaligned sequences in output
+                        print(f"⚠️ Failed to read ClustalW output: {e}, trying Muscle")
+                        alignment = None
+                else:
+                    # Output file is missing or empty - fall through to Muscle fallback
+                    print(f"⚠️ ClustalW output file missing or empty, trying Muscle")
+                    alignment = None
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                # Fall through to Muscle fallback
+                alignment = None
+            except Exception as e:
+                # Catch any other exceptions and fall through to Muscle fallback
+                print(f"⚠️ ClustalW alignment failed: {e}, trying Muscle")
+                alignment = None
+        
+        # Try Muscle if ClustalW wasn't used
+        if alignment is None:
             try:
                 # Use Muscle directly with subprocess (matching command line: muscle -align input.fasta -output output.fasta)
                 # BioPython's MuscleCommandline is deprecated and doesn't support -align/-output flags
@@ -173,14 +208,46 @@ def run_alignment(sequences: str):
                     check=True
                 )
                 
-                # Read the alignment
-                alignment = AlignIO.read(temp_output_path, "fasta")
-                alignment_method = "Muscle"
+                # Validate that the output file exists and contains aligned sequences
+                if os.path.exists(temp_output_path) and os.path.getsize(temp_output_path) > 0:
+                    try:
+                        # Try to read the alignment
+                        alignment = AlignIO.read(temp_output_path, "fasta")
+                        # Verify all sequences have the same length (aligned)
+                        if alignment and len(set(len(record.seq) for record in alignment)) == 1:
+                            alignment_method = "Muscle"
+                        else:
+                            # Sequences are not properly aligned - fall back to manual
+                            print(f"⚠️ Muscle output contains sequences of different lengths, using manual alignment")
+                            alignment = perform_manual_alignment(parsed_sequences)
+                            alignment_method = "Manual"
+                    except (ValueError, AssertionError, Exception) as e:
+                        # AlignIO.read() failed - likely unaligned sequences in output
+                        print(f"⚠️ Failed to read Muscle output: {e}, using manual alignment")
+                        alignment = perform_manual_alignment(parsed_sequences)
+                        alignment_method = "Manual"
+                else:
+                    # Output file is missing or empty - fall back to manual
+                    print(f"⚠️ Muscle output file missing or empty, using manual alignment")
+                    alignment = perform_manual_alignment(parsed_sequences)
+                    alignment_method = "Manual"
                 
-            except (subprocess.CalledProcessError, FileNotFoundError):
+            except (subprocess.CalledProcessError, FileNotFoundError) as e:
                 # Manual alignment as fallback
+                print(f"⚠️ Muscle command failed: {e}, using manual alignment")
                 alignment = perform_manual_alignment(parsed_sequences)
                 alignment_method = "Manual"
+            except Exception as e:
+                # Catch any other exceptions from Muscle execution
+                print(f"⚠️ Unexpected error during Muscle alignment: {e}, using manual alignment")
+                alignment = perform_manual_alignment(parsed_sequences)
+                alignment_method = "Manual"
+        
+        # Final safety check: ensure we have an alignment
+        if alignment is None:
+            print(f"⚠️ All alignment methods failed, using manual alignment as last resort")
+            alignment = perform_manual_alignment(parsed_sequences)
+            alignment_method = "Manual"
         
         # Convert alignment to list format
         aligned_sequences = []
@@ -331,7 +398,7 @@ def perform_manual_alignment(sequences: List[Dict[str, str]]) -> Any:
     
     return MultipleSeqAlignment(final_seqs)
 
-from langchain.agents import tool
+from langchain_core.tools import tool
 
 @tool
 def run_alignment_tool(sequences: str):

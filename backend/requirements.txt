@@ -16,6 +16,7 @@ seaborn
 
 # LangChain (for agent functionality)
 langchain
+langchain-core
 langchain-community
 langchain-openai
 langchain-deepseek

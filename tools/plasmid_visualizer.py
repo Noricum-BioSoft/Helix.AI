@@ -236,7 +236,7 @@ def run_plasmid_visualization_raw(vector_name: Optional[str] = None, cloning_sit
             "error": str(e)
         }
 
-from langchain.agents import tool
+from langchain_core.tools import tool
 
 @tool
 def run_plasmid_visualization(vector_name: str, cloning_sites: str, insert_sequence: str):

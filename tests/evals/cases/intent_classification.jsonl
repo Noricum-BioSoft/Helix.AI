@@ -1,0 +1,10 @@
+{"id":"intent.qa.question_mark","tags":["intent","qa"],"input":{"text":"What is FastQC?"},"expect":{"intent":"qa"}}
+{"id":"intent.execute.s3_uri","tags":["intent","execute"],"input":{"text":"Run FastQC on s3://bucket/sample_R1.fastq and s3://bucket/sample_R2.fastq"},"expect":{"intent":"execute"}}
+{"id":"intent.execute.local_path","tags":["intent","execute"],"input":{"text":"Align sequences in /tmp/test_sequences.fasta"},"expect":{"intent":"execute"}}
+{"id":"intent.execute.exec_verb","tags":["intent","execute"],"input":{"text":"align these sequences: >a\\nATGC\\n>b\\nATGA"},"expect":{"intent":"execute"}}
+{"id":"intent.qa.short_ambiguous","tags":["intent","qa"],"input":{"text":"help me"},"expect":{"intent":"qa"}}
+
+
+
+
+

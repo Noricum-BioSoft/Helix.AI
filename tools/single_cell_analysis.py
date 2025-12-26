@@ -371,3 +371,6 @@ def process_single_cell_command(
         "text": f"Single-cell analysis completed. Steps: {', '.join(steps)}"
     }
 
+
+
+

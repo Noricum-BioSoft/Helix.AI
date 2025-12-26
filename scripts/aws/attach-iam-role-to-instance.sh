@@ -58,3 +58,6 @@ echo ""
 echo "The instance will now have S3 access via IAM role credentials."
 echo "Note: It may take a few seconds for the credentials to be available."
 
+
+
+

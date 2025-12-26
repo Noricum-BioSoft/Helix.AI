@@ -171,6 +171,14 @@ else
     fi
 fi
 
+# Verify critical optional deps that affect execution paths.
+print_status "Verifying backend dependencies (paramiko for EC2 execution)..."
+python -c "import paramiko; print(f'✅ paramiko {paramiko.__version__}')" || {
+    print_error "paramiko is not importable in the backend runtime environment."
+    print_error "Fix: reinstall backend deps (backend/requirements.txt) in the same Python environment used to run the backend."
+    exit 1
+}
+
 # Check for environment variables
 print_status "Checking environment configuration..."
 if [ ! -f "../.env" ] && [ ! -f ".env" ]; then
