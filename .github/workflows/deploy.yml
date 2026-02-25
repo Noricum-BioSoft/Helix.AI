@@ -11,7 +11,9 @@ permissions:
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
   AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
-  ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }} # e.g., helix-backend
+  # helix-ai-backend is the CloudFormation/CDK repo; helix-ai/backend is the Copilot repo
+  # that actually serves traffic at helix--Publi-7CO3kaz1lrRR-443122446.us-west-1.elb.amazonaws.com
+  ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY || 'helix-ai-backend' }}
   S3_BUCKET: ${{ secrets.S3_BUCKET }} # e.g., helix-frontend-bucket
   CLOUDFRONT_DISTRIBUTION_ID: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} # optional
   IMAGE_TAG: latest
@@ -50,10 +52,11 @@ jobs:
       - name: Update ECS Service
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          # Use secrets if available, otherwise fall back to known defaults
-          ECS_CLUSTER_NAME: ${{ secrets.ECS_CLUSTER_NAME || 'helix-ai-cluster' }}
-          ECS_SERVICE_NAME: ${{ secrets.ECS_SERVICE_NAME || 'HelixAIStack-ServiceD69D759B-G23PygXszFhF' }}
-          ECS_TASK_DEFINITION_FAMILY: ${{ secrets.ECS_TASK_DEFINITION_FAMILY || 'HelixAIStackTaskDefinition9C619311' }}
+          # The COPILOT cluster/service serves traffic at the public ALB.
+          # Fall back to known Copilot cluster/service if secrets are not configured.
+          ECS_CLUSTER_NAME: ${{ secrets.ECS_CLUSTER_NAME || 'helix-ai-production-Cluster-nEGIXWUe21ip' }}
+          ECS_SERVICE_NAME: ${{ secrets.ECS_SERVICE_NAME || 'helix-ai-production-backend-Service-kfF1J318MES7' }}
+          ECS_TASK_DEFINITION_FAMILY: ${{ secrets.ECS_TASK_DEFINITION_FAMILY || 'helix-ai-production-backend' }}
         run: |
           echo "Updating ECS service with new image..."
           # Get current task definition
