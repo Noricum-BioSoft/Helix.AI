@@ -7,6 +7,7 @@ python-dotenv
 pandas
 numpy
 requests>=2.31.0
+scikit-learn
 
 # Bioinformatics
 biopython>=1.81

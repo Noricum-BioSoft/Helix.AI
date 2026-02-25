@@ -4,6 +4,9 @@ import asyncio
 import os
 import re
 import logging
+import threading
+import uuid
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 from pathlib import Path
@@ -71,7 +74,9 @@ class ExecutionBroker:
     """
 
     # Small curated override list (Phase 1.2.B)
-    FORCE_ASYNC_TOOLS = {"fastqc_quality_analysis"}
+    # FastQC: Use sync (local) for small files, async (EMR) for large files
+    # The infrastructure agent will decide based on file size
+    FORCE_ASYNC_TOOLS: set[str] = set()  # Removed fastqc_quality_analysis
     FORCE_SYNC_TOOLS: set[str] = set()
 
     def __init__(self, tool_executor: ToolExecutor):
@@ -84,10 +89,13 @@ class ExecutionBroker:
             plan = Plan.parse_obj(plan_dict)
             inputs = self._discover_inputs(plan.dict(), req.session_context or {})
             estimated_bytes, unknown = self._estimate_total_bytes(inputs)
-            decision = self._evaluate_routing_policy(
+            decision = await self._evaluate_routing_policy(
                 tool_name="__plan__",
                 estimated_bytes=estimated_bytes,
                 unknown_inputs=unknown,
+                inputs=inputs,
+                command=req.original_command,
+                session_context=req.session_context,
             )
             if decision.mode == "async":
                 output = await self._submit_plan_emr_job(req, plan)
@@ -110,11 +118,35 @@ class ExecutionBroker:
 
         inputs = self._discover_inputs(req.arguments or {}, req.session_context or {})
         estimated_bytes, unknown = self._estimate_total_bytes(inputs)
-        decision = self._evaluate_routing_policy(
+        decision = await self._evaluate_routing_policy(
             tool_name=req.tool_name,
             estimated_bytes=estimated_bytes,
             unknown_inputs=unknown,
+            inputs=inputs,
+            command=req.original_command,
+            session_context=req.session_context,
         )
+
+        # CloudFront has an origin response timeout (~60s). Some "local sync" tools can exceed that.
+        # For FastQC local execution, prefer returning a job_id immediately and running the tool in
+        # the background on the backend host.
+        if req.tool_name == "fastqc_quality_analysis" and decision.mode == "sync":
+            promoted = RoutingDecision(
+                mode="async",
+                reason="promoted_to_async_local_job_for_cloudfront_timeout",
+                threshold_bytes=decision.threshold_bytes,
+                estimated_bytes=decision.estimated_bytes,
+                unknown_inputs=decision.unknown_inputs,
+                override=decision.override or "local_job",
+            )
+            result = await self._submit_local_tool_job(req)
+            return self._wrap_result(
+                tool_name=req.tool_name,
+                mode="async",
+                decision=promoted,
+                inputs=inputs,
+                output=result,
+            )
 
         if decision.mode == "async" and req.tool_name == "fastqc_quality_analysis":
             result = await self._submit_fastqc_job(req)
@@ -140,6 +172,13 @@ class ExecutionBroker:
         # Mark that we're calling from the broker to prevent infinite loops
         tool_args = dict(req.arguments) if req.arguments else {}
         tool_args["_from_broker"] = True
+        # Pass through original_command, session_context, and session_id so tools can access them
+        if req.original_command:
+            tool_args["original_command"] = req.original_command
+        if req.session_context:
+            tool_args["session_context"] = req.session_context
+        if req.session_id:
+            tool_args["session_id"] = req.session_id
         output = await self._tool_executor(req.tool_name, tool_args)
         return self._wrap_result(
             tool_name=req.tool_name,
@@ -148,6 +187,55 @@ class ExecutionBroker:
             inputs=inputs,
             output=output,
         )
+
+    async def _submit_local_tool_job(self, req: ExecutionRequest) -> Dict[str, Any]:
+        """
+        Run a tool locally in a background thread, returning immediately with a job_id.
+        """
+        from backend.job_manager import get_job_manager
+
+        jm = get_job_manager()
+        tool_args = dict(req.arguments) if req.arguments else {}
+        tool_args["_from_broker"] = True
+        if req.original_command:
+            tool_args["original_command"] = req.original_command
+        if req.session_context:
+            tool_args["session_context"] = req.session_context
+        if req.session_id:
+            tool_args["session_id"] = req.session_id
+
+        job_id = jm.create_local_tool_job(
+            tool_name=req.tool_name,
+            tool_args=tool_args,
+            session_id=req.session_id,
+            original_command=req.original_command,
+        )
+
+        def _runner():
+            jm.set_local_job_running(job_id)
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                output = loop.run_until_complete(self._tool_executor(req.tool_name, tool_args))
+                jm.set_local_job_completed(job_id, output)
+            except Exception as e:
+                jm.set_local_job_failed(job_id, str(e))
+            finally:
+                try:
+                    loop.close()
+                except Exception:
+                    pass
+
+        t = threading.Thread(target=_runner, name=f"helix-local-job-{job_id}", daemon=True)
+        t.start()
+
+        return {
+            "type": "job",
+            "status": "submitted",
+            "job_id": job_id,
+            "tool_name": req.tool_name,
+            "message": "Job submitted for local execution. Track progress via /jobs/{job_id}.",
+        }
 
     def _wrap_result(
         self,
@@ -253,36 +341,132 @@ class ExecutionBroker:
                 unknown += 1
         return total, unknown
 
-    def _evaluate_routing_policy(self, *, tool_name: str, estimated_bytes: int, unknown_inputs: int) -> RoutingDecision:
+    async def _evaluate_routing_policy(
+        self, 
+        *, 
+        tool_name: str, 
+        estimated_bytes: int, 
+        unknown_inputs: int,
+        inputs: Optional[List[InputAsset]] = None,
+        command: Optional[str] = None,
+        session_context: Optional[Dict[str, Any]] = None
+    ) -> RoutingDecision:
         """
         Phase 1.2: Routing policy v1 (sync vs async).
 
         Evaluation order (per checklist):
-        (A) bytes threshold (default 100MB, env-configurable)
-        (B) tool overrides (curated list)
-        (C) timeout promotion hook (stub)
+        (A) Optional: Infrastructure Decision Agent (if enabled and available)
+        (B) bytes threshold (default 100MB, env-configurable)
+        (C) tool overrides (curated list)
+        (D) timeout promotion hook (stub)
         """
         threshold = self._get_async_bytes_threshold()
         mode = "sync"
         reason = "below_threshold"
         override = None
 
-        # (A) bytes threshold
-        if estimated_bytes > threshold:
-            mode = "async"
-            reason = "bytes_threshold_exceeded"
+        # (A) Use Infrastructure Decision Agent for all commands (primary decision mechanism)
+        # Infrastructure agent decides optimal execution environment (Local/EC2/EMR/Batch/Lambda)
+        # and we map that to sync/async routing:
+        # - EMR and Batch → async (long-running jobs, distributed processing)
+        # - EC2, Local, Lambda → sync (faster execution, suitable for sync)
+        infra_decision = None
+        if inputs and command:
+            try:
+                from backend.infrastructure_decision_agent import (
+                    decide_infrastructure,
+                    InputAsset as InfraInputAsset,
+                )
+                
+                # Convert InputAsset to InfraInputAsset
+                infra_inputs = [
+                    InfraInputAsset(uri=inp.uri, size_bytes=inp.size_bytes, source=inp.source)
+                    for inp in inputs
+                ]
+                
+                # Call infrastructure decision agent (async)
+                infra_decision = await decide_infrastructure(
+                    command=command or tool_name,
+                    inputs=infra_inputs,
+                    outputs=[],
+                    session_context=session_context or {}
+                )
+                
+                # Map infrastructure decision to sync/async mode
+                infra = infra_decision.infrastructure.upper()
+                if infra == "EMR":
+                    mode = "async"
+                    reason = f"infrastructure_agent_recommended_emr: {infra_decision.reasoning[:100]}"
+                elif infra == "BATCH":
+                    # Batch is typically async for medium/large jobs
+                    mode = "async"
+                    reason = f"infrastructure_agent_recommended_batch: {infra_decision.reasoning[:100]}"
+                elif infra == "EC2":
+                    mode = "sync"
+                    reason = f"infrastructure_agent_recommended_ec2: {infra_decision.reasoning[:100]}"
+                elif infra == "LOCAL":
+                    mode = "sync"
+                    reason = f"infrastructure_agent_recommended_local: {infra_decision.reasoning[:100]}"
+                elif infra == "LAMBDA":
+                    # Lambda is typically sync (serverless, fast)
+                    mode = "sync"
+                    reason = f"infrastructure_agent_recommended_lambda: {infra_decision.reasoning[:100]}"
+                
+                logger.info(f"🔧 ExecutionBroker: Infrastructure Decision Agent recommended {infra} -> {mode} mode")
+                
+            except Exception as e:
+                logger.warning(f"⚠️  Infrastructure Decision Agent failed in ExecutionBroker: {e}, falling back to threshold-based routing")
+                # Fall through to threshold-based logic
 
-        # (B) tool overrides
+        # Special-case: FastQC has a local implementation for small inputs.
+        #
+        # The Infrastructure Decision Agent prompt suggests EMR if S3 sizes are unknown
+        # (conservative assumption). In practice, for FastQC we prefer attempting local
+        # execution when inputs are known-small OR size is unknown, and only require EMR
+        # when size clearly exceeds the async threshold.
+        if tool_name == "fastqc_quality_analysis":
+            if estimated_bytes > 0 and estimated_bytes <= threshold:
+                if mode == "async":
+                    mode = "sync"
+                    override = "fastqc_prefer_local_small_inputs"
+                    reason = "fastqc_override_sync_small_inputs"
+            elif estimated_bytes == 0 and unknown_inputs > 0:
+                # Unknown-size FastQ inputs: prefer local attempt over failing EMR submission.
+                if mode == "async":
+                    mode = "sync"
+                    override = "fastqc_prefer_local_unknown_size"
+                    reason = "fastqc_override_sync_unknown_input_sizes"
+        
+        # (B) Fallback: bytes threshold (if infrastructure agent unavailable or didn't decide)
+        # Per infrastructure-decision-agent.md: Medium (100MB-10GB) and Large (>10GB) files use async
+        # Default threshold is 100MB, so medium and large files should route to async
+        if mode == "sync" and reason == "below_threshold":
+            # Route to async if files exceed medium threshold (100MB)
+            # This covers both medium (100MB-10GB) and large (>10GB) files
+            if estimated_bytes > threshold:
+                mode = "async"
+                reason = "bytes_threshold_exceeded_medium_or_large_files"
+
+        # (C) tool overrides
+        # FORCE_ASYNC_TOOLS always take precedence (e.g., FastQC has no local implementation yet)
+        # FORCE_SYNC_TOOLS can be overridden by infrastructure decisions
         if tool_name in self.FORCE_ASYNC_TOOLS:
+            # Tool MUST be async (e.g., FastQC - no local execution implemented)
             mode = "async"
             override = "force_async"
             reason = "tool_override_force_async"
+            if infra_decision and infra_decision.infrastructure.upper() == "LOCAL":
+                logger.warning(f"⚠️  Infrastructure recommended LOCAL but {tool_name} requires async (no local implementation)")
+        elif infra_decision and infra_decision.infrastructure.upper() == "LOCAL":
+            # Infrastructure decision recommends LOCAL - respect it for tools that support local execution
+            logger.info(f"🔧 ExecutionBroker: Respecting LOCAL recommendation for {tool_name}")
+            # mode already set to "sync" by infrastructure decision
         elif tool_name in self.FORCE_SYNC_TOOLS:
             mode = "sync"
             override = "force_sync"
             reason = "tool_override_force_sync"
 
-        # (C) timeout promotion hook (stub)
+        # (D) timeout promotion hook (stub)
         mode, reason = self._timeout_promotion_hook(mode=mode, reason=reason)
 
         return RoutingDecision(
@@ -315,7 +499,7 @@ class ExecutionBroker:
         """
         Async (EMR) FastQC submission. Returns immediately with job_id.
         """
-        from job_manager import get_job_manager
+        from backend.job_manager import get_job_manager
 
         args = req.arguments or {}
         input_r1 = args.get("input_r1") or args.get("r1_path") or ""
@@ -364,7 +548,7 @@ class ExecutionBroker:
         """
         Phase 2: generic EMR runner submission for non-FastQC tools.
         """
-        from job_manager import get_job_manager
+        from backend.job_manager import get_job_manager
 
         jm = get_job_manager()
         tool_args = req.arguments or {}
@@ -392,7 +576,7 @@ class ExecutionBroker:
         }
 
     async def _submit_plan_emr_job(self, req: ExecutionRequest, plan: Plan) -> Dict[str, Any]:
-        from job_manager import get_job_manager
+        from backend.job_manager import get_job_manager
 
         jm = get_job_manager()
         session_id = (req.arguments or {}).get("session_id") or req.session_id

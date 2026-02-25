@@ -12,6 +12,7 @@ WORKDIR /app
 # Install alignment tools (muscle5, clustalw) for sequence alignment
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential curl ca-certificates wget unzip \
+    openjdk-21-jre-headless \
     clustalw && \
     # Download and install muscle5.3 (modern version with -align flag support)
     # Determine architecture and download appropriate binary
@@ -26,17 +27,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     echo "Downloading Muscle from $MUSCLE_URL for architecture $ARCH" && \
     wget "$MUSCLE_URL" -O /usr/local/bin/muscle && \
     chmod +x /usr/local/bin/muscle && \
+    # Install FastQC (requires Java)
+    FASTQC_VERSION="0.12.1" && \
+    wget "https://www.bioinformatics.babraham.ac.uk/projects/fastqc/fastqc_v${FASTQC_VERSION}.zip" -O /tmp/fastqc.zip && \
+    unzip /tmp/fastqc.zip -d /opt/ && \
+    chmod +x /opt/FastQC/fastqc && \
+    ln -s /opt/FastQC/fastqc /usr/local/bin/fastqc && \
+    rm /tmp/fastqc.zip && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
 COPY backend/requirements.txt /app/backend/requirements.txt
-RUN pip install --upgrade pip && pip install -r /app/backend/requirements.txt
+RUN pip install --upgrade pip && pip install -r /app/backend/requirements.txt && pip install awscli
 
 # Copy backend code to /app/backend to maintain import structure
 COPY backend /app/backend
 
 # Copy agents directory for tool-generator-agent.md
 COPY agents /app/agents
+
+# Copy scripts directory for EMR submitters, deploy, etc.
+COPY scripts /app/scripts
 
 # Copy tools directory for tool imports (read_merging, etc.)
 COPY tools /app/tools

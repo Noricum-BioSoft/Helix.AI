@@ -16,6 +16,7 @@ import asyncio
 import logging
 import tempfile
 import subprocess
+import time
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 import json
@@ -84,6 +85,9 @@ def _discover_outputs_from_args(arguments: Dict[str, Any], command: Optional[str
             r'(?:output|save|write|upload)[^\n]*?(s3://[^\s]+)',
             r'\bon\s+(s3://[^\s]+)',
             r'output\s*:\s*(s3://[^\s]+|/[^\s]+)',
+            r'(?:qc\s*reports?|fastqc)\s*[^\n:]*:\s*(s3://[^\s]+|/[^\s]+)',
+            r'(?:alignments?|aligned)\s*[^\n:]*:\s*(s3://[^\s]+|/[^\s]+)',
+            r'(?:counts?|gene\s*counts)\s*[^\n:]*:\s*(s3://[^\s]+|/[^\s]+)',
         ]
         
         for pattern in output_patterns:
@@ -150,7 +154,8 @@ async def generate_and_execute_tool(
     user_request: str,
     session_id: Optional[str] = None,
     inputs: Optional[List[Any]] = None,
-    outputs: Optional[List[Any]] = None
+    outputs: Optional[List[Any]] = None,
+    session_context: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
     Generate and execute a bioinformatics tool for the given command.
@@ -256,30 +261,72 @@ async def generate_and_execute_tool(
                 output_metadata_section += "Expected output locations:\n" + "\n".join(output_paths) + "\n"
                 output_metadata_section += "\n**IMPORTANT**: Ensure your generated code writes the results to these exact output paths. Verify the output location matches the user's request.\n"
         
+        # Get infrastructure decision from Infrastructure Decision Agent
+        infrastructure_decision = None
+        infrastructure_section = ""
+        try:
+            from backend.infrastructure_decision_agent import (
+                decide_infrastructure,
+                InputAsset,
+                OutputAsset,
+                infrastructure_decision_to_dict
+            )
+            
+            # Convert inputs/outputs to InputAsset/OutputAsset objects
+            input_assets = []
+            for inp in inputs or []:
+                if hasattr(inp, 'uri'):
+                    input_assets.append(InputAsset(uri=inp.uri, size_bytes=getattr(inp, 'size_bytes', None), source=getattr(inp, 'source', 'unknown')))
+                elif isinstance(inp, dict):
+                    input_assets.append(InputAsset(uri=inp.get('uri', ''), size_bytes=inp.get('size_bytes'), source=inp.get('source', 'unknown')))
+            
+            output_assets = []
+            for out in outputs or []:
+                if isinstance(out, dict):
+                    output_assets.append(OutputAsset(uri=out.get('uri', ''), estimated_size_bytes=out.get('estimated_size_bytes')))
+                elif isinstance(out, str):
+                    output_assets.append(OutputAsset(uri=out))
+            
+            logger.info(f"🔧 Calling Infrastructure Decision Agent for: {command}")
+            infrastructure_decision = await decide_infrastructure(
+                command=command,
+                inputs=input_assets,
+                outputs=output_assets,
+                session_context=session_context
+            )
+            
+            infra_dict = infrastructure_decision_to_dict(infrastructure_decision)
+            infrastructure_section = f"""
+
+**Infrastructure Decision (from Infrastructure Decision Agent):**
+- **Infrastructure**: {infrastructure_decision.infrastructure}
+- **Reasoning**: {infrastructure_decision.reasoning}
+- **File Analysis**: Total size: {infrastructure_decision.file_analysis.total_size_mb:.2f} MB, Locations: {', '.join(infrastructure_decision.file_analysis.locations)}
+- **Warnings**: {', '.join(infrastructure_decision.warnings) if infrastructure_decision.warnings else 'None'}
+
+**IMPORTANT**: You MUST generate code that executes on **{infrastructure_decision.infrastructure}**. Do NOT make infrastructure decisions - use the provided decision.
+"""
+            logger.info(f"✅ Infrastructure Decision: {infrastructure_decision.infrastructure} - {infrastructure_decision.reasoning}")
+        except Exception as e:
+            logger.warning(f"⚠️  Infrastructure Decision Agent failed: {e}, will proceed without infrastructure decision")
+            infrastructure_section = "\n\n**Note**: Infrastructure decision not available. Use file size information to make a reasonable infrastructure choice."
+        
         # Build the prompt for tool generation
         user_prompt = f"""Generate and execute a solution for this bioinformatics operation:
 
 User Command: {command}
 
 Original Request: {user_request}
-{input_metadata_section}{output_metadata_section}
+{input_metadata_section}{output_metadata_section}{infrastructure_section}
 Please follow the workflow:
 1. Analyze the task and identify the biological operation
 2. Research appropriate bioinformatics tools
-3. Decide on infrastructure:
-   - **EC2 instance with pre-installed tools** (if HELIX_USE_EC2 is enabled): Best for operations requiring established tools
-   - **AWS EMR**: For large S3-hosted files (>100MB), distributed processing
-   - **AWS Batch**: For containerized tools, medium-sized jobs
-   - **Local execution**: Fallback when EC2/cloud not available
-   
-   **IMPORTANT**: Use the file size information provided above to make an informed infrastructure decision. If file sizes are unknown, assume files may be large and prefer EMR for S3-hosted files.
-4. Generate complete, executable Python code
-5. Execute the code and return results
+3. Generate complete, executable Python code for the specified infrastructure ({infrastructure_decision.infrastructure if infrastructure_decision else 'determine based on file sizes'})
+4. Execute the code and return results
 
 Your response should include:
 - Tool selection and justification
-- Infrastructure choice and reasoning
-- Complete Python implementation
+- Complete Python implementation (for {infrastructure_decision.infrastructure if infrastructure_decision else 'the chosen infrastructure'})
 - Execution results
 
 CRITICAL REQUIREMENTS:
@@ -469,7 +516,7 @@ IMPORTANT: Generate ONLY executable Python code that can be run directly. Includ
             code = content
         
         # Check if we should route to EMR based on file sizes
-        # Calculate total file size from inputs
+        # Calculate total file size from inputs for execution routing
         total_size = 0
         if inputs:
             for inp in inputs:
@@ -478,21 +525,144 @@ IMPORTANT: Generate ONLY executable Python code that can be run directly. Includ
                 elif isinstance(inp, dict) and isinstance(inp.get('size_bytes'), int):
                     total_size += inp['size_bytes']
         
-        # Get EMR threshold (default 100MB, matching execution_broker)
-        emr_threshold = int(os.getenv('HELIX_ASYNC_BYTES_THRESHOLD', 100 * 1024 * 1024))
+        # Self-healing execution with retry on failure
+        max_retries = 2
+        execution_result = None
         
-        # Route to EMR if files are large
-        if total_size > emr_threshold:
-            logger.warning(f"⚠️  Tool Generator Agent: Files are large ({total_size / (1024*1024):.2f} MB > {emr_threshold / (1024*1024):.2f} MB)")
-            logger.warning(f"⚠️  EMR routing for tool-generator-agent is not yet implemented. This should be routed through execution_broker.")
-            logger.warning(f"⚠️  For now, executing on EC2 (may be slow for large files).")
-            logger.info("🔧 Tool Generator Agent: Executing generated code on EC2 (EMR routing pending implementation)...")
-            # Pass total_size to _execute_generated_code so it can skip EC2 if needed
-            execution_result = await _execute_generated_code(code, command, session_id, total_file_size_bytes=total_size)
-        else:
-            # Execute the generated code locally or on EC2
-            logger.info("🔧 Tool Generator Agent: Executing generated code...")
-            execution_result = await _execute_generated_code(code, command, session_id, total_file_size_bytes=total_size)
+        for attempt in range(max_retries + 1):
+            if attempt > 0:
+                logger.info(f"🔄 Retry attempt {attempt}/{max_retries} - Regenerating code with error feedback...")
+                
+                # Build error feedback for LLM
+                error_feedback = f"""
+**PREVIOUS ATTEMPT FAILED** (Attempt {attempt}):
+
+**Error Details:**
+- Exit Code: {execution_result.get('exit_code', 'unknown')}
+- Error Message: {execution_result.get('error', 'unknown')}
+
+**stderr Output:**
+```
+{execution_result.get('stderr_full', execution_result.get('stderr', 'N/A'))[:2000]}
+```
+
+**stdout Output:**
+```
+{execution_result.get('stdout', 'N/A')[:1000]}
+```
+
+**Common Issues to Fix:**
+1. If "STAR not found" or "tool not available": DO NOT try to install tools - they are not in the Docker image. Use pure Python implementation with BioPython/pysam instead.
+2. If "Missing output" error: Check that you're reading OUTPUT_PATH/OUTPUT_DIR environment variables correctly
+3. If "Missing input" error: Check that you're reading INPUT_R1/INPUT_R2/INPUT_FILES environment variables correctly
+4. If "conda not available": Skip conda installation entirely - generate pure Python fallback immediately
+
+**CRITICAL**: Please generate a FIXED version of the code that addresses the above error. Focus on the root cause.
+"""
+                
+                # Regenerate with error feedback
+                retry_prompt = user_prompt + error_feedback
+                response = await llm.ainvoke([
+                    {"role": "system", "content": TOOL_GENERATOR_SYSTEM_PROMPT},
+                    {"role": "user", "content": retry_prompt}
+                ])
+                
+                # Extract code from retry response
+                retry_content = response.content if hasattr(response, 'content') else str(response)
+                code = _extract_python_code(retry_content)
+                if not code:
+                    logger.error("❌ Failed to extract code from retry response")
+                    # Try using full response as code
+                    code = retry_content
+                
+                logger.info(f"✅ Regenerated code ({len(code)} chars) for retry attempt {attempt}")
+            
+            # Execute code (common for both first attempt and retries)
+            if infrastructure_decision:
+                infra = infrastructure_decision.infrastructure.upper()
+                if attempt == 0:
+                    logger.info(f"🔧 Tool Generator Agent: Executing on {infra} (from Infrastructure Decision Agent)")
+                
+                if infra == "EMR":
+                    logger.warning(f"⚠️  Infrastructure Decision Agent recommended EMR, but EMR routing for tool-generator-agent is not yet fully implemented.")
+                    logger.warning(f"⚠️  This should be routed through execution_broker. For now, executing on EC2 (may be slow for large files).")
+                    execution_result = await _execute_generated_code(
+                        code,
+                        command,
+                        session_id,
+                        total_file_size_bytes=total_size,
+                        inputs=inputs,
+                        outputs=outputs
+                    )
+                elif infra == "EC2":
+                    if attempt == 0:
+                        logger.info("🔧 Executing generated code on EC2...")
+                    execution_result = await _execute_generated_code(
+                        code,
+                        command,
+                        session_id,
+                        total_file_size_bytes=total_size,
+                        inputs=inputs,
+                        outputs=outputs
+                    )
+                elif infra == "LOCAL":
+                    if attempt == 0:
+                        logger.info("🔧 Executing generated code locally...")
+                    execution_result = await _execute_generated_code(
+                        code,
+                        command,
+                        session_id,
+                        total_file_size_bytes=total_size,
+                        inputs=inputs,
+                        outputs=outputs
+                    )
+                else:
+                    # Batch, Lambda, or unknown - default to local/EC2
+                    if attempt == 0:
+                        logger.info(f"🔧 Infrastructure {infra} not yet fully supported, executing on EC2/Local...")
+                    execution_result = await _execute_generated_code(
+                        code,
+                        command,
+                        session_id,
+                        total_file_size_bytes=total_size,
+                        inputs=inputs,
+                        outputs=outputs
+                    )
+            else:
+                # Fallback: use simple threshold-based routing if infrastructure decision unavailable
+                emr_threshold = int(os.getenv('HELIX_ASYNC_BYTES_THRESHOLD', 100 * 1024 * 1024))
+                if attempt == 0 and total_size > emr_threshold:
+                    logger.warning(f"⚠️  Files are large ({total_size / (1024*1024):.2f} MB > {emr_threshold / (1024*1024):.2f} MB)")
+                    logger.warning(f"⚠️  EMR routing for tool-generator-agent is not yet implemented. Executing on EC2 (may be slow).")
+                if attempt == 0:
+                    logger.info("🔧 Tool Generator Agent: Executing generated code...")
+                execution_result = await _execute_generated_code(
+                    code,
+                    command,
+                    session_id,
+                    total_file_size_bytes=total_size,
+                    inputs=inputs,
+                    outputs=outputs
+                )
+            
+            # Check if execution succeeded
+            if isinstance(execution_result, dict):
+                exec_status = execution_result.get("status", "error")
+                if exec_status == "success":
+                    if attempt > 0:
+                        logger.info(f"✅ Code fixed successfully after {attempt} retry(ies)!")
+                    break  # Success - exit retry loop
+                else:
+                    # Execution failed
+                    if attempt < max_retries:
+                        logger.warning(f"⚠️  Execution failed (attempt {attempt + 1}/{max_retries + 1})")
+                        # Continue to retry
+                    else:
+                        logger.error(f"❌ All {max_retries + 1} execution attempts failed")
+                        # Exit retry loop with final failure
+            else:
+                # Non-dict result (unexpected) - treat as success
+                break
 
         # If execution failed, propagate failure status so callers don't treat it as success.
         exec_status = "success"
@@ -504,8 +674,10 @@ IMPORTANT: Generate ONLY executable Python code that can be run directly. Includ
         error_message = None
         if overall_status == "error" and isinstance(execution_result, dict):
             error_message = execution_result.get("error")
-            if not error_message and execution_result.get("stderr"):
-                error_message = f"Execution failed: {execution_result.get('stderr', '')[:500]}"
+            if not error_message and execution_result.get("stderr_full"):
+                error_message = f"Execution failed: {execution_result.get('stderr_full', '')}"
+            elif not error_message and execution_result.get("stderr"):
+                error_message = f"Execution failed: {execution_result.get('stderr', '')}"
             elif not error_message:
                 error_message = "Tool execution failed (see execution_result for details)"
 
@@ -584,7 +756,9 @@ async def _execute_generated_code(
     code: str,
     original_command: str,
     session_id: Optional[str] = None,
-    total_file_size_bytes: int = 0
+    total_file_size_bytes: int = 0,
+    inputs: Optional[List[Any]] = None,
+    outputs: Optional[List[Any]] = None
 ) -> Dict[str, Any]:
     """
     Execute the generated Python code in a safe environment.
@@ -607,6 +781,219 @@ async def _execute_generated_code(
             "stderr": f"File size {total_file_size_bytes / (1024*1024):.2f} MB exceeds EMR threshold {emr_threshold / (1024*1024):.2f} MB. EMR routing required but not implemented for tool-generator-agent.",
             "stdout": ""
         }
+    
+    # Build execution environment variables for generated code
+    exec_env_vars: Dict[str, str] = {}
+    input_uris: List[str] = []
+    output_uris: List[str] = []
+
+    if inputs:
+        for inp in inputs:
+            if hasattr(inp, "uri"):
+                uri = inp.uri
+            elif isinstance(inp, dict):
+                uri = inp.get("uri")
+            else:
+                uri = None
+            if uri:
+                input_uris.append(str(uri))
+
+    if outputs:
+        for out in outputs:
+            if hasattr(out, "uri"):
+                uri = out.uri
+            elif isinstance(out, dict):
+                uri = out.get("uri")
+            else:
+                uri = None
+            if uri:
+                output_uris.append(str(uri))
+
+    if input_uris:
+        exec_env_vars["INPUT_FILES"] = ",".join(input_uris)
+        exec_env_vars["INPUT_R1"] = input_uris[0]
+        if len(input_uris) > 1:
+            exec_env_vars["INPUT_R2"] = input_uris[1]
+
+    if output_uris:
+        exec_env_vars["OUTPUT_PATH"] = output_uris[0]
+        exec_env_vars["OUTPUT_URI"] = output_uris[0]
+        if output_uris[0].startswith("s3://"):
+            exec_env_vars["OUTPUT_DIR"] = output_uris[0].rsplit("/", 1)[0]
+        else:
+            exec_env_vars["OUTPUT_DIR"] = str(Path(output_uris[0]).parent) if "/" in output_uris[0] else output_uris[0]
+
+    exec_env_vars["HELIX_ORIGINAL_COMMAND"] = original_command or ""
+
+    # Check if Docker sandbox execution is enabled (NEW!)
+    # Docker sandbox has all bioinformatics tools pre-installed
+    use_sandbox = os.getenv('HELIX_USE_SANDBOX', 'true').lower() == 'true'
+    if use_sandbox and os.getenv("HELIX_MOCK_MODE") != "1":
+        logger.info("🐳 Attempting to execute generated code in Docker sandbox (all bioinfo tools available)")
+        try:
+            import tempfile
+            from pathlib import Path
+            import subprocess
+            
+            # Get Docker image name
+            biotools_image = os.getenv('HELIX_BIOTOOLS_IMAGE', 'helix-biotools:latest')
+            
+            # Check if Docker is available
+            docker_check = subprocess.run(
+                ["docker", "--version"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            
+            if docker_check.returncode != 0:
+                logger.warning("⚠️  Docker not available, falling back to local/EC2 execution")
+            else:
+                # Check if image exists
+                image_check = subprocess.run(
+                    ["docker", "images", "-q", biotools_image],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                
+                if not image_check.stdout.strip():
+                    logger.warning(f"⚠️  Docker image {biotools_image} not found, falling back to local/EC2 execution")
+                    logger.warning(f"💡 Build it with: docker build -f backend/Dockerfile.biotools -t {biotools_image} .")
+                else:
+                    # Save code to persistent location for debugging
+                    debug_dir = PROJECT_ROOT / "sessions" / "generated_code"
+                    debug_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    # Create meaningful filename
+                    import re
+                    tool_name = re.sub(r'[^a-zA-Z0-9_-]', '_', original_command[:50])
+                    timestamp = time.strftime("%Y%m%d_%H%M%S")
+                    debug_filename = f"{tool_name}_{timestamp}.py"
+                    debug_path = debug_dir / debug_filename
+                    
+                    # Save to both debug location and temp file for execution
+                    debug_path.write_text(code)
+                    
+                    temp_file = tempfile.NamedTemporaryFile(
+                        mode='w',
+                        suffix='.py',
+                        delete=False,
+                        dir='/tmp'
+                    )
+                    temp_file.write(code)
+                    temp_file.flush()
+                    temp_file_path = temp_file.name
+                    temp_file.close()
+                    
+                    logger.info(f"🐳 Executing in Docker sandbox: {biotools_image}")
+                    logger.info(f"📝 Code saved to: {temp_file_path}")
+                    logger.info(f"💾 Debug copy saved to: {debug_path}")
+                    
+                    try:
+                        env_args: List[str] = []
+                        for key, value in exec_env_vars.items():
+                            env_args.extend(["-e", f"{key}={value}"])
+
+                        # Forward AWS credentials/config to Docker for S3 access
+                        aws_env_keys = [
+                            "AWS_ACCESS_KEY_ID",
+                            "AWS_SECRET_ACCESS_KEY",
+                            "AWS_SESSION_TOKEN",
+                            "AWS_DEFAULT_REGION",
+                            "AWS_REGION",
+                            "AWS_PROFILE"
+                        ]
+                        for key in aws_env_keys:
+                            if os.getenv(key):
+                                env_args.extend(["-e", f"{key}={os.getenv(key)}"])
+
+                        aws_credentials_dir = os.path.expanduser("~/.aws")
+                        aws_volume_args: List[str] = []
+                        if os.path.isdir(aws_credentials_dir):
+                            aws_volume_args = ["-v", f"{aws_credentials_dir}:/root/.aws:ro"]
+
+                        # Execute code in Docker sandbox
+                        result = subprocess.run(
+                            [
+                                "docker", "run", "--rm",
+                                *env_args,
+                                *aws_volume_args,
+                                "-v", f"{temp_file_path}:/code/script.py:ro",
+                                "-w", "/sandbox/work",
+                                "--memory", "4g",
+                                "--cpus", "2",
+                                "--network", "host",  # For S3 access
+                                biotools_image,
+                                "python", "/code/script.py"
+                            ],
+                            capture_output=True,
+                            text=True,
+                            timeout=300
+                        )
+                        
+                        # Cleanup temp file
+                        try:
+                            os.unlink(temp_file_path)
+                        except:
+                            pass
+                        
+                        logger.info(f"🐳 Docker execution completed with exit code: {result.returncode}")
+                        
+                        if result.returncode == 0:
+                            logger.info("✅ Code executed successfully in Docker sandbox")
+                            return {
+                                "status": "success",
+                                "stdout": result.stdout,
+                                "stderr": result.stderr,
+                                "stderr_full": result.stderr,
+                                "exit_code": result.returncode
+                            }
+                        else:
+                            logger.warning(f"⚠️  Docker execution failed with exit code {result.returncode}")
+                            if result.stderr:
+                                # Log first 500 chars as warning
+                                logger.warning(f"stderr (preview): {result.stderr[:500]}")
+                                # Log full stderr as error for debugging
+                                logger.error(f"stderr (FULL):\n{result.stderr}")
+                            else:
+                                logger.warning("stderr: N/A")
+                            
+                            if result.stdout:
+                                logger.info(f"stdout:\n{result.stdout}")
+                            
+                            return {
+                                "status": "error",
+                                "error": f"Code execution failed with return code {result.returncode}",
+                                "stdout": result.stdout,
+                                "stderr": result.stderr,
+                                "stderr_full": result.stderr,
+                                "exit_code": result.returncode
+                            }
+                            
+                    except subprocess.TimeoutExpired:
+                        logger.error("❌ Docker execution timed out (300s)")
+                        try:
+                            os.unlink(temp_file_path)
+                        except:
+                            pass
+                        return {
+                            "status": "error",
+                            "error": "Execution timed out after 300 seconds",
+                            "stdout": "",
+                            "stderr": "Timeout"
+                        }
+                    except Exception as e:
+                        logger.error(f"❌ Docker execution exception: {e}", exc_info=True)
+                        try:
+                            os.unlink(temp_file_path)
+                        except:
+                            pass
+                        # Fall through to EC2/local execution
+                        
+        except Exception as e:
+            logger.error(f"❌ Sandbox setup failed: {e}", exc_info=True)
+            # Fall through to EC2/local execution
     
     # Check if EC2 execution is enabled.
     # In unit tests we default to mock mode; never attempt real EC2/SSH there.
@@ -722,6 +1109,10 @@ async def _execute_generated_code(
         else:
             env['HELIX_AVAILABLE_TOOLS'] = ''
         
+        # Add execution context variables for generated tools
+        if exec_env_vars:
+            env.update(exec_env_vars)
+
         # Indicate that Python-based solutions should be preferred
         env['HELIX_PREFER_PYTHON'] = '1'
         
@@ -743,6 +1134,7 @@ async def _execute_generated_code(
                 "status": "success",
                 "stdout": stdout,
                 "stderr": stderr,
+                "stderr_full": stderr,
                 "returncode": result.returncode
             }
         else:
@@ -750,6 +1142,7 @@ async def _execute_generated_code(
                 "status": "error",
                 "stdout": stdout,
                 "stderr": stderr,
+                "stderr_full": stderr,
                 "returncode": result.returncode,
                 "error": f"Code execution failed with return code {result.returncode}"
             }

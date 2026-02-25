@@ -121,6 +121,37 @@ def _get_llm():
     )
 
 
+def _map_intent_labels_to_binary(intent_labels: List[str]) -> tuple[Intent, str]:
+    """
+    Map multi-label intent classification to binary decision (execute or qa).
+    
+    Args:
+        intent_labels: List of intent labels from LLM (e.g., ["question", "action", "data"])
+        
+    Returns:
+        Tuple of (intent, reason) where:
+        - intent: "execute" or "qa"
+        - reason: String describing the classification reason
+    """
+    has_action = "action" in intent_labels
+    has_question = "question" in intent_labels
+    
+    if has_action:
+        # If action is present, it's an execute request
+        intent: Intent = "execute"
+        reason = f"llm_classified_action_{','.join(intent_labels)}"
+    elif has_question and not has_action:
+        # Only question, no action → Q&A
+        intent = "qa"
+        reason = f"llm_classified_question_{','.join(intent_labels)}"
+    else:
+        # Default to execute for ambiguous cases (safer for command-style UI)
+        intent = "execute"
+        reason = f"llm_classified_default_{','.join(intent_labels) if intent_labels else 'no_labels'}"
+    
+    return intent, reason
+
+
 def _classify_intent_with_llm(text: str) -> IntentDecision:
     """
     Classify intent using LLM agent based on intent-detector-agent.md prompt.
@@ -179,21 +210,7 @@ def _classify_intent_with_llm(text: str) -> IntentDecision:
             intent_labels = []
         
         # Map multi-label to binary decision
-        has_action = "action" in intent_labels
-        has_question = "question" in intent_labels
-        
-        if has_action:
-            # If action is present, it's an execute request
-            intent = "execute"
-            reason = f"llm_classified_action_{','.join(intent_labels)}"
-        elif has_question and not has_action:
-            # Only question, no action → Q&A
-            intent = "qa"
-            reason = f"llm_classified_question_{','.join(intent_labels)}"
-        else:
-            # Default to execute for ambiguous cases (safer for command-style UI)
-            intent = "execute"
-            reason = f"llm_classified_default_{','.join(intent_labels) if intent_labels else 'no_labels'}"
+        intent, reason = _map_intent_labels_to_binary(intent_labels)
         
         logger.info(f"Intent classified by LLM: {intent} (labels: {intent_labels}, reason: {reason})")
         return IntentDecision(intent=intent, reason=reason)

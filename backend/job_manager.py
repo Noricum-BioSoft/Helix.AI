@@ -11,6 +11,7 @@ import logging
 import subprocess
 import re
 import json
+import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, List, Tuple
 from pathlib import Path
@@ -57,6 +58,106 @@ class JobManager:
         """Initialize the JobManager with empty job store."""
         self.jobs: Dict[str, Dict] = {}
         self.project_root = Path(__file__).resolve().parent.parent
+        self.jobs_file = self.project_root / "sessions" / "jobs.json"
+        self._load_jobs()
+
+    def _save_jobs(self):
+        """Save jobs to persistent storage."""
+        try:
+            # Ensure sessions directory exists
+            self.jobs_file.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Save jobs to JSON file
+            with open(self.jobs_file, 'w') as f:
+                json.dump(self.jobs, f, indent=2, default=str)
+            
+            logger.debug(f"Saved {len(self.jobs)} jobs to {self.jobs_file}")
+        except Exception as e:
+            logger.error(f"Failed to save jobs to {self.jobs_file}: {e}")
+
+    def _load_jobs(self):
+        """Load jobs from persistent storage."""
+        try:
+            if self.jobs_file.exists():
+                with open(self.jobs_file, 'r') as f:
+                    self.jobs = json.load(f)
+                logger.info(f"Loaded {len(self.jobs)} jobs from {self.jobs_file}")
+            else:
+                logger.debug(f"Jobs file {self.jobs_file} does not exist, starting with empty job store")
+        except Exception as e:
+            logger.error(f"Failed to load jobs from {self.jobs_file}: {e}")
+            self.jobs = {}
+
+    # -----------------------------
+    # Local (non-EMR) job support
+    # -----------------------------
+    def create_local_tool_job(
+        self,
+        *,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+        session_id: Optional[str] = None,
+        original_command: Optional[str] = None,
+    ) -> str:
+        """
+        Create a local background job entry.
+
+        This is used when we need to return quickly to the frontend (e.g., CloudFront 60s origin timeout),
+        but still want to execute the tool locally on the backend host.
+        """
+        job_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        self.jobs[job_id] = {
+            "job_id": job_id,
+            "status": STATUS_SUBMITTED,
+            "type": "local",
+            "job_type": "tool",
+            "tool_name": tool_name,
+            "args": tool_args or {},
+            "infra": {
+                "provider": "local",
+                "service": "local",
+            },
+            "session_id": session_id,
+            "original_command": original_command,
+            "submitted_at": now,
+            "updated_at": now,
+            "started_at": None,
+            "completed_at": None,
+            "error": None,
+            "result": None,
+        }
+        self._save_jobs()
+        return job_id
+
+    def set_local_job_running(self, job_id: str) -> None:
+        if job_id not in self.jobs:
+            raise ValueError(f"Job {job_id} not found")
+        now = datetime.now(timezone.utc).isoformat()
+        self.jobs[job_id]["status"] = STATUS_RUNNING
+        self.jobs[job_id]["started_at"] = self.jobs[job_id].get("started_at") or now
+        self.jobs[job_id]["updated_at"] = now
+        self._save_jobs()
+
+    def set_local_job_completed(self, job_id: str, result: Any) -> None:
+        if job_id not in self.jobs:
+            raise ValueError(f"Job {job_id} not found")
+        now = datetime.now(timezone.utc).isoformat()
+        self.jobs[job_id]["status"] = STATUS_COMPLETED
+        self.jobs[job_id]["completed_at"] = now
+        self.jobs[job_id]["updated_at"] = now
+        self.jobs[job_id]["result"] = result
+        self._save_jobs()
+
+    def set_local_job_failed(self, job_id: str, error: str) -> None:
+        if job_id not in self.jobs:
+            raise ValueError(f"Job {job_id} not found")
+        now = datetime.now(timezone.utc).isoformat()
+        self.jobs[job_id]["status"] = STATUS_FAILED
+        self.jobs[job_id]["completed_at"] = now
+        self.jobs[job_id]["updated_at"] = now
+        self.jobs[job_id]["error"] = error
+        self._save_jobs()
 
     def submit_fastqc_job(
         self,
@@ -112,23 +213,32 @@ class JobManager:
             except Exception as e:
                 logger.warning(f"Failed to get session S3 path: {e}. Using default output location.")
         
-        # Get EMR cluster ID from environment
+        # Get EMR cluster ID from environment, or find/create one
         cluster_id = os.getenv("EMR_CLUSTER_ID")
-        if not cluster_id:
-            raise ValueError(
-                "EMR_CLUSTER_ID environment variable not set. "
-                "Please set it to your EMR cluster ID (e.g., j-XXXXXXXXXXXXX)"
-            )
         
-        # Check cluster state before submission
-        cluster_state = self._check_cluster_state(cluster_id)
-        if not cluster_state or cluster_state not in ("WAITING", "RUNNING"):
-            # Cluster doesn't exist, is terminated, or not ready
-            if cluster_state:
-                logger.info(f"Cluster {cluster_id} is in state '{cluster_state}' (not ready)")
+        if cluster_id:
+            # Check cluster state before submission
+            cluster_state = self._check_cluster_state(cluster_id)
+            if cluster_state and cluster_state in ("WAITING", "RUNNING"):
+                # Cluster exists and is ready, use it
+                pass
+            elif cluster_state == "STARTING":
+                # Cluster is starting; do not block the request path. The background
+                # submission script will wait until the cluster is ready.
+                logger.info(
+                    f"Cluster {cluster_id} is STARTING. Will submit step in background when ready."
+                )
             else:
-                logger.info(f"Cluster {cluster_id} not found or inaccessible")
-            
+                # Cluster doesn't exist, is terminated, or in unknown state
+                if cluster_state:
+                    logger.info(f"Cluster {cluster_id} is in state '{cluster_state}' (not ready)")
+                else:
+                    logger.info(f"Cluster {cluster_id} not found or inaccessible")
+                cluster_id = None  # Reset to trigger find/create logic
+        else:
+            logger.info("EMR_CLUSTER_ID not set, will find active cluster or create new one...")
+        
+        if not cluster_id:
             # Try to find an active cluster
             active_cluster_id = self._find_active_cluster()
             if active_cluster_id:
@@ -150,13 +260,9 @@ class JobManager:
                         f"Please create a cluster manually using ./scripts/aws/setup-emr-cluster.sh"
                     )
                 
-                # Wait for cluster to be ready
-                logger.info(f"Waiting for new cluster {new_cluster_id} to be ready...")
-                if not self._wait_for_cluster_ready(new_cluster_id, max_wait_minutes=15):
-                    raise RuntimeError(
-                        f"New EMR cluster {new_cluster_id} did not become ready within 15 minutes. "
-                        f"Please check the cluster status manually."
-                    )
+                # For async execution, don't wait for cluster to be ready
+                # EMR will queue the step and execute it when the cluster is ready
+                logger.info(f"Cluster {new_cluster_id} created. Job will be queued and executed when cluster is ready.")
                 
                 cluster_id = new_cluster_id
                 # Update environment for the script
@@ -170,6 +276,18 @@ class JobManager:
             raise FileNotFoundError(
                 f"Submission script not found at {script_path}"
             )
+        
+        # Ensure script is executable
+        if not os.access(script_path, os.X_OK):
+            logger.warning(f"Submit script {script_path} is not executable, attempting to fix...")
+            try:
+                os.chmod(script_path, 0o755)
+                logger.info(f"Made {script_path} executable")
+            except Exception as e:
+                raise RuntimeError(
+                    f"Submit script {script_path} is not executable and could not be made executable: {e}. "
+                    f"Please run: chmod +x {script_path}"
+                )
         
         # Prepare environment for subprocess
         env = os.environ.copy()
@@ -188,39 +306,73 @@ class JobManager:
         logger.info(f"Using script: {script_path}")
         logger.info(f"Working directory: {self.project_root}")
         
-        try:
-            # Run submission script and capture output
-            # Set cwd to project root so relative paths in script work correctly
-            result = subprocess.run(
-                cmd,
-                env=env,
-                cwd=str(self.project_root),
-                capture_output=True,
-                text=True,
-                timeout=60,  # 60 second timeout for submission
-            )
-            
-            if result.returncode != 0:
-                error_msg = result.stderr or result.stdout or "Unknown error"
-                logger.error(f"Job submission failed: {error_msg}")
-                raise RuntimeError(f"Failed to submit job: {error_msg}")
-            
-            # Extract step ID from output
-            # The script outputs: "Step ID: s-XXXXXXXXXXXXX"
-            step_id = self._extract_step_id(result.stdout)
-            
-            if not step_id:
-                logger.warning(
-                    f"Could not extract step ID from output: {result.stdout}"
-                )
-                # Still create job record, but without step_id
-                # Status checking will be limited
+        # Initialize step_id as None - will be set by background thread
+        step_id = None
         
-        except subprocess.TimeoutExpired:
-            raise RuntimeError("Job submission timed out after 60 seconds")
-        except Exception as e:
-            logger.error(f"Exception during job submission: {e}")
-            raise RuntimeError(f"Job submission failed: {str(e)}")
+        # Run submission script in background thread so we can return immediately
+        def _submit_job_async():
+            """Background thread that waits for cluster and submits job"""
+            try:
+                logger.info(f"[Background] Starting job submission for {job_id}")
+                
+                # Run submission script and capture output
+                # Set cwd to project root so relative paths in script work correctly
+                result = subprocess.run(
+                    cmd,
+                    env=env,
+                    cwd=str(self.project_root),
+                    capture_output=True,
+                    text=True,
+                    timeout=900,  # 15 minute timeout (matches submit-fastqc-job.sh max wait time)
+                )
+                
+                if result.returncode != 0:
+                    error_msg = result.stderr or result.stdout or "Unknown error"
+                    logger.error(f"[Background] Job submission failed for {job_id}: {error_msg}")
+                    # Update job status to failed
+                    if job_id in self.jobs:
+                        self.jobs[job_id]["status"] = "failed"
+                        self.jobs[job_id]["error"] = error_msg
+                        self._save_jobs()
+                    return
+                
+                # Extract step ID from output
+                # The script outputs: "Step ID: s-XXXXXXXXXXXXX"
+                extracted_step_id = self._extract_step_id(result.stdout)
+                
+                if extracted_step_id:
+                    logger.info(f"[Background] Job {job_id} submitted with step ID: {extracted_step_id}")
+                    # Update job record with step_id
+                    if job_id in self.jobs:
+                        self.jobs[job_id]["step_id"] = extracted_step_id
+                        self.jobs[job_id]["status"] = "running"  # Update from pending to running
+                        self._save_jobs()
+                else:
+                    logger.warning(
+                        f"[Background] Could not extract step ID from output for job {job_id}: {result.stdout}"
+                    )
+                    # Still mark as running, status checks will poll EMR
+                    if job_id in self.jobs:
+                        self.jobs[job_id]["status"] = "running"
+                        self._save_jobs()
+                    
+            except subprocess.TimeoutExpired:
+                logger.error(f"[Background] Job submission timed out for {job_id} after 900 seconds")
+                if job_id in self.jobs:
+                    self.jobs[job_id]["status"] = "failed"
+                    self.jobs[job_id]["error"] = "Job submission timed out after 15 minutes"
+                    self._save_jobs()
+            except Exception as e:
+                logger.error(f"[Background] Exception during job submission for {job_id}: {e}")
+                if job_id in self.jobs:
+                    self.jobs[job_id]["status"] = "failed"
+                    self.jobs[job_id]["error"] = f"Job submission failed: {str(e)}"
+                    self._save_jobs()
+        
+        # Start background thread
+        submission_thread = threading.Thread(target=_submit_job_async, daemon=True)
+        submission_thread.start()
+        logger.info(f"✅ Job {job_id} queued for submission (background thread started)")
         
         # Create job directory in session's directory if session_id is provided
         job_local_path = None
@@ -261,9 +413,11 @@ class JobManager:
                 traceback.print_exc()
         
         # Store job metadata
+        # Status is "pending" because background thread is submitting to EMR
+        # Will be updated to "running" once step_id is obtained
         self.jobs[job_id] = {
             "job_id": job_id,
-            "status": STATUS_SUBMITTED,
+            "status": "pending",  # Background thread will update to "running" once submitted
             "type": "fastqc",
             # Phase 1.4: generalized job fields (keep legacy keys too)
             "job_type": "tool",
@@ -277,11 +431,11 @@ class JobManager:
                 "provider": "aws",
                 "service": "emr",
                 "cluster_id": cluster_id,
-                "step_id": step_id,
+                "step_id": step_id,  # Will be None initially, updated by background thread
             },
             "results": {},
             "cluster_id": cluster_id,
-            "step_id": step_id,
+            "step_id": step_id,  # Will be None initially, updated by background thread
             "r1_path": r1_path,
             "r2_path": r2_path,
             "output_path": output_path,
@@ -291,6 +445,9 @@ class JobManager:
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "error": None,
         }
+        
+        # Save jobs to persistent storage immediately
+        self._save_jobs()
         
         # Save job metadata to local directory if job_local_path exists
         if job_local_path:
@@ -302,7 +459,7 @@ class JobManager:
             except Exception as e:
                 logger.warning(f"Failed to save job metadata to local directory: {e}")
         
-        logger.info(f"Job {job_id} submitted successfully with step_id {step_id}")
+        logger.info(f"✅ Job {job_id} created and queued for submission (step_id will be assigned by background thread)")
         return job_id
 
     def submit_universal_emr_job(
@@ -414,32 +571,67 @@ class JobManager:
                 pass
 
         # Submit EMR step via script
+        # Get EMR cluster ID from environment, or find/create one
         cluster_id = os.getenv("EMR_CLUSTER_ID")
+        
+        if cluster_id:
+            # Check if the specified cluster is ready
+            cluster_state = self._check_cluster_state(cluster_id)
+            if cluster_state and cluster_state in ("WAITING", "RUNNING"):
+                # Cluster exists and is ready, use it
+                pass
+            elif cluster_state == "STARTING":
+                # Cluster is starting, wait for it to be ready
+                logger.info(f"Cluster {cluster_id} is starting. Waiting for it to be ready...")
+                if self._wait_for_cluster_ready(cluster_id, max_wait_minutes=15):
+                    logger.info(f"Cluster {cluster_id} is now ready")
+                else:
+                    logger.warning(f"Timeout waiting for cluster {cluster_id} to be ready. Will try to find alternative or create new cluster.")
+                    cluster_id = None  # Reset to trigger find/create logic
+            else:
+                # Specified cluster is not ready, try to find an active one or create new
+                logger.info(f"Cluster {cluster_id} is not ready (state: {cluster_state}), looking for alternatives...")
+                cluster_id = None  # Reset to trigger find/create logic
+        else:
+            # No cluster ID specified, will find or create one
+            logger.info("EMR_CLUSTER_ID not set, will find active cluster or create new one...")
+        
         if not cluster_id:
-            raise ValueError("EMR_CLUSTER_ID environment variable not set.")
-
-        cluster_state = self._check_cluster_state(cluster_id)
-        if not cluster_state or cluster_state not in ("WAITING", "RUNNING"):
+            # Try to find an active cluster
             active_cluster_id = self._find_active_cluster()
             if active_cluster_id:
+                logger.info(f"Found active cluster {active_cluster_id}, using it.")
                 cluster_id = active_cluster_id
                 os.environ["EMR_CLUSTER_ID"] = cluster_id
             else:
+                # No active cluster found - create a new one
+                logger.info("No active clusters found. Creating a new EMR cluster...")
                 new_cluster_id = self._create_emr_cluster()
                 if not new_cluster_id:
                     raise RuntimeError(
                         "Failed to create new EMR cluster. Please create a cluster manually using ./scripts/aws/setup-emr-cluster.sh"
                     )
-                if not self._wait_for_cluster_ready(new_cluster_id, max_wait_minutes=15):
-                    raise RuntimeError(
-                        f"New EMR cluster {new_cluster_id} did not become ready within 15 minutes."
-                    )
+                # For async execution, don't wait for cluster to be ready
+                # EMR will queue the step and execute it when the cluster is ready
+                logger.info(f"Cluster {new_cluster_id} created. Job will be queued and executed when cluster is ready.")
                 cluster_id = new_cluster_id
                 os.environ["EMR_CLUSTER_ID"] = cluster_id
 
         submit_script = self.project_root / "scripts" / "emr" / "submit-universal-job.sh"
         if not submit_script.exists():
             raise FileNotFoundError(f"Universal submit script not found at {submit_script}")
+        
+        # Ensure script is executable
+        if not os.access(submit_script, os.X_OK):
+            logger.warning(f"Submit script {submit_script} is not executable, attempting to fix...")
+            try:
+                os.chmod(submit_script, 0o755)
+                logger.info(f"Made {submit_script} executable")
+            except Exception as e:
+                raise RuntimeError(
+                    f"Submit script {submit_script} is not executable and could not be made executable: {e}. "
+                    f"Please run: chmod +x {submit_script}"
+                )
 
         try:
             result = subprocess.run(
@@ -457,6 +649,16 @@ class JobManager:
         except subprocess.TimeoutExpired:
             raise RuntimeError("Universal job submission timed out after 60 seconds")
 
+        # Extract input paths from tool_args for common tools (for metadata/display purposes)
+        r1_path = None
+        r2_path = None
+        if tool_name == "read_merging":
+            r1_path = tool_args.get("forward_reads") or tool_args.get("r1_path")
+            r2_path = tool_args.get("reverse_reads") or tool_args.get("r2_path")
+        elif tool_name == "fastqc_quality_analysis":
+            r1_path = tool_args.get("input_r1") or tool_args.get("r1_path")
+            r2_path = tool_args.get("input_r2") or tool_args.get("r2_path")
+        
         # Store job record
         self.jobs[job_id] = {
             "job_id": job_id,
@@ -480,6 +682,8 @@ class JobManager:
             "tools_bundle_s3": tools_bundle_s3,
             "python_code_s3": python_code_s3,
             "session_id": session_id,
+            "r1_path": r1_path,
+            "r2_path": r2_path,
             "submitted_at": datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "error": None,
@@ -563,9 +767,44 @@ class JobManager:
                         # Save updated job metadata to local directory
                         self._save_job_metadata_to_local(job_id)
                         
-                        # If job just completed successfully, generate HTML visualizations
+                        # If job just completed successfully, validate output files and generate HTML visualizations
                         if job_status == STATUS_COMPLETED and old_status != STATUS_COMPLETED:
-                            # Job just completed - trigger HTML generation
+                            # Job just completed - validate output files
+                            try:
+                                output_path = job.get("output_path")
+                                if output_path:
+                                    results_path = output_path.rstrip("/") + "/results.json"
+                                    session_results_path = job.get("session_results_path")
+                                    if session_results_path:
+                                        results_path = session_results_path
+                                    
+                                    validation_result = self._validate_job_output_files(job_id, results_path, job)
+                                    
+                                    # Store validation result in job metadata
+                                    job["output_validation"] = validation_result
+                                    
+                                    # Log warnings if files are missing or results.json doesn't exist
+                                    if validation_result["validation_warnings"]:
+                                        for warning in validation_result["validation_warnings"]:
+                                            logger.warning(f"Job {job_id}: {warning}")
+                                    
+                                    # Log error if results.json is missing - this is a critical issue
+                                    if not validation_result.get("results_json_exists", False):
+                                        logger.error(
+                                            f"Job {job_id} marked as completed but results.json does not exist at {results_path}! "
+                                            f"The EMR job may have failed to upload results or the job did not actually complete successfully."
+                                        )
+                                    elif not validation_result["all_files_exist"]:
+                                        # Only log this if results.json exists but output files are missing
+                                        logger.warning(
+                                            f"Job {job_id} completed but expected output files are missing! "
+                                            f"Check validation_warnings for details. Job may have failed silently."
+                                        )
+                            except Exception as e:
+                                logger.warning(f"Failed to validate output files for job {job_id}: {e}", exc_info=True)
+                                # Don't fail the job status check if validation fails
+                            
+                            # Trigger HTML generation
                             try:
                                 self._generate_and_upload_html_visualizations(job_id)
                             except Exception as e:
@@ -574,9 +813,9 @@ class JobManager:
                     
                     # If job failed, store failure details
                     if job_status == STATUS_FAILED:
-                        # Try to get detailed error from logs
+                        # Try to get detailed error from logs and results.json
                         error_message = self._extract_user_friendly_error(
-                            job["cluster_id"], job["step_id"], failure_details
+                            job["cluster_id"], job["step_id"], failure_details, job_id=job_id
                         )
                         job["error"] = error_message
                         logger.info(
@@ -681,19 +920,26 @@ class JobManager:
             return (None, None)
 
     def _extract_user_friendly_error(
-        self, cluster_id: str, step_id: str, failure_details: Optional[Dict]
+        self, cluster_id: str, step_id: str, failure_details: Optional[Dict], job_id: Optional[str] = None
     ) -> str:
         """
         Extract and format user-friendly error message from EMR failure.
         
         Tries multiple sources:
-        1. EMR FailureDetails (if available)
+        1. results.json from output S3 location (universal runner writes errors here)
         2. Wrapper log from S3 (most detailed)
-        3. Generic helpful message
+        3. EMR FailureDetails (if available)
+        4. Generic helpful message
         
         Returns a user-friendly error message with actionable guidance.
         """
-        # First, try to get error from wrapper log in S3
+        # First, try to get error from results.json (universal runner writes errors here)
+        if job_id:
+            results_json_error = self._extract_error_from_results_json(job_id, step_id)
+            if results_json_error:
+                return results_json_error
+        
+        # Second, try to get error from wrapper log in S3
         wrapper_log_error = self._extract_error_from_wrapper_log(cluster_id, step_id)
         if wrapper_log_error:
             return wrapper_log_error
@@ -709,15 +955,18 @@ class JobManager:
                 return self._translate_error_to_user_friendly(error_text)
         
         # Fallback: Generic but helpful message
+        # Note: This is a generic message - should try to extract actual error from logs
+        s3_bucket = os.getenv("S3_DATASET_BUCKET", "noricum-ngs-data")
+        log_path = f"s3://{s3_bucket}/emr-logs/{cluster_id}/steps/{step_id}/"
         return (
-            "The FastQC analysis job failed on the EMR cluster. "
+            "The EMR job failed on the cluster. "
             "This could be due to:\n"
-            "• Issues with the input FASTQ files (file format, permissions, or file not found)\n"
-            "• Problems with the analysis script\n"
+            "• Issues with input files (format, permissions, or file not found)\n"
+            "• Problems with the execution script\n"
             "• Insufficient cluster resources\n"
             "• Network or S3 access issues\n\n"
-            f"To investigate further, check the detailed logs at:\n"
-            f"s3://noricum-ngs-data/emr-logs/{cluster_id}/steps/{step_id}/"
+            f"To investigate further, check the detailed logs at:\n{log_path}\n"
+            f"Or use: aws s3 cp {log_path}wrapper.log - (if available)"
         )
     
     def _extract_error_from_wrapper_log(self, cluster_id: str, step_id: str) -> Optional[str]:
@@ -753,7 +1002,7 @@ class JobManager:
                 # Check for Python syntax errors
                 if "IndentationError" in log_content or "SyntaxError" in log_content:
                     return (
-                        "The analysis script has a syntax error. "
+                        "The execution script has a syntax error. "
                         "This is a code issue that needs to be fixed by the development team. "
                         "The error has been logged and will be addressed."
                     )
@@ -763,8 +1012,8 @@ class JobManager:
                     return (
                         "A required file was not found. "
                         "This could mean:\n"
-                        "• The input FASTQ files don't exist at the specified S3 location\n"
-                        "• The analysis script is missing\n"
+                        "• The input files don't exist at the specified S3 location\n"
+                        "• The execution script is missing\n"
                         "• A required dependency is not available\n\n"
                         "Please verify that your input files exist and are accessible."
                     )
@@ -823,6 +1072,100 @@ class JobManager:
             logger.warning("Timeout fetching wrapper log from S3")
         except Exception as e:
             logger.warning(f"Failed to extract error from wrapper log: {e}")
+        
+        return None
+    
+    def _extract_error_from_results_json(self, job_id: str, step_id: str) -> Optional[str]:
+        """
+        Try to extract error message from results.json in the output S3 location.
+        The universal EMR runner writes errors to results.json.
+        
+        Returns user-friendly error message or None if not available.
+        """
+        try:
+            job = self.jobs.get(job_id)
+            if not job:
+                return None
+            
+            # Try to get output path from job metadata
+            output_s3_prefix = job.get("output_s3_prefix") or job.get("output_path")
+            if not output_s3_prefix:
+                # Try to construct from session info
+                session_id = job.get("session_id")
+                if session_id:
+                    try:
+                        from backend.history_manager import history_manager
+                        session = history_manager.get_session(session_id)
+                        if session:
+                            s3_bucket = session.get("metadata", {}).get("s3_bucket")
+                            s3_path = session.get("metadata", {}).get("s3_path")
+                            if s3_bucket and s3_path:
+                                output_s3_prefix = f"s3://{s3_bucket}/{s3_path}{job_id}/"
+                    except Exception:
+                        pass
+            
+            if not output_s3_prefix:
+                # Fallback: try default pattern
+                s3_bucket = os.getenv("S3_DATASET_BUCKET", "noricum-ngs-data")
+                output_s3_prefix = f"s3://{s3_bucket}/emr-results/{job_id}/"
+            
+            # Ensure path ends with /
+            if not output_s3_prefix.endswith("/"):
+                output_s3_prefix += "/"
+            
+            # results.json is at {output_s3_prefix}{step_id}/results.json
+            # or sometimes just {output_s3_prefix}results.json
+            results_paths = [
+                f"{output_s3_prefix}{step_id}/results.json",
+                f"{output_s3_prefix}results.json",
+            ]
+            
+            region = os.getenv("AWS_REGION", "us-east-1")
+            
+            for results_path in results_paths:
+                try:
+                    result = subprocess.run(
+                        [
+                            "aws",
+                            "s3",
+                            "cp",
+                            results_path,
+                            "-",
+                            "--region",
+                            region,
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=15,
+                    )
+                    
+                    if result.returncode == 0 and result.stdout:
+                        import json
+                        results = json.loads(result.stdout)
+                        
+                        # Extract error from results.json structure
+                        error = results.get("error")
+                        if error:
+                            return str(error)
+                        
+                        # Also check result.error
+                        result_data = results.get("result", {})
+                        if isinstance(result_data, dict):
+                            error = result_data.get("error")
+                            if error:
+                                return str(error)
+                        
+                        # Check result.status and result.error
+                        if isinstance(result_data, dict) and result_data.get("status") == "error":
+                            error = result_data.get("error")
+                            if error:
+                                return str(error)
+                except (json.JSONDecodeError, subprocess.TimeoutExpired, Exception) as e:
+                    logger.debug(f"Could not read results.json from {results_path}: {e}")
+                    continue
+            
+        except Exception as e:
+            logger.debug(f"Failed to extract error from results.json: {e}")
         
         return None
     
@@ -928,10 +1271,23 @@ class JobManager:
                     viz_module = importlib.util.module_from_spec(spec)
                     spec.loader.exec_module(viz_module)
                     
+                    # Check if results.json exists before trying to load
+                    results_exists, results_error = self._check_s3_file_exists(results_path)
+                    if not results_exists:
+                        logger.warning(
+                            f"results.json does not exist at {results_path}. "
+                            f"Cannot generate HTML visualizations. Error: {results_error or 'File not found'}"
+                        )
+                        return
+                    
                     # Load results
                     logger.info(f"Loading results from: {results_path}")
-                    results = viz_module.load_results(results_path)
-                    logger.info("✅ Results loaded successfully")
+                    try:
+                        results = viz_module.load_results(results_path)
+                        logger.info("✅ Results loaded successfully")
+                    except Exception as e:
+                        logger.error(f"Failed to load results from {results_path}: {e}")
+                        raise
                     
                     # Generate visualizations
                     html_dir = os.path.join(temp_dir, "html")
@@ -981,6 +1337,45 @@ class JobManager:
                     
                     # Copy main HTML file to local job directory
                     self._copy_file_to_job_directory(job_id, main_html_path, main_html_filename)
+
+                    # If the user requested a separate output_path, also upload the HTML artifacts there.
+                    requested_output_path = job.get("output_path")
+                    if (
+                        requested_output_path
+                        and requested_output_path.startswith("s3://")
+                        and requested_output_path.rstrip("/") + "/" != session_s3_path
+                    ):
+                        out_parts = (
+                            requested_output_path.rstrip("/") + "/"
+                        ).replace("s3://", "").split("/", 1)
+                        out_bucket = out_parts[0]
+                        out_prefix = out_parts[1] if len(out_parts) > 1 else ""
+
+                        # Main HTML
+                        out_main_key = f"{out_prefix}{main_html_filename}" if out_prefix else main_html_filename
+                        try:
+                            s3_client.upload_file(main_html_path, out_bucket, out_main_key)
+                            logger.info(
+                                f"✅ Uploaded {main_html_filename} to requested output: s3://{out_bucket}/{out_main_key}"
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                f"Failed to upload {main_html_filename} to requested output_path {requested_output_path}: {e}"
+                            )
+
+                        # Chart HTML files
+                        for html_file in html_files:
+                            local_path = os.path.join(html_dir, html_file)
+                            out_key = f"{out_prefix}{html_file}" if out_prefix else html_file
+                            try:
+                                s3_client.upload_file(local_path, out_bucket, out_key)
+                                logger.info(
+                                    f"✅ Uploaded {html_file} to requested output: s3://{out_bucket}/{out_key}"
+                                )
+                            except Exception as e:
+                                logger.warning(
+                                    f"Failed to upload {html_file} to requested output_path {requested_output_path}: {e}"
+                                )
                     
                     # Always copy results.json to session S3 path (even if it's the same path, ensures it exists)
                     if results_path:
@@ -1149,14 +1544,14 @@ class JobManager:
         # Common error translations
         if "indentationerror" in error_lower or "syntaxerror" in error_lower:
             return (
-                "The analysis script has a syntax error. "
+                "The execution script has a syntax error. "
                 "This is a code issue that needs to be fixed by the development team."
             )
         
         if "filenotfound" in error_lower or "no such file" in error_lower:
             return (
                 "A required file was not found. "
-                "Please verify that your input FASTQ files exist at the specified S3 locations."
+                "Please verify that your input files exist at the specified S3 locations."
             )
         
         if "permission" in error_lower or "access denied" in error_lower:
@@ -1183,15 +1578,243 @@ class JobManager:
         # Return the original error if we can't translate it, but format it nicely
         return f"The job failed: {error_text}"
 
+    def _check_s3_file_exists(self, s3_path: str) -> Tuple[bool, Optional[str]]:
+        """
+        Check if an S3 file exists.
+        
+        Returns:
+            Tuple of (exists: bool, error_message: Optional[str])
+        """
+        if not s3_path.startswith("s3://"):
+            return False, f"Invalid S3 path: {s3_path}"
+        
+        try:
+            result = subprocess.run(
+                ['aws', 's3', 'ls', s3_path],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False
+            )
+            if result.returncode == 0:
+                return True, None
+            else:
+                return False, result.stderr.strip() or "File not found"
+        except subprocess.TimeoutExpired:
+            return False, "Timeout checking S3 file"
+        except FileNotFoundError:
+            return False, "AWS CLI not found"
+        except Exception as e:
+            return False, str(e)
+    
+    def _extract_output_paths_from_results(self, results_data: Dict[str, Any]) -> List[Tuple[str, str]]:
+        """
+        Extract all potential output file paths from results.json.
+        
+        Returns:
+            List of tuples: (location_description, s3_path)
+        """
+        paths = []
+        
+        # Check tool result
+        if 'result' in results_data:
+            tool_result = results_data['result']
+            
+            # Direct output_path
+            if 'output_path' in tool_result:
+                path = tool_result['output_path']
+                if path and isinstance(path, str) and path.startswith('s3://'):
+                    paths.append(('result.output_path', path))
+            
+            # In summary
+            if 'summary' in tool_result and isinstance(tool_result['summary'], dict):
+                if 'output_path' in tool_result['summary']:
+                    path = tool_result['summary']['output_path']
+                    if path and isinstance(path, str) and path.startswith('s3://'):
+                        paths.append(('result.summary.output_path', path))
+            
+            # In output dict
+            if 'output' in tool_result and isinstance(tool_result['output'], dict):
+                if 'output_path' in tool_result['output']:
+                    path = tool_result['output']['output_path']
+                    if path and isinstance(path, str) and path.startswith('s3://'):
+                        paths.append(('result.output.output_path', path))
+        
+        # Check payload arguments (requested output path)
+        if 'payload' in results_data:
+            payload = results_data['payload']
+            if 'arguments' in payload:
+                args = payload['arguments']
+                if 'output' in args:
+                    path = args['output']
+                    if path and isinstance(path, str) and path.startswith('s3://'):
+                        paths.append(('payload.arguments.output (requested)', path))
+        
+        return paths
+    
+    def _validate_job_output_files(self, job_id: str, results_path: str, job: Optional[Dict] = None) -> Dict[str, Any]:
+        """
+        Validate that expected output files exist for a completed job.
+        
+        Args:
+            job_id: Job ID
+            results_path: Primary results.json path to check
+            job: Optional job dict to check alternative paths
+        
+        Returns:
+            Dict with validation results:
+            - output_files_found: List of (location, path, exists)
+            - all_files_exist: bool
+            - validation_warnings: List of warning messages
+            - results_json_exists: bool
+            - actual_results_path: Path where results.json was actually found (if any)
+        """
+        validation_result = {
+            "output_files_found": [],
+            "all_files_exist": True,
+            "validation_warnings": [],
+            "results_json_exists": False,
+            "actual_results_path": None
+        }
+        
+        # For universal EMR jobs, results.json might be at {output_path}{step_id}/results.json
+        # Check multiple possible locations
+        paths_to_check = [results_path]
+        
+        if job:
+            step_id = job.get("step_id")
+            output_path = job.get("output_path")
+            if step_id and output_path:
+                # Universal runner pattern: {output_s3_prefix}{step_id}/results.json
+                alt_path = f"{output_path.rstrip('/')}/{step_id}/results.json"
+                if alt_path not in paths_to_check:
+                    paths_to_check.append(alt_path)
+            
+            # Also check default EMR results location
+            if output_path:
+                # Check if output_path is session-based, try default EMR location
+                if "helix-ai-frontend" in output_path or "session" in output_path.lower():
+                    s3_bucket = os.getenv("S3_DATASET_BUCKET", "noricum-ngs-data")
+                    default_path = f"s3://{s3_bucket}/emr-results/{job_id}/"
+                    if step_id:
+                        default_results = f"{default_path}{step_id}/results.json"
+                    else:
+                        default_results = f"{default_path}results.json"
+                    if default_results not in paths_to_check:
+                        paths_to_check.append(default_results)
+        
+        # Check each possible path
+        actual_results_path = None
+        for path in paths_to_check:
+            exists, error = self._check_s3_file_exists(path)
+            if exists:
+                actual_results_path = path
+                validation_result["results_json_exists"] = True
+                validation_result["actual_results_path"] = path
+                results_path = path  # Use the found path for the rest of validation
+                break
+        
+        if not validation_result["results_json_exists"]:
+            # None of the paths worked
+            paths_tried = ", ".join(paths_to_check)
+            validation_result["validation_warnings"].append(
+                f"results.json not found at any of these locations: {paths_tried}. "
+                f"Cannot validate output files. Job may not have completed successfully or results were not uploaded."
+            )
+            if len(paths_to_check) > 1:
+                validation_result["validation_warnings"].append(
+                    f"Checked {len(paths_to_check)} possible locations for results.json"
+                )
+            validation_result["all_files_exist"] = False
+            return validation_result
+        
+        # If we found results.json at a different location, update the path
+        if actual_results_path and actual_results_path != results_path:
+            validation_result["validation_warnings"].append(
+                f"Found results.json at alternative location: {actual_results_path}"
+            )
+            # Update results_path to the actual path for downloading
+            results_path = actual_results_path
+        
+        # Download and parse results.json
+        try:
+            result = subprocess.run(
+                ['aws', 's3', 'cp', results_path, '-'],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=True
+            )
+            results_data = json.loads(result.stdout)
+            
+            # Check if tool execution actually failed (even though EMR step completed)
+            tool_result = results_data.get('result', {})
+            tool_status = tool_result.get('status', 'success')
+            if tool_status == 'error':
+                tool_error = tool_result.get('error') or tool_result.get('text') or 'Unknown error'
+                validation_result["validation_warnings"].append(
+                    f"Tool execution failed: {tool_error}. "
+                    f"Job step completed but tool did not succeed, so output files may be missing."
+                )
+                validation_result["all_files_exist"] = False
+                validation_result["tool_execution_failed"] = True
+                validation_result["tool_error"] = tool_error
+        except subprocess.CalledProcessError as e:
+            validation_result["validation_warnings"].append(
+                f"Failed to download results.json: {e.stderr.strip() if e.stderr else str(e)}"
+            )
+            validation_result["all_files_exist"] = False
+            return validation_result
+        except json.JSONDecodeError as e:
+            validation_result["validation_warnings"].append(
+                f"Failed to parse results.json as JSON: {e}"
+            )
+            validation_result["all_files_exist"] = False
+            return validation_result
+        except Exception as e:
+            validation_result["validation_warnings"].append(
+                f"Unexpected error downloading/parsing results.json: {e}"
+            )
+            validation_result["all_files_exist"] = False
+            return validation_result
+        
+        # Extract output paths
+        output_paths = self._extract_output_paths_from_results(results_data)
+        
+        if not output_paths:
+            validation_result["validation_warnings"].append(
+                "No output_path found in results.json. Cannot validate output files."
+            )
+            validation_result["all_files_exist"] = False
+            return validation_result
+        
+        # Check each output path
+        for location, path in output_paths:
+            exists, error = self._check_s3_file_exists(path)
+            validation_result["output_files_found"].append({
+                "location": location,
+                "path": path,
+                "exists": exists,
+                "error": error
+            })
+            
+            if not exists:
+                validation_result["all_files_exist"] = False
+                validation_result["validation_warnings"].append(
+                    f"Output file missing: {location} = {path}"
+                )
+        
+        return validation_result
+    
     def get_job_results(self, job_id: str) -> Dict:
         """
-        Get results for a completed job.
+        Get results for a completed job and validate output files exist.
         
         Args:
             job_id: Unique job identifier
         
         Returns:
-            Dict with job results
+            Dict with job results including validation info
         
         Raises:
             ValueError: If job_id not found or job not completed
@@ -1202,6 +1825,21 @@ class JobManager:
             raise ValueError(
                 f"Job {job_id} is not completed (current status: {job['status']})"
             )
+
+        # Local tool jobs store results inline; no S3 output validation required.
+        infra = job.get("infra") or {}
+        if infra.get("service") == "local":
+            return {
+                "job_id": job_id,
+                "status": job.get("status"),
+                "tool_name": job.get("tool_name"),
+                "job_type": job.get("job_type"),
+                "submitted_at": job.get("submitted_at"),
+                "started_at": job.get("started_at"),
+                "completed_at": job.get("completed_at"),
+                "error": job.get("error"),
+                "result": job.get("result"),
+            }
         
         # If job has session_id but no session_results_path, try to copy results now
         # But only if we're not already in the process of generating HTML (avoid infinite loop)
@@ -1273,7 +1911,10 @@ class JobManager:
         if session_results_path:
             results_path = session_results_path
         
-        return {
+        # Validate output files exist (pass job dict to check alternative paths)
+        validation_result = self._validate_job_output_files(job_id, results_path, job)
+        
+        result = {
             "job_id": job_id,
             "status": job["status"],
             "results_path": results_path,
@@ -1282,7 +1923,33 @@ class JobManager:
             "r2_path": job.get("r2_path"),
             "session_results_path": session_results_path,
             "session_html_path": job.get("session_html_path"),
+            "output_validation": validation_result,
         }
+        
+        # If tool execution failed, add tool error to result
+        if validation_result.get("tool_execution_failed"):
+            result["tool_error"] = validation_result.get("tool_error")
+            result["tool_execution_failed"] = True
+        
+        # If tool execution failed, add tool error to result
+        if validation_result.get("tool_execution_failed"):
+            result["tool_error"] = validation_result.get("tool_error")
+            result["tool_execution_failed"] = True
+        
+        # Log warnings if files are missing
+        if validation_result["validation_warnings"]:
+            for warning in validation_result["validation_warnings"]:
+                logger.warning(f"Job {job_id}: {warning}")
+        
+        # Only log warning about missing output files if results.json exists
+        # (If results.json doesn't exist, we've already logged a more specific error)
+        if not validation_result["all_files_exist"] and validation_result.get("results_json_exists", False):
+            logger.warning(
+                f"Job {job_id} completed but expected output files are missing! "
+                f"Check validation_warnings for details."
+            )
+        
+        return result
 
     def cancel_job(self, job_id: str) -> Dict:
         """
@@ -1507,7 +2174,7 @@ class JobManager:
                     region,
                     "--active",
                     "--query",
-                    "Clusters[?Status.State==`WAITING` || Status.State==`RUNNING`].[Id,Name,Status.State]",
+                    "Clusters[?Status.State==`WAITING` || Status.State==`RUNNING` || Status.State==`STARTING` || Status.State==`BOOTSTRAPPING`].[Id,Name,Status.State]",
                     "--output",
                     "text",
                 ],
@@ -1533,81 +2200,33 @@ class JobManager:
     
     def _ensure_iam_roles(self) -> Tuple[Optional[str], Optional[str]]:
         """
-        Ensure EMR IAM roles exist, creating them if necessary.
+        Return EMR IAM role / instance profile names for cluster creation.
+
+        Important: The backend typically runs under an EC2 instance role that should not
+        need IAM read permissions like iam:GetRole/iam:GetInstanceProfile. Instead of
+        attempting to query IAM for ARNs, we pass the *names* that EMR expects.
         
         Returns:
-            Tuple of (service_role_arn, instance_profile_arn) or (None, None) on error
+            Tuple of (service_role_name, instance_profile_name) or (None, None) on error
         """
         try:
-            region = os.getenv("AWS_REGION", "us-east-1")
-            service_role_name = "EMR_DefaultRole"
-            instance_profile_name = "EMR_EC2_DefaultRole"
-            ec2_role_name = "EMR_EC2_DefaultRole"
-            
-            # Check if service role exists
-            result = subprocess.run(
-                [
-                    "aws",
-                    "iam",
-                    "get-role",
-                    "--role-name",
-                    service_role_name,
-                    "--query",
-                    "Role.Arn",
-                    "--output",
-                    "text",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=10,
+            service_role_name = os.getenv("EMR_SERVICE_ROLE", "EMR_DefaultRole")
+            instance_profile_name = os.getenv(
+                "EMR_EC2_INSTANCE_PROFILE", "EMR_EC2_DefaultRole"
             )
-            
-            if result.returncode == 0:
-                service_role_arn = result.stdout.strip()
-                logger.info(f"Using existing EMR service role: {service_role_arn}")
-            else:
-                logger.warning(
-                    f"EMR service role {service_role_name} does not exist. "
-                    f"Please run ./scripts/aws/setup-emr-cluster.sh to create it."
-                )
-                return (None, None)
-            
-            # Check if instance profile exists
-            result = subprocess.run(
-                [
-                    "aws",
-                    "iam",
-                    "get-instance-profile",
-                    "--instance-profile-name",
-                    instance_profile_name,
-                    "--query",
-                    "InstanceProfile.Arn",
-                    "--output",
-                    "text",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            
-            if result.returncode == 0:
-                instance_profile_arn = result.stdout.strip()
-                logger.info(f"Using existing EMR instance profile: {instance_profile_arn}")
-            else:
-                logger.warning(
-                    f"EMR instance profile {instance_profile_name} does not exist. "
-                    f"Please run ./scripts/aws/setup-emr-cluster.sh to create it."
-                )
-                return (None, None)
-            
-            return (service_role_arn, instance_profile_arn)
+            logger.info(f"Using EMR service role name: {service_role_name}")
+            logger.info(f"Using EMR instance profile name: {instance_profile_name}")
+            return (service_role_name, instance_profile_name)
         except Exception as e:
             logger.error(f"Exception ensuring IAM roles: {e}")
             return (None, None)
     
     def _ensure_bootstrap_script(self) -> Optional[str]:
         """
-        Ensure bootstrap script exists in S3, uploading if necessary.
+        Ensure bootstrap script exists in S3, always uploading the latest version.
+        
+        We always upload to ensure the bootstrap script is up-to-date with the latest
+        dependencies (e.g., boto3).
         
         Returns:
             S3 path to bootstrap script or None on error
@@ -1617,36 +2236,20 @@ class JobManager:
             s3_bucket = os.getenv("S3_DATASET_BUCKET", "noricum-ngs-data")
             bootstrap_s3_path = f"s3://{s3_bucket}/emr-bootstrap/fastqc-bootstrap.sh"
             
-            # Check if bootstrap script exists in S3
-            result = subprocess.run(
-                [
-                    "aws",
-                    "s3",
-                    "ls",
-                    bootstrap_s3_path,
-                    "--region",
-                    region,
-                ],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            
-            if result.returncode == 0:
-                logger.info(f"Bootstrap script exists at {bootstrap_s3_path}")
-                return bootstrap_s3_path
-            
-            # Bootstrap script doesn't exist, create and upload it
-            logger.info("Bootstrap script not found, creating and uploading...")
+            # Always upload the latest bootstrap script to ensure it's up-to-date
+            logger.info(f"Ensuring bootstrap script is up-to-date at {bootstrap_s3_path}")
             
             bootstrap_content = """#!/bin/bash
 # Bootstrap script for EMR cluster
-# Installs Python dependencies for FASTQ processing
+# Installs Python dependencies for Helix.AI tools
 
 # Update system
 sudo yum update -y
 
-# Install additional Python packages
+# Install AWS SDK and core Python packages
+sudo pip3 install boto3 botocore
+
+# Install additional Python packages for bioinformatics
 sudo pip3 install biopython pandas numpy matplotlib seaborn plotly
 
 # Install FASTQ parsing libraries
@@ -1666,7 +2269,7 @@ echo "Bootstrap script completed successfully"
                 tmp_file_path = tmp_file.name
             
             try:
-                # Upload to S3
+                # Always upload (overwrite if exists) to ensure latest version
                 result = subprocess.run(
                     [
                         "aws",
@@ -1683,7 +2286,7 @@ echo "Bootstrap script completed successfully"
                 )
                 
                 if result.returncode == 0:
-                    logger.info(f"✅ Uploaded bootstrap script to {bootstrap_s3_path}")
+                    logger.info(f"✅ Uploaded/updated bootstrap script to {bootstrap_s3_path}")
                     return bootstrap_s3_path
                 else:
                     logger.error(f"Failed to upload bootstrap script: {result.stderr}")
@@ -1713,12 +2316,17 @@ echo "Bootstrap script completed successfully"
             instance_type = os.getenv("EMR_INSTANCE_TYPE", "m5.xlarge")
             instance_count = int(os.getenv("EMR_INSTANCE_COUNT", "3"))
             release_label = "emr-6.15.0"
+            subnet_id = (
+                os.getenv("EMR_SUBNET_ID")
+                or os.getenv("HELIX_EC2_SUBNET_ID")
+                or os.getenv("EC2_SUBNET_ID")
+            )
             
             logger.info(f"Creating new EMR cluster: {cluster_name}")
             
-            # Ensure IAM roles exist
-            service_role_arn, instance_profile_arn = self._ensure_iam_roles()
-            if not service_role_arn or not instance_profile_arn:
+            # Get role/profile names (EMR expects names, not ARNs)
+            service_role_name, instance_profile_name = self._ensure_iam_roles()
+            if not service_role_name or not instance_profile_name:
                 raise RuntimeError(
                     "EMR IAM roles not found. Please run ./scripts/aws/setup-emr-cluster.sh "
                     "to create the required IAM roles."
@@ -1786,6 +2394,15 @@ echo "Bootstrap script completed successfully"
                 # Build AWS CLI command
                 # Note: --applications needs to be formatted as separate Name=... arguments
                 # --bootstrap-actions needs Path= and Name= in the same string
+                ec2_attributes = f"InstanceProfile={instance_profile_name}"
+                if subnet_id:
+                    ec2_attributes += f",SubnetId={subnet_id}"
+                    logger.info(f"Using EMR subnet: {subnet_id}")
+                else:
+                    logger.warning(
+                        "EMR_SUBNET_ID not set; EMR cluster creation may fail in non-default VPCs."
+                    )
+
                 cmd = [
                     "aws",
                     "emr",
@@ -1796,8 +2413,8 @@ echo "Bootstrap script completed successfully"
                     "--instance-groups", f"file://{groups_file_path}",
                     "--bootstrap-actions", f"Path={bootstrap_script},Name=Install Python Dependencies",
                     "--configurations", f"file://{config_file_path}",
-                    "--service-role", service_role_arn,
-                    "--ec2-attributes", f"InstanceProfile={instance_profile_arn}",
+                    "--service-role", service_role_name,
+                    "--ec2-attributes", ec2_attributes,
                     "--log-uri", f"s3://{s3_bucket}/emr-logs/",
                     "--region", region,
                     "--tags", "Project=Helix.AI", "Purpose=FASTQ Quality Analysis",
