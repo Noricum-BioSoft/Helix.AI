@@ -47,18 +47,14 @@ jobs:
           docker buildx build --platform linux/amd64 -f backend/Dockerfile -t ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG} --push .
           echo "Image pushed: ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
 
-      - name: Update ECS Service (if configured)
+      - name: Update ECS Service
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECS_CLUSTER_NAME: ${{ secrets.ECS_CLUSTER_NAME }}
-          ECS_SERVICE_NAME: ${{ secrets.ECS_SERVICE_NAME }}
-          ECS_TASK_DEFINITION_FAMILY: ${{ secrets.ECS_TASK_DEFINITION_FAMILY }}
+          # Use secrets if available, otherwise fall back to known defaults
+          ECS_CLUSTER_NAME: ${{ secrets.ECS_CLUSTER_NAME || 'helix-ai-cluster' }}
+          ECS_SERVICE_NAME: ${{ secrets.ECS_SERVICE_NAME || 'HelixAIStack-ServiceD69D759B-G23PygXszFhF' }}
+          ECS_TASK_DEFINITION_FAMILY: ${{ secrets.ECS_TASK_DEFINITION_FAMILY || 'HelixAIStackTaskDefinition9C619311' }}
         run: |
-          # Skip if ECS secrets are not configured
-          if [ -z "$ECS_CLUSTER_NAME" ] || [ -z "$ECS_SERVICE_NAME" ] || [ -z "$ECS_TASK_DEFINITION_FAMILY" ]; then
-            echo "ECS configuration not complete, skipping ECS service update"
-            exit 0
-          fi
           echo "Updating ECS service with new image..."
           # Get current task definition
           TASK_DEF=$(aws ecs describe-task-definition \
