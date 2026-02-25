@@ -5,6 +5,14 @@ from typing import Dict, Any, List, Optional
 from pathlib import Path
 import logging
 import os
+import threading
+
+# Try to import fcntl for file locking (not available on Windows)
+try:
+    import fcntl
+    HAS_FCNTL = True
+except ImportError:
+    HAS_FCNTL = False
 
 logger = logging.getLogger(__name__)
 
@@ -47,22 +55,49 @@ def serialize_langchain_messages(result: Any) -> Any:
     else:
         return result
 
-def serialize_for_json(obj: Any) -> Any:
-    """Convert objects to JSON-serializable format, handling numpy types."""
+def serialize_for_json(obj: Any, _seen: Optional[frozenset] = None) -> Any:
+    """Convert objects to JSON-serializable format.
+
+    Handles numpy types, LangChain message objects, and — critically — circular
+    references.  Without cycle detection, LangGraph/LangChain message objects
+    (whose `additional_kwargs` / `response_metadata` can contain self-referencing
+    Pydantic model dicts) cause infinite recursion and a RecursionError.
+    """
     import numpy as np
-    
+
+    if _seen is None:
+        _seen = frozenset()
+
     if isinstance(obj, dict):
-        return {key: serialize_for_json(value) for key, value in obj.items()}
+        obj_id = id(obj)
+        if obj_id in _seen:
+            # Break the cycle — return a sentinel rather than recursing forever
+            return "[circular reference]"
+        _seen = _seen | {obj_id}
+        return {key: serialize_for_json(value, _seen) for key, value in obj.items()}
     elif isinstance(obj, list):
-        return [serialize_for_json(item) for item in obj]
+        obj_id = id(obj)
+        if obj_id in _seen:
+            return "[circular reference]"
+        _seen = _seen | {obj_id}
+        return [serialize_for_json(item, _seen) for item in obj]
     elif isinstance(obj, np.integer):
         return int(obj)
     elif isinstance(obj, np.floating):
         return float(obj)
     elif isinstance(obj, np.ndarray):
         return obj.tolist()
-    else:
+    elif isinstance(obj, (int, float, str, bool)) or obj is None:
         return obj
+    else:
+        # Unknown non-serializable type — convert to string rather than letting
+        # json.dumps fail later with a TypeError.
+        try:
+            import json
+            json.dumps(obj)   # test serialisability cheaply
+            return obj
+        except (TypeError, ValueError):
+            return str(obj)
 
 class HistoryManager:
     """Manages user session history and results for bioinformatics operations."""
@@ -76,6 +111,9 @@ class HistoryManager:
         self._sessions_loaded = False  # Lazy loading flag
         # Don't load sessions at import time - load lazily on first access
         # This speeds up server startup when there are many session files
+        # Locks for serializing access to each session file (using RLock for reentrancy)
+        self._session_locks: Dict[str, threading.RLock] = {}
+        self._locks_lock = threading.Lock()  # Lock for accessing the _session_locks dict
     
     def _get_s3_client(self):
         """Get or create S3 client. Returns None if boto3 is not available or AWS credentials are missing."""
@@ -138,11 +176,25 @@ class HistoryManager:
     def _load_existing_sessions(self):
         """Load existing session data from disk."""
         for session_file in self.storage_dir.glob("*.json"):
+            # Skip temporary files
+            if session_file.name.endswith('.tmp'):
+                continue
+            
             try:
                 with open(session_file, 'r') as f:
                     session_data = json.load(f)
                     session_id = session_file.stem
                     self.sessions[session_id] = session_data
+            except json.JSONDecodeError as e:
+                # Handle corrupted JSON files
+                logger.error(f"Failed to load session {session_file} due to JSON corruption: {e}")
+                # Try to create a backup of the corrupted file
+                backup_file = session_file.with_suffix('.json.corrupted')
+                try:
+                    session_file.rename(backup_file)
+                    logger.warning(f"Moved corrupted session file to {backup_file}")
+                except Exception as backup_error:
+                    logger.error(f"Failed to backup corrupted file {session_file}: {backup_error}")
             except Exception as e:
                 logger.error(f"Failed to load session {session_file}: {e}")
     
@@ -152,34 +204,40 @@ class HistoryManager:
         Also creates:
         - A local directory structure: sessions/{session_id}/
         - An S3 path for the session in the configured bucket.
+        
+        Thread-safe: Uses locks to prevent concurrent modifications.
         """
         session_id = str(uuid.uuid4())
         
-        # Create local directory for the session
-        session_dir = self.storage_dir / session_id
-        session_dir.mkdir(exist_ok=True)
-        logger.info(f"Created session directory: {session_dir}")
+        # Get lock for the new session (will create the lock)
+        session_lock = self._get_session_lock(session_id)
         
-        # Create S3 path for the session
-        s3_path = self._create_s3_session_path(session_id)
-        
-        session_data = {
-            "session_id": session_id,
-            "user_id": user_id,
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat(),
-            "history": [],
-            "results": {},
-            "metadata": {
-                "s3_path": s3_path,
-                "s3_bucket": self.s3_bucket_name if s3_path else None,
-                "local_path": str(session_dir)
+        with session_lock:
+            # Create local directory for the session
+            session_dir = self.storage_dir / session_id
+            session_dir.mkdir(exist_ok=True)
+            logger.info(f"Created session directory: {session_dir}")
+            
+            # Create S3 path for the session
+            s3_path = self._create_s3_session_path(session_id)
+            
+            session_data = {
+                "session_id": session_id,
+                "user_id": user_id,
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat(),
+                "history": [],
+                "results": {},
+                "metadata": {
+                    "s3_path": s3_path,
+                    "s3_bucket": self.s3_bucket_name if s3_path else None,
+                    "local_path": str(session_dir)
+                }
             }
-        }
-        self.sessions[session_id] = session_data
-        self._save_session(session_id)
-        logger.info(f"Created new session: {session_id}" + (f" with S3 path: {s3_path}" if s3_path else " (S3 path creation skipped)"))
-        return session_id
+            self.sessions[session_id] = session_data
+            self._save_session(session_id)
+            logger.info(f"Created new session: {session_id}" + (f" with S3 path: {s3_path}" if s3_path else " (S3 path creation skipped)"))
+            return session_id
     
     def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Get session data by ID.
@@ -204,82 +262,107 @@ class HistoryManager:
                     self._ensure_session_directory(session_id, session_data)
                     self.sessions[session_id] = session_data
                     return session_data
+            except json.JSONDecodeError as e:
+                # Handle corrupted JSON files
+                logger.error(f"Failed to load session {session_file} due to JSON corruption: {e}")
+                # Try to create a backup of the corrupted file
+                backup_file = session_file.with_suffix('.json.corrupted')
+                try:
+                    session_file.rename(backup_file)
+                    logger.warning(f"Moved corrupted session file to {backup_file}")
+                except Exception as backup_error:
+                    logger.error(f"Failed to backup corrupted file {session_file}: {backup_error}")
+                # Return None to allow session recreation
+                return None
             except Exception as e:
                 logger.error(f"Failed to load session {session_id} from disk: {e}")
         
         return None
     
     def _ensure_session_directory(self, session_id: str, session_data: Optional[Dict[str, Any]] = None) -> None:
-        """Ensure the session directory exists and update metadata if needed."""
-        session_dir = self.storage_dir / session_id
-        if not session_dir.exists():
-            session_dir.mkdir(parents=True, exist_ok=True)
-            logger.info(f"Created missing session directory: {session_dir}")
+        """Ensure the session directory exists and update metadata if needed.
         
-        # Update metadata if needed
-        if session_data:
-            metadata = session_data.setdefault("metadata", {})
-            if not metadata.get("local_path"):
-                metadata["local_path"] = str(session_dir)
-                # Save updated session data
-                self.sessions[session_id] = session_data
-                self._save_session(session_id)
+        Thread-safe: Uses locks to prevent concurrent modifications.
+        """
+        session_lock = self._get_session_lock(session_id)
+        
+        with session_lock:
+            session_dir = self.storage_dir / session_id
+            if not session_dir.exists():
+                session_dir.mkdir(parents=True, exist_ok=True)
+                logger.info(f"Created missing session directory: {session_dir}")
+            
+            # Update metadata if needed
+            if session_data:
+                metadata = session_data.setdefault("metadata", {})
+                if not metadata.get("local_path"):
+                    metadata["local_path"] = str(session_dir)
+                    # Save updated session data
+                    self.sessions[session_id] = session_data
+                    self._save_session(session_id)
     
     def add_history_entry(self, session_id: str, command: str, tool: str, 
                          result: Dict[str, Any], metadata: Optional[Dict[str, Any]] = None):
-        """Add a new history entry to a session."""
+        """Add a new history entry to a session.
+        
+        Thread-safe: Uses locks to prevent concurrent modifications.
+        """
         self._ensure_sessions_loaded()
-        """Add a new history entry to a session."""
         import time
         start_time = time.time()
-        if session_id not in self.sessions:
-            # Auto-create session if missing to avoid hard failures
-            # Create local directory for the session
-            session_dir = self.storage_dir / session_id
-            session_dir.mkdir(exist_ok=True)
-            logger.info(f"Auto-created session directory: {session_dir}")
-            
-            # Also create S3 path for auto-created sessions
-            s3_path = self._create_s3_session_path(session_id)
-            self.sessions[session_id] = {
-                "session_id": session_id,
-                "user_id": None,
-                "created_at": datetime.now().isoformat(),
-                "updated_at": datetime.now().isoformat(),
-                "history": [],
-                "results": {},
-                "metadata": {
-                    "s3_path": s3_path,
-                    "s3_bucket": self.s3_bucket_name if s3_path else None,
-                    "local_path": str(session_dir)
+        
+        # Use per-session lock to serialize access
+        session_lock = self._get_session_lock(session_id)
+        
+        with session_lock:
+            if session_id not in self.sessions:
+                # Auto-create session if missing to avoid hard failures
+                # Create local directory for the session
+                session_dir = self.storage_dir / session_id
+                session_dir.mkdir(exist_ok=True)
+                logger.info(f"Auto-created session directory: {session_dir}")
+                
+                # Also create S3 path for auto-created sessions
+                s3_path = self._create_s3_session_path(session_id)
+                self.sessions[session_id] = {
+                    "session_id": session_id,
+                    "user_id": None,
+                    "created_at": datetime.now().isoformat(),
+                    "updated_at": datetime.now().isoformat(),
+                    "history": [],
+                    "results": {},
+                    "metadata": {
+                        "s3_path": s3_path,
+                        "s3_bucket": self.s3_bucket_name if s3_path else None,
+                        "local_path": str(session_dir)
+                    }
                 }
+                self._save_session(session_id)
+            
+            # Serialize the result to handle LangChain message objects
+            serialized_result = serialize_langchain_messages(result)
+            
+            entry = {
+                "timestamp": datetime.now().isoformat(),
+                "command": command,
+                "tool": tool,
+                "result": serialized_result,
+                "metadata": metadata or {}
             }
+            
+            self.sessions[session_id]["history"].append(entry)
+            self.sessions[session_id]["updated_at"] = datetime.now().isoformat()
+            
+            # Store result with a unique key for later reference
+            result_key = f"{tool}_{len(self.sessions[session_id]['history'])}"
+            self.sessions[session_id]["results"][result_key] = serialized_result
+            
+            save_start = time.time()
             self._save_session(session_id)
-        
-        # Serialize the result to handle LangChain message objects
-        serialized_result = serialize_langchain_messages(result)
-        
-        entry = {
-            "timestamp": datetime.now().isoformat(),
-            "command": command,
-            "tool": tool,
-            "result": serialized_result,
-            "metadata": metadata or {}
-        }
-        
-        self.sessions[session_id]["history"].append(entry)
-        self.sessions[session_id]["updated_at"] = datetime.now().isoformat()
-        
-        # Store result with a unique key for later reference
-        result_key = f"{tool}_{len(self.sessions[session_id]['history'])}"
-        self.sessions[session_id]["results"][result_key] = serialized_result
-        
-        save_start = time.time()
-        self._save_session(session_id)
-        save_duration = time.time() - save_start
-        total_duration = time.time() - start_time
-        print(f"✅ [PERF] add_history_entry took {total_duration*1000:.2f}ms (save: {save_duration*1000:.2f}ms)")
-        logger.info(f"Added history entry to session {session_id}: {tool}")
+            save_duration = time.time() - save_start
+            total_duration = time.time() - start_time
+            print(f"✅ [PERF] add_history_entry took {total_duration*1000:.2f}ms (save: {save_duration*1000:.2f}ms)")
+            logger.info(f"Added history entry to session {session_id}: {tool}")
     
     def get_latest_result(self, session_id: str, tool: str) -> Optional[Dict[str, Any]]:
         """Get the most recent result for a specific tool in a session."""
@@ -325,30 +408,105 @@ class HistoryManager:
             "available_results": list(session["results"].keys())
         }
     
+    def _get_session_lock(self, session_id: str) -> threading.RLock:
+        """Get or create a reentrant lock for a specific session."""
+        with self._locks_lock:
+            if session_id not in self._session_locks:
+                self._session_locks[session_id] = threading.RLock()
+            return self._session_locks[session_id]
+    
+    def ensure_session_exists(self, session_id: str) -> None:
+        """Ensure a session exists, creating it if necessary.
+        
+        Thread-safe: Uses locks to prevent concurrent modifications.
+        """
+        self._ensure_sessions_loaded()
+        session_lock = self._get_session_lock(session_id)
+        
+        with session_lock:
+            if session_id not in self.sessions:
+                # Auto-create session if missing
+                session_dir = self.storage_dir / session_id
+                session_dir.mkdir(exist_ok=True)
+                logger.info(f"Auto-created session directory: {session_dir}")
+                
+                # Also create S3 path for auto-created sessions
+                s3_path = self._create_s3_session_path(session_id)
+                self.sessions[session_id] = {
+                    "session_id": session_id,
+                    "user_id": None,
+                    "created_at": datetime.now().isoformat(),
+                    "updated_at": datetime.now().isoformat(),
+                    "history": [],
+                    "results": {},
+                    "metadata": {
+                        "s3_path": s3_path,
+                        "s3_bucket": self.s3_bucket_name if s3_path else None,
+                        "local_path": str(session_dir)
+                    }
+                }
+                self._save_session(session_id)
+    
     def _save_session(self, session_id: str):
-        """Save session data to disk."""
+        """Save session data to disk using atomic writes and file locking to prevent corruption.
+        
+        Thread-safe: Uses per-session locks to serialize access.
+        """
         import time
         save_start = time.time()
         if session_id not in self.sessions:
             raise ValueError(f"Session {session_id} not found")
-        session_file = self.storage_dir / f"{session_id}.json"
-        try:
-            # Serialize the session data to handle numpy types and other non-JSON-serializable objects
-            serialize_start = time.time()
-            serialized_session = serialize_for_json(self.sessions[session_id])
-            serialize_duration = time.time() - serialize_start
-            write_start = time.time()
-            with open(session_file, "w") as f:
-                json.dump(serialized_session, f, indent=2)
-            write_duration = time.time() - write_start
-            total_duration = time.time() - save_start
-            print(f"✅ [PERF] _save_session took {total_duration*1000:.2f}ms (serialize: {serialize_duration*1000:.2f}ms, write: {write_duration*1000:.2f}ms)")
-        except Exception as e:
-            print(f"[ERROR] Failed to save session {session_id}: {e}")
-            # Optionally, remove the corrupted file
-            # import os
-            # if os.path.exists(session_file):
-            #     os.remove(session_file)
+        
+        # Use per-session lock to serialize access (handles in-process concurrency)
+        session_lock = self._get_session_lock(session_id)
+        
+        with session_lock:
+            session_file = self.storage_dir / f"{session_id}.json"
+            temp_file = self.storage_dir / f"{session_id}.json.tmp"
+            
+            try:
+                # Serialize the session data to handle numpy types and other non-JSON-serializable objects
+                serialize_start = time.time()
+                serialized_session = serialize_for_json(self.sessions[session_id])
+                serialize_duration = time.time() - serialize_start
+                
+                # Write to a temporary file first (atomic write pattern)
+                write_start = time.time()
+                
+                # Use file locking for the temp file write to prevent concurrent writes
+                with open(temp_file, "w") as f:
+                    # Acquire exclusive lock on the temp file if available
+                    if HAS_FCNTL:
+                        try:
+                            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                        except (IOError, OSError) as lock_error:
+                            # Lock acquisition failed, but continue with write
+                            # Thread lock should handle most concurrency issues
+                            logger.debug(f"Failed to acquire file lock for {session_id}: {lock_error}")
+                    
+                    json.dump(serialized_session, f, indent=2)
+                    # Ensure data is written to disk
+                    f.flush()
+                    os.fsync(f.fileno())
+                    
+                    # Lock is automatically released when file is closed
+                
+                # Atomically replace the old file with the new one
+                # This is atomic on most filesystems (including macOS and Linux)
+                temp_file.replace(session_file)
+                
+                write_duration = time.time() - write_start
+                total_duration = time.time() - save_start
+                print(f"✅ [PERF] _save_session took {total_duration*1000:.2f}ms (serialize: {serialize_duration*1000:.2f}ms, write: {write_duration*1000:.2f}ms)")
+            except Exception as e:
+                logger.error(f"Failed to save session {session_id}: {e}", exc_info=True)
+                # Clean up temporary file if it exists
+                if temp_file.exists():
+                    try:
+                        temp_file.unlink()
+                    except Exception as cleanup_error:
+                        logger.warning(f"Failed to clean up temporary file {temp_file}: {cleanup_error}")
+                raise
     
     def cleanup_old_sessions(self, max_age_days: int = 30):
         """Clean up old sessions."""
@@ -380,31 +538,36 @@ class HistoryManager:
         
         Returns:
             True if successful, False otherwise
+            
+        Thread-safe: Uses locks to prevent concurrent modifications.
         """
-        if session_id not in self.sessions:
-            logger.warning(f"Session {session_id} not found, cannot add dataset reference")
-            return False
+        session_lock = self._get_session_lock(session_id)
         
-        session = self.sessions[session_id]
-        if "metadata" not in session:
-            session["metadata"] = {}
-        if "dataset_references" not in session["metadata"]:
-            session["metadata"]["dataset_references"] = []
-        
-        # Check if reference already exists
-        existing_refs = session["metadata"]["dataset_references"]
-        if any(ref.get("s3_key") == dataset_ref.get("s3_key") for ref in existing_refs):
-            logger.info(f"Dataset reference already exists: {dataset_ref.get('s3_key')}")
+        with session_lock:
+            if session_id not in self.sessions:
+                logger.warning(f"Session {session_id} not found, cannot add dataset reference")
+                return False
+            
+            session = self.sessions[session_id]
+            if "metadata" not in session:
+                session["metadata"] = {}
+            if "dataset_references" not in session["metadata"]:
+                session["metadata"]["dataset_references"] = []
+            
+            # Check if reference already exists
+            existing_refs = session["metadata"]["dataset_references"]
+            if any(ref.get("s3_key") == dataset_ref.get("s3_key") for ref in existing_refs):
+                logger.info(f"Dataset reference already exists: {dataset_ref.get('s3_key')}")
+                return True
+            
+            # Add timestamp
+            dataset_ref["linked_at"] = datetime.now().isoformat()
+            session["metadata"]["dataset_references"].append(dataset_ref)
+            session["updated_at"] = datetime.now().isoformat()
+            
+            self._save_session(session_id)
+            logger.info(f"Added dataset reference to session {session_id}: {dataset_ref.get('s3_key')}")
             return True
-        
-        # Add timestamp
-        dataset_ref["linked_at"] = datetime.now().isoformat()
-        session["metadata"]["dataset_references"].append(dataset_ref)
-        session["updated_at"] = datetime.now().isoformat()
-        
-        self._save_session(session_id)
-        logger.info(f"Added dataset reference to session {session_id}: {dataset_ref.get('s3_key')}")
-        return True
     
     def get_dataset_references(self, session_id: str) -> List[Dict[str, Any]]:
         """Get all dataset references for a session."""
