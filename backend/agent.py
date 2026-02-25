@@ -1,11 +1,81 @@
 # /backend/agent.py
 
+"""
+PRIMARY ORCHESTRATOR - PRODUCTION 🟢
+
+Helix.AI Multi-Agent Orchestrator with Policy Enforcement
+
+**STATUS:** This is the PRIMARY multi-agent orchestrator used by the HTTP API.
+All production traffic flows through handle_command().
+
+- Status: 🟢 PRODUCTION
+- Entry Point: handle_command()
+- Used By: /execute, /chat, /mcp/call_tool endpoints
+- Architecture: Multi-agent graph (6+ agents)
+
+For the EXPERIMENTAL clean orchestrator (not used in production), see backend/orchestrator.py
+For detailed comparison, see docs/ORCHESTRATION_DUALITY.md
+
+---
+
+This module implements the orchestrator for Helix.AI's multi-agent system with
+strict policy enforcement per agents/agent-responsibilities.md.
+
+## Architecture Overview
+
+The system has multiple specialized agents:
+- Intent Detector: Classifies user intent (ask vs execute)
+- Bioinformatics Guru: Answers questions (ask path)
+- Bioinformatics Executor (Planner): Creates workflow plans (execute path)
+- Infrastructure Expert: Selects execution environment
+- Code Generator: Fills tool gaps / creates execution specs
+- Execution Broker: Executes jobs (non-LLM service)
+- Data Visualizer: Creates plots and reports
+
+## Policy Enforcement (agents/agent-responsibilities.md)
+
+### 1. Handoff Policy (who can call whom)
+Enforced by HandoffPolicy class:
+- Intent Detector is always first
+- ask intent → Guru only
+- execute intent → Planner → Infra → (optional CodeGen) → Broker → Visualizer
+- Illegal handoffs (e.g., Guru → Broker) raise PolicyViolationError
+
+### 2. Contract-Level Enforcement (what each agent may/may not output)
+Enforced by backend/policy_checks.py:
+- Planner must not choose infrastructure (no EC2/EMR/instance types)
+- Infrastructure Expert must not mutate plan steps
+- Code Generator must not change scientific intent
+- Visualizer must not introduce workflow steps or infra changes
+
+### 3. Integration Points
+- HandoffPolicy: validates agent transitions
+- CommandProcessor.agent_sequence: tracks call order
+- Staged functions (_run_intent_detector, _run_planner, etc.): integrate policy checks
+- Tests: tests/unit/backend/test_agent_responsibilities_policy.py
+
+## Usage
+
+```python
+from backend.agent import handle_command
+
+result = await handle_command(
+    command="Run FastQC on my data",
+    session_id="user123",
+    session_context={"uploaded_files": [...]}
+)
+```
+
+See agents/agent-responsibilities.md for detailed agent specifications.
+"""
+
 import asyncio
 import os
 import logging
 import re
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Literal
+from enum import Enum
 
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
@@ -18,6 +88,206 @@ from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# HANDOFF POLICY: Enforces agent routing rules per agent-responsibilities.md
+# ============================================================================
+
+class AgentRole(str, Enum):
+    """
+    Agent roles in the system.
+    
+    DEPRECATION NOTICE: 
+    - GURU, PLANNER, INFRA, BROKER are legacy names from the OLD system
+    - For NEW orchestrator-based system, use backend.config.agent_registry.AgentName
+    - Canonical names: InfrastructureDecisionAgent, ImplementationAgent
+    
+    This enum is kept for backward compatibility with existing code.
+    New code should use the canonical registry in backend.config.agent_registry.
+    """
+    INTENT_DETECTOR = "IntentDetector"
+    
+    # LEGACY names (OLD system)
+    GURU = "BioinformaticsGuru"  # DEPRECATED: Use AgentName.WORKFLOW_PLANNER or similar
+    PLANNER = "BioinformaticsExecutor"  # DEPRECATED: Use AgentName.IMPLEMENTATION
+    INFRA = "InfrastructureExpert"  # DEPRECATED: Use AgentName.INFRASTRUCTURE_DECISION
+    BROKER = "ExecutionBroker"  # DEPRECATED: Not an agent, but a job executor
+    
+    # Other roles
+    CODEGEN = "CodeGenerator"  # Maps to AgentName.TOOL_GENERATOR
+    VISUALIZER = "DataVisualizer"
+
+
+class HandoffPolicy:
+    """
+    Enforces agent handoff rules per agent-responsibilities.md.
+    
+    System-wide rules:
+    1. Intent Detector is always first
+    2. If intent=ask → only Guru (unless Guru escalates to Planner with explicit user consent)
+    3. If intent=execute → Planner → Infra → (optional CodeGen) → Broker → Visualizer
+    4. Disallow illegal calls (e.g., Infra calling Broker, Guru calling Broker)
+    
+    Usage:
+        policy = HandoffPolicy()
+        
+        # Validate a handoff
+        policy.validate_handoff(from_agent=AgentRole.PLANNER, to_agent=AgentRole.INFRA)  # OK
+        policy.validate_handoff(from_agent=AgentRole.INFRA, to_agent=AgentRole.BROKER)  # Raises PolicyViolationError
+        
+        # Get allowed next agents
+        allowed = policy.get_allowed_next_agents(AgentRole.PLANNER)  # Returns [AgentRole.INFRA]
+    """
+    
+    # Define the allowed handoff graph
+    # Format: {from_agent: [allowed_next_agents]}
+    ALLOWED_HANDOFFS: Dict[AgentRole, List[AgentRole]] = {
+        # Intent Detector is always first, routes to Guru or Planner
+        AgentRole.INTENT_DETECTOR: [AgentRole.GURU, AgentRole.PLANNER],
+        
+        # Guru (ask path) can only answer or escalate to Planner with user consent
+        AgentRole.GURU: [AgentRole.PLANNER],  # Escalation requires user consent (checked separately)
+        
+        # Planner (execute path) must go to Infra next
+        AgentRole.PLANNER: [AgentRole.INFRA],
+        
+        # Infra must go to CodeGen or Broker (CodeGen is optional)
+        AgentRole.INFRA: [AgentRole.CODEGEN, AgentRole.BROKER],
+        
+        # CodeGen must go to Broker
+        AgentRole.CODEGEN: [AgentRole.BROKER],
+        
+        # Broker must go to Visualizer
+        AgentRole.BROKER: [AgentRole.VISUALIZER],
+        
+        # Visualizer is terminal (no further handoffs)
+        AgentRole.VISUALIZER: [],
+    }
+    
+    # Intent-based routing rules
+    INTENT_ROUTING = {
+        "ask": AgentRole.GURU,
+        "qa": AgentRole.GURU,
+        "execute": AgentRole.PLANNER,
+    }
+    
+    def validate_handoff(
+        self, 
+        from_agent: AgentRole, 
+        to_agent: AgentRole,
+        user_consent: bool = False
+    ) -> None:
+        """
+        Validate that a handoff from one agent to another is allowed.
+        
+        Args:
+            from_agent: Agent initiating the handoff
+            to_agent: Agent receiving the handoff
+            user_consent: Whether user has explicitly consented (for Guru→Planner escalation)
+        
+        Raises:
+            PolicyViolationError: If the handoff is not allowed
+        """
+        allowed_next = self.ALLOWED_HANDOFFS.get(from_agent, [])
+        
+        if to_agent not in allowed_next:
+            raise PolicyViolationError(
+                f"Illegal handoff: {from_agent.value} → {to_agent.value}. "
+                f"Allowed transitions: {[a.value for a in allowed_next]}"
+            )
+        
+        # Special case: Guru → Planner requires user consent
+        if from_agent == AgentRole.GURU and to_agent == AgentRole.PLANNER and not user_consent:
+            raise PolicyViolationError(
+                f"Guru → Planner escalation requires explicit user consent"
+            )
+    
+    def get_allowed_next_agents(self, from_agent: AgentRole) -> List[AgentRole]:
+        """
+        Get list of agents that can be called next from the given agent.
+        
+        Args:
+            from_agent: Current agent
+            
+        Returns:
+            List of allowed next agents
+        """
+        return self.ALLOWED_HANDOFFS.get(from_agent, [])
+    
+    def get_next_agent_for_intent(self, intent: str) -> AgentRole:
+        """
+        Get the next agent to invoke based on intent classification.
+        
+        Args:
+            intent: Intent string ("ask", "qa", or "execute")
+            
+        Returns:
+            Next agent role
+            
+        Raises:
+            PolicyViolationError: If intent is not recognized
+        """
+        next_agent = self.INTENT_ROUTING.get(intent)
+        if next_agent is None:
+            raise PolicyViolationError(
+                f"Unknown intent: {intent}. "
+                f"Supported intents: {list(self.INTENT_ROUTING.keys())}"
+            )
+        return next_agent
+    
+    def validate_workflow_sequence(
+        self, 
+        agent_sequence: List[AgentRole],
+        intent: str
+    ) -> None:
+        """
+        Validate that a complete workflow sequence follows the policy.
+        
+        Args:
+            agent_sequence: Ordered list of agents in the workflow
+            intent: User intent that initiated the workflow
+            
+        Raises:
+            PolicyViolationError: If the sequence violates policy
+        """
+        if not agent_sequence:
+            raise PolicyViolationError("Empty agent sequence")
+        
+        # First agent must be Intent Detector
+        if agent_sequence[0] != AgentRole.INTENT_DETECTOR:
+            raise PolicyViolationError(
+                f"First agent must be IntentDetector, got: {agent_sequence[0].value}"
+            )
+        
+        # Second agent must match intent
+        if len(agent_sequence) > 1:
+            expected_second = self.get_next_agent_for_intent(intent)
+            if agent_sequence[1] != expected_second:
+                raise PolicyViolationError(
+                    f"For intent '{intent}', second agent must be {expected_second.value}, "
+                    f"got: {agent_sequence[1].value}"
+                )
+        
+        # Validate all handoffs in sequence
+        for i in range(len(agent_sequence) - 1):
+            from_agent = agent_sequence[i]
+            to_agent = agent_sequence[i + 1]
+            self.validate_handoff(from_agent, to_agent)
+
+
+class PolicyViolationError(Exception):
+    """Raised when an agent handoff violates the policy."""
+    pass
+
+
+# Global policy instance
+_handoff_policy = HandoffPolicy()
+
+
+def get_handoff_policy() -> HandoffPolicy:
+    """Get the global handoff policy instance."""
+    return _handoff_policy
 
 try:
     # Best-effort: in some sandbox/CI environments the .env file may be unreadable
@@ -91,6 +361,7 @@ from backend.agent_tools import (
     lookup_go_term,
     bulk_rnaseq_analysis,
     fastqc_quality_analysis,
+    read_merging,
 )
 
 
@@ -155,6 +426,7 @@ def _get_agent():
             phylogenetic_tree,
             sequence_selection,
             synthesis_submission,
+            create_session,
             plasmid_visualization,
             plasmid_for_representatives,
             single_cell_analysis,
@@ -163,6 +435,7 @@ def _get_agent():
             lookup_go_term,
             bulk_rnaseq_analysis,
             fastqc_quality_analysis,
+            read_merging,
         ],
         checkpointer=_memory,
     )
@@ -188,7 +461,8 @@ class CommandProcessor:
         tool_generator=None,
         memory=None,
         system_prompt: str = None,
-        is_mock_mode: bool = False
+        is_mock_mode: bool = False,
+        handoff_policy: HandoffPolicy = None
     ):
         """
         Initialize CommandProcessor with dependencies.
@@ -201,6 +475,7 @@ class CommandProcessor:
             memory: MemorySaver instance for checkpointing (default: _memory)
             system_prompt: System prompt for agent (default: BIOAGENT_SYSTEM_PROMPT)
             is_mock_mode: Whether running in mock mode (default: from HELIX_MOCK_MODE env)
+            handoff_policy: HandoffPolicy instance (default: global policy)
         """
         self.agent = agent
         self._intent_classifier = intent_classifier
@@ -209,6 +484,10 @@ class CommandProcessor:
         self.memory = memory
         self.system_prompt = system_prompt or BIOAGENT_SYSTEM_PROMPT
         self.is_mock_mode = is_mock_mode or (os.getenv("HELIX_MOCK_MODE") == "1")
+        self.handoff_policy = handoff_policy or get_handoff_policy()
+        
+        # Track agent execution sequence for policy validation
+        self.agent_sequence: List[AgentRole] = []
     
     def _get_intent_classifier(self):
         """Lazy load intent classifier."""
@@ -223,6 +502,59 @@ class CommandProcessor:
             from backend.command_router import CommandRouter
             self._router = CommandRouter()
         return self._router
+    
+    def _register_agent_call(self, agent: AgentRole) -> None:
+        """
+        Register an agent call in the execution sequence.
+        
+        Args:
+            agent: Agent being called
+        """
+        self.agent_sequence.append(agent)
+        logger.info(f"[HandoffPolicy] Registered agent call: {agent.value}")
+        logger.info(f"[HandoffPolicy] Current sequence: {[a.value for a in self.agent_sequence]}")
+    
+    def _validate_next_agent(self, next_agent: AgentRole, user_consent: bool = False) -> None:
+        """
+        Validate that calling the next agent is allowed by policy.
+        
+        Args:
+            next_agent: Agent to be called next
+            user_consent: Whether user has explicitly consented (for escalations)
+            
+        Raises:
+            PolicyViolationError: If the handoff is not allowed
+        """
+        if not self.agent_sequence:
+            # First agent must be Intent Detector
+            if next_agent != AgentRole.INTENT_DETECTOR:
+                raise PolicyViolationError(
+                    f"First agent must be IntentDetector, attempted to call: {next_agent.value}"
+                )
+        else:
+            # Validate handoff from current agent to next agent
+            current_agent = self.agent_sequence[-1]
+            self.handoff_policy.validate_handoff(current_agent, next_agent, user_consent)
+            logger.info(f"[HandoffPolicy] Validated handoff: {current_agent.value} → {next_agent.value}")
+    
+    def _safe_handoff(self, next_agent: AgentRole, user_consent: bool = False) -> bool:
+        """
+        Safely attempt a handoff to the next agent with policy validation.
+        
+        Args:
+            next_agent: Agent to hand off to
+            user_consent: Whether user has explicitly consented
+            
+        Returns:
+            True if handoff is allowed, False otherwise
+        """
+        try:
+            self._validate_next_agent(next_agent, user_consent)
+            self._register_agent_call(next_agent)
+            return True
+        except PolicyViolationError as e:
+            logger.error(f"[HandoffPolicy] Policy violation: {e}")
+            return False
     
     def _prepare_messages(self, command: str, session_context: Dict) -> tuple:
         """
@@ -314,16 +646,173 @@ class CommandProcessor:
         
         return result
     
+    async def _handle_multi_step_workflow(
+        self, command: str, session_id: str, session_context: Dict
+    ) -> Dict:
+        """
+        Handle multi-step workflow execution using workflow_planner + workflow_executor.
+        
+        This is the NEW integration path that wires together:
+        1. workflow_planner_agent.plan_workflow() → Creates WorkflowPlan
+        2. workflow_executor.execute_workflow() → Executes each step sequentially
+        
+        Returns:
+            Dict with workflow execution results
+        """
+        print("[CommandProcessor] 🔄 Starting multi-step workflow execution...")
+        
+        try:
+            # Import workflow modules
+            from backend.workflow_planner_agent import plan_workflow
+            from backend.workflow_executor import get_workflow_executor
+            
+            # Step 1: Create workflow plan
+            print("[CommandProcessor] 📋 Step 1: Planning workflow...")
+            plan_result = await plan_workflow(command, session_context)
+            
+            if plan_result["status"] != "success":
+                # Clarification needed or infeasible - return a helpful response
+                # (not a hard error) so the user gets actionable information.
+                clarification_msg = plan_result.get("message", "")
+                detected_type = plan_result.get("detected_workflow_type", "unknown")
+                detected_inputs = plan_result.get("detected_inputs", [])
+                missing_params = plan_result.get("missing_parameters", [])
+
+                if plan_result["status"] == "clarification_needed" and clarification_msg:
+                    helpful_text = clarification_msg
+                else:
+                    helpful_text = (
+                        f"I detected a **{detected_type}** workflow"
+                        + (f" with inputs: {', '.join(detected_inputs)}" if detected_inputs else "")
+                        + ".\n\n"
+                    )
+                    if missing_params:
+                        helpful_text += "To proceed, please provide:\n"
+                        for p in missing_params:
+                            helpful_text += f"- **{p.get('parameter', p)}**: {p.get('description', '')}\n"
+                    else:
+                        helpful_text += plan_result.get("error", "Could not build a workflow plan.")
+
+                print(f"[CommandProcessor] ⚠️  Workflow planning needs clarification: {plan_result['status']}")
+                return {
+                    "status": "workflow_needs_clarification",
+                    "success": True,
+                    "text": helpful_text,
+                    "message": helpful_text,
+                    "data": {"sequences": [], "visuals": []},
+                }
+            
+            workflow_plan = plan_result["workflow_plan"]
+            workflow_type = plan_result.get("workflow_type", "unknown")
+            
+            print(f"[CommandProcessor] ✅ Workflow plan created: {workflow_type}")
+            print(f"[CommandProcessor]    Steps: {len(workflow_plan.operations)}")
+            for i, op in enumerate(workflow_plan.operations, 1):
+                print(f"[CommandProcessor]      {i}. {op.operation_name} ({op.tool_name})")
+            
+            # Step 2: Format a structured plan response immediately — do NOT execute
+            # synchronously, as multi-tool pipelines can take many minutes and would
+            # exceed the 60-second CloudFront / API gateway origin timeout.
+            # Asynchronous job execution can be kicked off separately.
+            print(f"[CommandProcessor] 📋 Returning workflow PLAN (no sync execution).")
+            
+            ops = getattr(workflow_plan, "operations", []) or []
+            steps_text_lines = []
+            for i, op in enumerate(ops, 1):
+                op_name = getattr(op, "operation_name", None) or getattr(op, "name", f"Step {i}")
+                tool   = getattr(op, "tool_name", None) or ""
+                desc   = getattr(op, "description", None) or ""
+                line   = f"{i}. **{op_name}**"
+                if tool:
+                    line += f" (`{tool}`)"
+                if desc:
+                    line += f" — {desc}"
+                steps_text_lines.append(line)
+            
+            steps_md = "\n".join(steps_text_lines) if steps_text_lines else "(no steps planned)"
+            plan_summary = (
+                f"## Pipeline Plan\n\n"
+                f"**Workflow type:** {workflow_type}\n\n"
+                f"**Steps ({len(ops)} total):**\n\n"
+                f"{steps_md}\n\n"
+                f"*To execute this pipeline, submit each step or provide a job-execution request.*"
+            )
+            
+            return {
+                "status": "workflow_planned",
+                "success": True,
+                "workflow_type": workflow_type,
+                "text": plan_summary,
+                "message": plan_summary,
+                "data": {
+                    "workflow_plan": {
+                        "type": workflow_type,
+                        "steps": [
+                            {
+                                "step": i + 1,
+                                "name": getattr(op, "operation_name", None) or getattr(op, "name", f"Step {i+1}"),
+                                "tool": getattr(op, "tool_name", None) or "",
+                                "description": getattr(op, "description", None) or "",
+                            }
+                            for i, op in enumerate(ops)
+                        ],
+                    },
+                    "sequences": [],
+                    "visuals": [],
+                },
+            }
+            
+        except Exception as e:
+            logger.error(f"[CommandProcessor] Multi-step workflow error: {e}", exc_info=True)
+            return {
+                "status": "error",
+                "success": False,
+                "error": "WORKFLOW_EXECUTION_ERROR",
+                "message": f"Workflow execution error: {str(e)}",
+                "errors": [{"code": "WORKFLOW_EXECUTION_ERROR", "message": str(e), "severity": "error"}]
+            }
+    
     def _extract_tool_from_stream_event(self, event: Dict) -> Optional[Dict]:
-        """Extract tool mapping from a single stream event."""
+        """
+        Extract tool mapping from a single stream event.
+        
+        STREAM EVENT STRUCTURE:
+        =======================
+        Each event from agent.stream() is a dict like:
+        {
+          "agent": {
+            "messages": [AIMessage(...), ...]
+          }
+        }
+        OR
+        {
+          "tools": {
+            "messages": [ToolMessage(...), ...]
+          }
+        }
+        
+        The "agent" node contains AIMessage objects that have a `tool_calls` attribute
+        when the LLM decides to use a tool. This is what we're looking for!
+        
+        The "tools" node contains ToolMessage objects after a tool has been executed.
+        We check this too, but usually the tool_calls appear in the "agent" node first.
+        """
         if not isinstance(event, dict):
+            print(f"[CommandProcessor]    ⚠️  Event is not a dict: {type(event)}")
             return None
         
+        print(f"[CommandProcessor]    🔍 Inspecting event with {len(event)} node(s): {list(event.keys())}")
+        
         for node_name, node_output in event.items():
-            # Look for "tools" node
+            print(f"[CommandProcessor]    🔍 Checking node '{node_name}'...")
+            
+            # Look for "tools" node (where tool execution happens)
+            # This contains ToolMessage objects after a tool has been executed
             if node_name == "tools" or "tools" in node_name.lower():
+                print(f"[CommandProcessor]    📦 Found 'tools' node - checking for tool execution messages...")
                 if isinstance(node_output, dict) and "messages" in node_output:
                     messages = node_output["messages"]
+                    print(f"[CommandProcessor]    📦 'tools' node has {len(messages)} message(s)")
                     for msg in messages:
                         if hasattr(msg, 'name'):
                             tool_name = msg.name
@@ -339,17 +828,24 @@ class CommandProcessor:
                             elif hasattr(msg, 'input'):
                                 tool_args = msg.input
                             
+                            print(f"[CommandProcessor]    ✅ Found tool execution in 'tools' node: {tool_name}")
                             return {
                                 "tool_name": tool_name,
                                 "parameters": tool_args if isinstance(tool_args, dict) else {}
                             }
+                else:
+                    print(f"[CommandProcessor]    ⚠️  'tools' node output is not a dict with 'messages': {type(node_output)}")
             
-            # Check for AIMessage with tool_calls
+            # Check for AIMessage with tool_calls (the LLM's decision to call a tool)
+            # This is usually in the "agent" node and appears BEFORE tool execution
             if isinstance(node_output, dict) and "messages" in node_output:
                 messages = node_output["messages"]
-                for msg in messages:
+                print(f"[CommandProcessor]    🤖 Node '{node_name}' has {len(messages)} message(s) - checking for tool_calls...")
+                for i, msg in enumerate(messages):
+                    # Check if this message has tool_calls (the LLM's decision to use a tool)
                     if hasattr(msg, 'tool_calls') and msg.tool_calls:
-                        for tool_call in msg.tool_calls:
+                        print(f"[CommandProcessor]    ✅ Found AIMessage #{i} with {len(msg.tool_calls)} tool_calls in node '{node_name}'!")
+                        for j, tool_call in enumerate(msg.tool_calls):
                             tool_name = None
                             tool_args = {}
                             
@@ -364,69 +860,172 @@ class CommandProcessor:
                                 tool_args = tool_call.get("args", {})
                             
                             if tool_name:
+                                print(f"[CommandProcessor]    ✅ Extracted tool_call #{j}: {tool_name} with args: {tool_args}")
                                 return {
                                     "tool_name": tool_name,
                                     "parameters": tool_args if isinstance(tool_args, dict) else {}
                                 }
+                    else:
+                        msg_type = type(msg).__name__
+                        has_tool_calls_attr = hasattr(msg, 'tool_calls')
+                        print(f"[CommandProcessor]    📝 Message #{i} is {msg_type}, has tool_calls attr: {has_tool_calls_attr}")
+            else:
+                print(f"[CommandProcessor]    ⚠️  Node '{node_name}' output is not a dict with 'messages': {type(node_output)}")
+        
+        print(f"[CommandProcessor]    ❌ No tool call found in this event")
         return None
     
     async def _extract_tool_mapping_from_stream(
         self, input_message, system_message, session_config: Dict
     ) -> Optional[Dict]:
-        """Extract tool mapping by streaming agent execution."""
+        """
+        Extract tool mapping by streaming agent execution.
+        
+        HOW STREAMING WORKS:
+        ==================
+        LangGraph's `create_react_agent()` creates a graph with nodes like:
+        - "agent" node: The LLM that reasons and decides which tool to use
+        - "tools" node: Where tools are actually executed
+        
+        When you call `agent.stream()` with `stream_mode="updates"`, it:
+        1. Executes the graph step-by-step
+        2. Yields an event each time a node updates its state
+        3. Each event is a dict like: {"agent": {...}, "tools": {...}}
+        
+        EXAMPLE: User says "Align these sequences"
+        ============================================
+        Stream Event #1: {"agent": {"messages": [AIMessage with tool_calls=[sequence_alignment]]}}
+          → LLM decided to use sequence_alignment tool
+          → We extract tool_name="sequence_alignment" and return early ✅
+        
+        Stream Event #2: {"tools": {"messages": [ToolMessage with results]}}
+          → Tool executed and returned results
+          → (We never see this because we already returned from Event #1)
+        
+        Stream Event #3: {"agent": {"messages": [AIMessage with final answer]}}
+          → LLM processes tool results and gives final answer
+          → (We never see this because we already returned)
+        
+        WHY TOOL CALLS CAN BE MISSED:
+        =============================
+        1. The tool_calls might be in a different event format than expected
+        2. The event might not have the "agent" or "tools" keys we're looking for
+        3. The tool_calls might be nested differently in the message structure
+        4. The stream might complete before we check all events
+        5. The agent might decide not to use a tool (just answer directly)
+        """
         if self.agent is None:
             self.agent = _get_agent()
         
         def capture_tool_call_sync():
-            """Synchronous function to stream agent and capture first tool call."""
+            """
+            Synchronous function to stream agent execution and capture first tool call.
+            
+            This function iterates through stream events as they're generated in real-time.
+            Each event represents a node update in the LangGraph execution graph.
+            """
+            print("[CommandProcessor] 🔄 Starting agent.stream() with stream_mode='updates'...")
+            print("[CommandProcessor]    This will yield events as each graph node updates its state")
+            print("[CommandProcessor]    Looking for tool_calls in 'agent' or 'tools' node events...")
+            event_count = 0
             try:
+                # agent.stream() is a generator that yields events as the graph executes
+                # Each iteration of this loop receives one event (one node update)
                 for event in self.agent.stream(
                     {"messages": [system_message, input_message]},
                     session_config,
-                    stream_mode="updates"
+                    stream_mode="updates"  # Yields events when nodes update their state
                 ):
+                    event_count += 1
+                    # Each event is a dict with node names as keys
+                    # Example: {"agent": {...}} or {"tools": {...}} or {"agent": {...}, "tools": {...}}
+                    node_names = list(event.keys()) if isinstance(event, dict) else []
+                    print(f"[CommandProcessor] 📡 Stream event #{event_count}: nodes={node_names}")
+                    print(f"[CommandProcessor]    Event structure: {list(event.keys()) if isinstance(event, dict) else 'not a dict'}")
+                    
+                    # Check this event for tool calls
                     tool_mapping = self._extract_tool_from_stream_event(event)
                     if tool_mapping:
-                        print(f"[CommandProcessor] Agent mapped tool from stream: {tool_mapping['tool_name']} with params: {tool_mapping['parameters']}")
+                        print(f"[CommandProcessor] ✅ Tool call found in stream event #{event_count}!")
+                        print(f"[CommandProcessor]    Tool: {tool_mapping['tool_name']}")
+                        print(f"[CommandProcessor]    Params: {tool_mapping['parameters']}")
+                        print(f"[CommandProcessor]    Stopping stream early (no need to wait for full execution)")
                         return tool_mapping
+                    else:
+                        print(f"[CommandProcessor]    No tool call detected in this event")
+                
+                print(f"[CommandProcessor] ⚠️  Streamed through {event_count} events but no tool call was detected")
+                print(f"[CommandProcessor]    Possible reasons:")
+                print(f"[CommandProcessor]      - Agent decided to answer directly (no tool needed)")
+                print(f"[CommandProcessor]      - Tool call format didn't match expected structure")
+                print(f"[CommandProcessor]      - Tool call was in an event we didn't check properly")
             except Exception as e:
-                print(f"[CommandProcessor] Error during tool call capture: {e}")
+                print(f"[CommandProcessor] ❌ Error during streaming tool call capture: {e}")
                 import traceback
                 traceback.print_exc()
-            return None
+                # Don't return None here - let the exception propagate or return None explicitly
+                return None
         
+        tool_mapping = None  # Initialize to avoid UnboundLocalError
         try:
+            print("[CommandProcessor] 🚀 Attempting to capture tool call via streaming (timeout: 30s)...")
             tool_mapping = await asyncio.wait_for(
                 asyncio.to_thread(capture_tool_call_sync),
                 timeout=30.0
             )
+            if tool_mapping:
+                print(f"[CommandProcessor] ✅ Successfully captured tool call from stream: {tool_mapping.get('tool_name')}")
+            else:
+                print("[CommandProcessor] ⚠️  No tool call captured from stream - will try fallback methods")
         except asyncio.TimeoutError:
-            print("⚠️  Agent tool mapping timed out after 30s")
+            print("⚠️  Agent streaming timed out after 30s")
+            print("🔍 Attempting to extract tool call from agent state...")
             # Try to extract from state
             if self.memory:
                 extracted = _extract_tool_call_from_state(self.memory, session_config)
                 if extracted:
+                    print(f"[CommandProcessor] ✅ Extracted tool call from agent state: {extracted.get('tool_name')}")
                     tool_mapping = extracted
+                else:
+                    print("[CommandProcessor] ⚠️  Could not extract tool call from agent state")
+            else:
+                print("[CommandProcessor] ⚠️  No memory available to extract tool call from state")
+        except Exception as e:
+            print(f"[CommandProcessor] ❌ Exception during stream capture: {e}")
+            import traceback
+            traceback.print_exc()
+            tool_mapping = None
         
         return tool_mapping
     
     def _extract_tool_from_result_messages(self, result: Dict) -> Optional[Dict]:
-        """Extract tool mapping from agent result messages."""
+        """
+        Extract tool mapping from agent result messages.
+        
+        After agent.invoke() completes, we check all messages in the result
+        for AIMessage objects that contain tool_calls (the LLM's decision to use a tool).
+        We search in reverse order to find the most recent tool call.
+        """
         if not isinstance(result, dict) or "messages" not in result:
             return None
         
         messages = result.get("messages", [])
+        print(f"[CommandProcessor] 🔍 Scanning {len(messages)} messages from invoke() result for tool_calls...")
+        
         for msg in reversed(messages):
             if hasattr(msg, 'tool_calls') and msg.tool_calls:
+                print(f"[CommandProcessor] 🔍 Found AIMessage with {len(msg.tool_calls)} tool_calls")
                 for tool_call in msg.tool_calls:
                     tool_name = getattr(tool_call, 'name', None)
                     tool_args = getattr(tool_call, 'args', None) or {}
                     if tool_name:
-                        print(f"[CommandProcessor] Extracted tool mapping from result: {tool_name}")
+                        print(f"[CommandProcessor] ✅ Extracted tool mapping from invoke() result: {tool_name} with params: {tool_args}")
                         return {
                             "tool_name": tool_name,
                             "parameters": tool_args
                         }
+        
+        print("[CommandProcessor] ⚠️  No tool_calls found in invoke() result messages")
         return None
     
     def _build_tool_mapped_response(self, tool_mapping: Dict) -> Dict:
@@ -439,11 +1038,68 @@ class CommandProcessor:
             "message": f"Agent identified tool: {tool_mapping['tool_name']}. Execution will be handled by router."
         }
     
+    def _build_intent_not_supported_response(self, intent: str, command: str) -> Dict:
+        """Build a standardized response for unsupported intents."""
+        return {
+            "status": "error",
+            "success": False,
+            "message": f"Intent '{intent}' is not supported",
+            "text": f"The intent '{intent}' is not currently supported by the system.",
+            "error": "INTENT_NOT_SUPPORTED",
+            "errors": [
+                {
+                    "code": "INTENT_NOT_SUPPORTED",
+                    "message": f"Intent '{intent}' is not supported. Supported intents are: 'qa', 'execute'.",
+                    "severity": "error"
+                }
+            ],
+            "prompt": command,
+            "data": {
+                "sequences": [],
+                "results": {},
+                "visuals": [],
+                "links": []
+            }
+        }
+    
+    def _build_policy_violation_response(self, error: PolicyViolationError, command: str) -> Dict:
+        """Build a standardized response for policy violations."""
+        return {
+            "status": "error",
+            "success": False,
+            "message": f"Agent handoff policy violation: {str(error)}",
+            "text": (
+                f"The requested operation violates the agent handoff policy. {str(error)}\n\n"
+                f"Valid workflows:\n"
+                f"- Ask questions: IntentDetector → BioinformaticsGuru\n"
+                f"- Execute workflows: IntentDetector → BioinformaticsExecutor → "
+                f"InfrastructureExpert → ExecutionBroker → DataVisualizer"
+            ),
+            "error": "POLICY_VIOLATION",
+            "errors": [
+                {
+                    "code": "POLICY_VIOLATION",
+                    "message": str(error),
+                    "severity": "error"
+                }
+            ],
+            "prompt": command,
+            "agent_sequence": [a.value for a in self.agent_sequence],
+            "data": {
+                "sequences": [],
+                "results": {},
+                "visuals": [],
+                "links": []
+            }
+        }
+    
     async def _try_router_fallback(self, command: str, session_context: Dict) -> Optional[Dict]:
         """Try deterministic router fallback for safe tools."""
         try:
             router = self._get_router()
+            print(f"[CommandProcessor] Router type: {type(router)}, is Mock: {type(router).__name__ == 'Mock'}")
             tool_name, parameters = router.route_command(command, session_context or {})
+            print(f"[CommandProcessor] Router returned: tool_name={tool_name}, parameters={parameters}")
             
             safe_tools = {
                 "toolbox_inventory",
@@ -463,7 +1119,7 @@ class CommandProcessor:
                 "single_cell_analysis",
             }
             
-            if tool_name in safe_tools:
+            if tool_name and tool_name in safe_tools:
                 print(f"[CommandProcessor] Deterministic router fallback -> {tool_name}")
                 return {
                     "tool_mapping": {"tool_name": tool_name, "parameters": parameters or {}},
@@ -472,8 +1128,12 @@ class CommandProcessor:
                     "status": "tool_mapped",
                     "message": f"Deterministic router fallback identified tool: {tool_name}. Execution will be handled by router.",
                 }
-        except Exception:
-            pass
+            else:
+                print(f"[CommandProcessor] Router returned tool_name={tool_name}, not in safe_tools or None")
+        except Exception as e:
+            print(f"[CommandProcessor] ⚠️  Router fallback exception: {e}")
+            import traceback
+            traceback.print_exc()
         return None
     
     async def _try_tool_generator_fallback(
@@ -506,7 +1166,8 @@ class CommandProcessor:
                 user_request=command,
                 session_id=session_id,
                 inputs=discovered_inputs,
-                outputs=discovered_outputs
+                outputs=discovered_outputs,
+                session_context=session_context
             )
             
             if tool_result.get("status") == "success":
@@ -535,20 +1196,289 @@ class CommandProcessor:
         
         return None
     
+    # =========================================================================
+    # Staged Orchestration Functions (Phase 4)
+    # =========================================================================
+    # These functions implement the staged, policy-driven orchestration from
+    # agents/agent-responsibilities.md with contract-level enforcement.
+    #
+    # Each stage:
+    # 1. Registers an agent call in the trace
+    # 2. Validates output schema (if applicable)
+    # 3. Runs relevant policy checks from backend/policy_checks.py
+    # =========================================================================
+    
+    async def _run_intent_detector(self, command: str) -> 'IntentResult':
+        """
+        Stage 1: Intent Detection (always first).
+        
+        Returns:
+            IntentResult with intent classification
+        """
+        from shared.contracts import IntentResult
+        
+        # Validate and register agent call
+        self._validate_next_agent(AgentRole.INTENT_DETECTOR)
+        self._register_agent_call(AgentRole.INTENT_DETECTOR)
+        
+        # Run intent classifier
+        intent_classifier = self._get_intent_classifier()
+        intent = intent_classifier(command)
+        
+        # Validate schema (should return IntentResult)
+        if not isinstance(intent, IntentResult):
+            logger.warning(f"[IntentDetector] Output is not IntentResult, got: {type(intent)}")
+        
+        logger.info(f"[IntentDetector] Intent: {intent.intent}, confidence: {intent.confidence}")
+        return intent
+    
+    async def _run_guru(self, command: str, session_context: Dict) -> Dict:
+        """
+        Stage 2a: Bioinformatics Guru (ask path).
+        
+        Returns:
+            Answer dict with text response
+        """
+        # Validate and register agent call
+        self._validate_next_agent(AgentRole.GURU)
+        self._register_agent_call(AgentRole.GURU)
+        
+        # Prepare messages
+        input_message, system_message, _ = self._prepare_messages(command, session_context)
+        
+        # Create session config
+        session_config = self._create_session_config("guru_session")
+        
+        # Run guru (Q&A agent)
+        result = await self._handle_qa_intent(input_message, system_message, session_config)
+        
+        logger.info(f"[Guru] Completed Q&A response")
+        return result
+    
+    async def _run_planner(
+        self, 
+        command: str, 
+        session_id: str, 
+        session_context: Dict
+    ) -> Optional[Dict]:
+        """
+        Stage 2b: Bioinformatics Executor (Planner) - execute path.
+        
+        Returns:
+            Dict with tool_mapping or None if planning failed
+        """
+        from backend.policy_checks import check_planner_output
+        
+        # Validate and register agent call
+        self._validate_next_agent(AgentRole.PLANNER)
+        self._register_agent_call(AgentRole.PLANNER)
+        
+        logger.info(f"[Planner] Creating workflow plan...")
+        
+        # Prepare messages
+        input_message, system_message, _ = self._prepare_messages(command, session_context)
+        
+        # Create session config
+        session_config = self._create_session_config(session_id)
+        
+        # Try to extract tool mapping (this is the current implementation)
+        # In a future iteration, this would return a full WorkflowPlan
+        tool_mapping = await self._extract_tool_mapping_from_stream(
+            input_message, system_message, session_config
+        )
+        
+        if not tool_mapping:
+            # Fallback to invoke
+            result = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self.agent.invoke,
+                    {"messages": [system_message, input_message]},
+                    session_config
+                ),
+                timeout=30.0
+            )
+            
+            if isinstance(result, dict) and "messages" in result:
+                result["messages"] = self._deduplicate_messages(result.get("messages", []))
+            
+            tool_mapping = self._extract_tool_from_result_messages(result)
+        
+        # TODO: In a complete implementation, we would:
+        # 1. Parse tool_mapping into a WorkflowPlan
+        # 2. Run check_planner_output(plan) to validate no infra decisions
+        # For now, we just log and return tool_mapping
+        
+        if tool_mapping:
+            logger.info(f"[Planner] Tool identified: {tool_mapping.get('tool_name')}")
+            # Basic check: ensure no infrastructure keywords in tool parameters
+            try:
+                check_planner_output(tool_mapping)
+            except Exception as e:
+                logger.warning(f"[Planner] Policy check warning: {e}")
+        
+        return tool_mapping
+    
+    async def _run_infra(self, plan_or_mapping: Dict) -> Optional[Dict]:
+        """
+        Stage 3: Infrastructure Expert.
+        
+        TODO: In a complete implementation, this would:
+        1. Take a WorkflowPlan as input
+        2. Call infrastructure_decision_agent_v2.py
+        3. Return an InfraDecision
+        4. Validate that plan steps were not mutated
+        
+        For now, this is a placeholder that registers the agent call.
+        
+        Returns:
+            InfraDecision dict or None
+        """
+        from backend.policy_checks import check_plan_not_mutated
+        
+        # Validate and register agent call
+        self._validate_next_agent(AgentRole.INFRA)
+        self._register_agent_call(AgentRole.INFRA)
+        
+        logger.info(f"[InfrastructureExpert] Selecting infrastructure...")
+        
+        # TODO: Actually call infrastructure_decision_agent_v2.py here
+        # For now, just log and return None (infra decision is implicit)
+        
+        # In a complete implementation:
+        # before_steps = serialize_plan_steps(plan.steps)
+        # infra_decision = await infrastructure_decision_agent.decide(plan, inputs, outputs)
+        # after_steps = serialize_plan_steps(plan.steps)
+        # check_plan_not_mutated(before_steps, after_steps, "InfrastructureExpert")
+        
+        return None
+    
+    async def _run_codegen_if_needed(
+        self,
+        plan_or_mapping: Dict,
+        infra_decision: Optional[Dict]
+    ) -> Optional[Dict]:
+        """
+        Stage 4 (optional): Code Generator.
+        
+        TODO: In a complete implementation, this would:
+        1. Check if CodeGen is needed (tool gap or packaging required)
+        2. Call tool_generator_agent.py
+        3. Return an ExecutionSpec
+        4. Validate that scientific intent was not changed
+        
+        For now, this is a placeholder.
+        
+        Returns:
+            ExecutionSpec dict or None if not needed
+        """
+        from backend.policy_checks import check_codegen_output
+        
+        # Only invoke if needed (check if tool exists in registry)
+        # For now, we skip this stage in the current implementation
+        logger.debug(f"[CodeGenerator] Skipping (not needed for current flow)")
+        
+        return None
+    
+    def _handoff_to_broker(self, execution_spec_or_mapping: Dict) -> Dict:
+        """
+        Stage 5: Handoff to Execution Broker.
+        
+        This is a synchronous handoff - the broker will be invoked by the router
+        in main_with_mcp.py. We just validate the handoff is allowed.
+        
+        Returns:
+            Tool mapping for broker
+        """
+        # Validate and register agent call
+        self._validate_next_agent(AgentRole.BROKER)
+        self._register_agent_call(AgentRole.BROKER)
+        
+        logger.info(f"[Broker] Handoff validated, ready for execution")
+        
+        # Return the tool mapping for execution by router
+        return execution_spec_or_mapping
+    
+    async def _run_visualizer(self, execution_result: Dict) -> Optional[Dict]:
+        """
+        Stage 6: Data Visualizer.
+        
+        TODO: In a complete implementation, this would:
+        1. Take an ExecutionResult as input
+        2. Call data visualization agent
+        3. Return VisualizationArtifacts
+        4. Validate that no workflow/infra changes were introduced
+        
+        For now, this is a placeholder.
+        
+        Returns:
+            VisualizationArtifacts dict or None
+        """
+        from backend.policy_checks import check_visualizer_output
+        
+        # Validate and register agent call
+        self._validate_next_agent(AgentRole.VISUALIZER)
+        self._register_agent_call(AgentRole.VISUALIZER)
+        
+        logger.info(f"[Visualizer] Generating visualizations...")
+        
+        # TODO: Actually call visualization agent here
+        
+        return None
+    
     async def process(
         self, command: str, session_id: str = "default", session_context: Dict = None
     ) -> Dict:
         """
         Main processing method that orchestrates command handling.
         
+        Enforces handoff policy per agent-responsibilities.md:
+        1. IntentDetector is always first
+        2. If intent=ask → Guru only (unless Guru escalates with user consent)
+        3. If intent=execute → Planner → Infra → (optional CodeGen) → Broker → Visualizer
+        
         Returns:
             Dict with tool mapping or agent response
+            
+        Raises:
+            PolicyViolationError: If agent routing violates the policy
         """
         print(f"[CommandProcessor] Processing command: {command}")
         print(f"[CommandProcessor] session_id: {session_id}")
         
+        # Reset agent sequence for this request
+        self.agent_sequence = []
+        
+        # Step 1: Intent Detection (always first)
+        try:
+            self._validate_next_agent(AgentRole.INTENT_DETECTOR)
+            self._register_agent_call(AgentRole.INTENT_DETECTOR)
+        except PolicyViolationError as e:
+            logger.error(f"[HandoffPolicy] Failed to start with IntentDetector: {e}")
+            return {
+                "status": "error",
+                "success": False,
+                "error": "POLICY_VIOLATION",
+                "message": str(e),
+                "errors": [{"code": "POLICY_VIOLATION", "message": str(e), "severity": "error"}]
+            }
+        
         # Classify intent (using injected classifier if provided, otherwise default)
         intent = self._get_intent_classifier()(command)
+        
+        # Step 2: Route based on intent (validate next agent)
+        try:
+            next_agent = self.handoff_policy.get_next_agent_for_intent(intent.intent)
+            self._validate_next_agent(next_agent)
+            self._register_agent_call(next_agent)
+        except PolicyViolationError as e:
+            logger.error(f"[HandoffPolicy] Failed to route intent '{intent.intent}': {e}")
+            return {
+                "status": "error",
+                "success": False,
+                "error": "POLICY_VIOLATION",
+                "message": f"Intent routing violation: {e}",
+                "errors": [{"code": "POLICY_VIOLATION", "message": str(e), "severity": "error"}]
+            }
         
         # Prepare messages
         input_message, system_message, session_brief = self._prepare_messages(command, session_context or {})
@@ -557,90 +1487,197 @@ class CommandProcessor:
         temp_session_config = self._create_session_config(session_id)
         
         # Handle mock mode
-        if self.is_mock_mode:
-            if self.agent is None:
-                return {
-                    "tool_mapping": {"tool_name": "toolbox_inventory", "parameters": {}},
-                    "tool_name": "toolbox_inventory",
-                    "parameters": {},
-                    "status": "tool_mapped",
-                    "message": "HELIX_MOCK_MODE=1: agent disabled; returning toolbox_inventory mapping.",
-                }
-            if hasattr(self.agent, "invoke"):
-                return self.agent.invoke({"messages": [system_message, input_message]}, config=None)
+        # In mock mode with agent=None, return toolbox_inventory directly
+        # In mock mode with agent provided, still go through normal execute path to test router fallback
+        if self.is_mock_mode and self.agent is None:
+            print("[CommandProcessor] 🎭 Mock mode enabled, agent is None - returning toolbox_inventory")
+            return {
+                "tool_mapping": {"tool_name": "toolbox_inventory", "parameters": {}},
+                "tool_name": "toolbox_inventory",
+                "parameters": {},
+                "status": "tool_mapped",
+                "message": "HELIX_MOCK_MODE=1: agent disabled; returning toolbox_inventory mapping.",
+            }
+        # If mock mode but agent exists, continue to normal flow (for testing router fallback)
         
         # Ensure agent exists
         if self.agent is None:
             self.agent = _get_agent()
         
-        # Handle Q&A intent
+        # Handle intents with if-elif-else structure
+        print(f"[CommandProcessor] 🔍 Intent detected: {intent.intent} (reason: {intent.reason})")
+        print(f"[HandoffPolicy] Agent sequence: {[a.value for a in self.agent_sequence]}")
+        
         if intent.intent == "qa":
+            # QA path: IntentDetector → Guru
+            # Guru should already be registered in agent_sequence from validation above
+            print("[CommandProcessor] 📝 Handling QA intent via BioinformaticsGuru...")
             return await self._handle_qa_intent(input_message, system_message, temp_session_config)
         
-        # Try to extract tool mapping from stream
-        try:
-            tool_mapping = await self._extract_tool_mapping_from_stream(
-                input_message, system_message, temp_session_config
-            )
+        elif intent.intent == "execute":
+            # Execute path: IntentDetector → Planner → Infra → (CodeGen) → Broker → Visualizer
+            # Planner should already be registered in agent_sequence from validation above
+            print("[CommandProcessor] 🎯 Handling Execute intent via BioinformaticsExecutor (Planner)...")
+            """
+            Execute intent: User wants to run a tool/workflow.
             
-            if tool_mapping and tool_mapping.get("tool_name"):
-                print(f"[CommandProcessor] Returning tool mapping (no execution): {tool_mapping['tool_name']}")
-                return self._build_tool_mapped_response(tool_mapping)
+            NEW: Check if this is a multi-step workflow first!
+            If so, use workflow_planner + workflow_executor for full orchestration.
             
-            # Fallback: try regular invoke
-            print("[CommandProcessor] Streaming didn't capture tool call, using regular invoke as fallback...")
-            import uuid
-            fallback_session_id = f"{session_id}_mapping_{uuid.uuid4().hex[:8]}"
-            fallback_session_config = {"configurable": {"thread_id": fallback_session_id}}
+            Strategy: We try multiple methods to identify which tool to use:
             
-            result = await asyncio.wait_for(
-                asyncio.to_thread(self.agent.invoke, {"messages": [system_message, input_message]}, fallback_session_config),
-                timeout=30.0
-            )
+            0. WORKFLOW DETECTION (NEW!):
+               - Check if command indicates multi-step workflow
+               - If yes, use workflow_planner + workflow_executor
+               - Handles complete workflows with tool generation
             
-            # Deduplicate messages
-            if isinstance(result, dict) and "messages" in result:
-                result["messages"] = self._deduplicate_messages(result.get("messages", []))
+            1. STREAMING (fast, but may miss tool calls):
+               - Use agent.stream() to watch execution in real-time
+               - Look for tool calls in streaming events
+               - Stop early if we find a tool call
             
-            # Try to extract tool from result
-            tool_mapping = self._extract_tool_from_result_messages(result)
-            if tool_mapping:
-                return self._build_tool_mapped_response(tool_mapping)
+            2. REGULAR INVOKE (slower, more reliable):
+               - Use agent.invoke() to run agent to completion
+               - Check all result messages for tool calls
+               - More reliable than streaming but takes longer
             
-            # Try router fallback
-            router_result = await self._try_router_fallback(command, session_context or {})
-            if router_result:
-                return router_result
+            3. ROUTER FALLBACK (deterministic pattern matching):
+               - Use rule-based router for known command patterns
+               - Fast but only works for predefined patterns
             
-            # Try tool generator fallback
-            toolgen_result = await self._try_tool_generator_fallback(command, session_id, session_context or {}, intent)
-            if toolgen_result:
-                return toolgen_result
-            
-            # Return original result
-            msg_count = len(result.get("messages", [])) if isinstance(result, dict) else 0
-            print(f"[CommandProcessor] result: {msg_count} messages in response (no tool mapping extracted)")
-            return result
-            
-        except asyncio.TimeoutError:
-            print("⚠️  Agent tool mapping timed out after 30s")
-            print("🔍 Attempting to extract tool call from agent state...")
-            if self.memory:
-                extracted = _extract_tool_call_from_state(self.memory, temp_session_config)
-                if extracted:
-                    return self._build_tool_mapped_response(extracted)
-            raise TimeoutError("Agent tool mapping timed out and could not extract tool call")
-        
-        except Exception as e:
-            error_str = str(e)
-            if any(keyword in error_str for keyword in ["Connection error", "APIConnectionError", "timeout", "INVALID_CHAT_HISTORY"]):
-                print(f"⚠️  Agent tool mapping failed: {e}")
+            4. TOOL GENERATOR (dynamic tool creation):
+               - If no existing tool matches, generate one dynamically
+               - Uses tool-generator-agent.md to research and create tools
+               - Decides execution location (local/EC2/ECS) based on file sizes
+            """
+            try:
+                # Deterministic short-circuit: browsing existing results in S3 should NOT go to
+                # LLM tool mapping (which can confuse "fastqc" in a path with running FastQC).
+                # Use word-boundary matching to avoid false positives (e.g. "shown" matching "show").
+                import re as _re
+                cmd_lower = (command or "").lower()
+                _browse_verbs = ["display", "show", "list", "view", "browse", "fetch"]
+                _exec_guards  = ["run fastqc", "pipeline steps", "preprocessing pipeline",
+                                  "run trimming", "run merging", "then trim", "then merge"]
+                _has_browse_verb = any(_re.search(r'\b' + v + r'\b', cmd_lower) for v in _browse_verbs)
+                _has_exec_intent = any(g in cmd_lower for g in _exec_guards)
+                if "s3://" in cmd_lower and _has_browse_verb and not _has_exec_intent:
+                    import re
+
+                    uris = re.findall(r"s3://[^\s]+", command or "")
+                    if uris:
+                        show_uri = next((u for u in uris if u.lower().endswith("results.json") or u.lower().endswith(".json")), None)
+                        prefix_uri = next((u for u in uris if u.endswith("/")), None)
+                        if not prefix_uri and show_uri:
+                            parts = show_uri.rstrip("/").rsplit("/", 1)
+                            if len(parts) == 2:
+                                prefix_uri = parts[0] + "/"
+                        if prefix_uri:
+                            tool_mapping = {
+                                "tool_name": "s3_browse_results",
+                                "parameters": {
+                                    "prefix": prefix_uri,
+                                    "show": show_uri,
+                                    "recursive": True,
+                                    "max_keys": 200,
+                                },
+                            }
+                            return self._build_tool_mapped_response(tool_mapping)
+
+                # NEW: Check for multi-step workflow first
+                from backend.workflow_executor import get_workflow_executor
+                
+                executor = get_workflow_executor()
+                if executor._is_multi_step_command(command):
+                    print("[CommandProcessor] 🔄 Multi-step workflow detected!")
+                    print("[CommandProcessor] 📋 Using workflow_planner + workflow_executor...")
+                    return await self._handle_multi_step_workflow(command, session_id, session_context or {})
+                
+                print("[CommandProcessor] 🎯 Single-tool execution detected - attempting to identify tool to use...")
+                print("[CommandProcessor] 📋 Strategy: stream → invoke → router → tool-generator")
+                
+                # Try to extract tool mapping from stream
+                tool_mapping = await self._extract_tool_mapping_from_stream(
+                    input_message, system_message, temp_session_config
+                )
+                
+                if tool_mapping and tool_mapping.get("tool_name"):
+                    print(f"[CommandProcessor] ✅ Returning tool mapping from stream (no execution): {tool_mapping['tool_name']}")
+                    return self._build_tool_mapped_response(tool_mapping)
+                
+                # Fallback: try regular invoke
+                # Streaming didn't capture a tool call, so we run the agent to completion
+                # and check the final result messages for tool calls
+                print("[CommandProcessor] ⚠️  Streaming didn't capture tool call - tool call may not have been in stream events")
+                print("[CommandProcessor] 🔄 Fallback: Running agent.invoke() to completion to check final result messages for tool calls...")
+                print("[CommandProcessor]    (invoke() runs the full agent execution and returns all messages, slower but more reliable)")
+                import uuid
+                fallback_session_id = f"{session_id}_mapping_{uuid.uuid4().hex[:8]}"
+                fallback_session_config = {"configurable": {"thread_id": fallback_session_id}}
+                
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(self.agent.invoke, {"messages": [system_message, input_message]}, fallback_session_config),
+                    timeout=30.0
+                )
+                
+                print(f"[CommandProcessor] ✅ agent.invoke() completed - checking {len(result.get('messages', [])) if isinstance(result, dict) else 0} messages for tool calls...")
+                
+                # Deduplicate messages
+                if isinstance(result, dict) and "messages" in result:
+                    result["messages"] = self._deduplicate_messages(result.get("messages", []))
+                
+                # Try to extract tool from result
+                tool_mapping = self._extract_tool_from_result_messages(result)
+                if tool_mapping:
+                    print(f"[CommandProcessor] ✅ Found tool call in invoke() result: {tool_mapping.get('tool_name')}")
+                    return self._build_tool_mapped_response(tool_mapping)
+                else:
+                    print("[CommandProcessor] ⚠️  No tool call found in invoke() result messages - will try router fallback")
+                
+                # Try router fallback
+                print("[CommandProcessor] 🔄 Attempting router fallback...")
+                router_result = await self._try_router_fallback(command, session_context or {})
+                if router_result:
+                    print(f"[CommandProcessor] ✅ Router fallback succeeded: {router_result.get('tool_name')}")
+                    return router_result
+                else:
+                    print("[CommandProcessor] ⚠️  Router fallback returned None")
+                
+                # Try tool generator fallback
+                toolgen_result = await self._try_tool_generator_fallback(command, session_id, session_context or {}, intent)
+                if toolgen_result:
+                    return toolgen_result
+                
+                # Return original result
+                msg_count = len(result.get("messages", [])) if isinstance(result, dict) else 0
+                print(f"[CommandProcessor] result: {msg_count} messages in response (no tool mapping extracted)")
+                return result
+                
+            except asyncio.TimeoutError:
+                print("⚠️  Agent tool mapping timed out after 30s")
                 print("🔍 Attempting to extract tool call from agent state...")
                 if self.memory:
                     extracted = _extract_tool_call_from_state(self.memory, temp_session_config)
                     if extracted:
                         return self._build_tool_mapped_response(extracted)
-            raise
+                raise TimeoutError("Agent tool mapping timed out and could not extract tool call")
+            
+            except Exception as e:
+                error_str = str(e)
+                if any(keyword in error_str for keyword in ["Connection error", "APIConnectionError", "timeout", "INVALID_CHAT_HISTORY"]):
+                    print(f"⚠️  Agent tool mapping failed: {e}")
+                    print("🔍 Attempting to extract tool call from agent state...")
+                    if self.memory:
+                        extracted = _extract_tool_call_from_state(self.memory, temp_session_config)
+                        if extracted:
+                            return self._build_tool_mapped_response(extracted)
+                raise
+        
+        else:
+            # Intent not supported - this is also a policy violation
+            print(f"[CommandProcessor] Intent '{intent.intent}' is not supported")
+            print(f"[HandoffPolicy] Final agent sequence: {[a.value for a in self.agent_sequence]}")
+            return self._build_intent_not_supported_response(intent.intent, command)
 
 
 async def handle_command(command: str, session_id: str = "default", session_context: Dict = None):

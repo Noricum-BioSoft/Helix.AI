@@ -1,0 +1,143 @@
+import os
+from unittest.mock import patch
+
+import pytest
+
+
+@pytest.mark.asyncio
+async def test_policy_threshold_env_var_promotes_to_async(monkeypatch):
+    from backend.execution_broker import ExecutionBroker, ExecutionRequest
+
+    monkeypatch.setenv("HELIX_ASYNC_BYTES_THRESHOLD", str(10))
+
+    async def dummy_executor(tool_name: str, arguments: dict):
+        return {"status": "success", "text": "ok", "echo": arguments}
+
+    broker = ExecutionBroker(tool_executor=dummy_executor)
+
+    # fake input asset discovery via local path size mock
+    # also stub submission so this test only exercises policy/decision logic
+    async def fake_submit(req):
+        return {"type": "job", "status": "submitted", "job_id": "job-async"}
+
+    monkeypatch.setattr(broker, "_submit_universal_emr_job", fake_submit)
+    
+    # Mock infrastructure decision agent import to raise exception so it falls back to threshold-based routing
+    original_import = __import__
+    def mock_import(name, *args, **kwargs):
+        if name == "backend.infrastructure_decision_agent":
+            raise ImportError("Infrastructure agent disabled for test")
+        return original_import(name, *args, **kwargs)
+    
+    monkeypatch.setattr("builtins.__import__", mock_import)
+
+    with patch.object(broker, "_try_get_local_size", return_value=11):
+        out = await broker.execute_tool(
+            ExecutionRequest(
+                tool_name="sequence_alignment",
+                arguments={"path": "/tmp/bigfile.bin"},
+                session_id="s",
+                original_command="x",
+                session_context={},
+            )
+        )
+
+    assert out["type"] == "execution_result"
+    assert out["routing"]["threshold_bytes"] == 10
+    assert out["routing"]["estimated_bytes"] == 11
+    assert out["routing"]["mode"] == "async"
+
+
+@pytest.mark.asyncio
+async def test_tool_override_force_async(monkeypatch):
+    from backend.execution_broker import ExecutionBroker, ExecutionRequest
+    from backend.contracts.infra_decision import InfraDecision
+
+    # Large threshold; override should still force async for fastqc
+    monkeypatch.setenv("HELIX_ASYNC_BYTES_THRESHOLD", str(10_000_000_000))
+
+    async def dummy_executor(tool_name: str, arguments: dict):
+        return {"status": "success", "text": "ok"}
+
+    broker = ExecutionBroker(tool_executor=dummy_executor)
+
+    async def fake_submit(req):
+        return {"type": "job", "status": "submitted", "job_id": "job-123"}
+
+    monkeypatch.setattr(broker, "_submit_fastqc_job", fake_submit)
+    
+    # Mock infrastructure decision to recommend EMR (not LOCAL) so tool override applies
+    async def mock_decide_infrastructure(*args, **kwargs):
+        return InfraDecision(
+            infrastructure="EMR",
+            reasoning="Large files detected",
+            confidence_score=0.9,
+            estimated_cost_usd=10.0,
+            estimated_runtime_minutes=30.0,
+            warnings=[]
+        )
+    
+    # Mock the decide_infrastructure function from infrastructure_decision_agent
+    monkeypatch.setattr("backend.infrastructure_decision_agent.decide_infrastructure", mock_decide_infrastructure)
+
+    out = await broker.execute_tool(
+        ExecutionRequest(
+            tool_name="fastqc_quality_analysis",
+            arguments={"input_r1": "s3://b/k1", "input_r2": "s3://b/k2", "session_id": "s"},
+            session_id="s",
+            original_command="fastqc",
+            session_context={},
+        )
+    )
+
+    assert out["mode"] == "async"
+    # Tool override or infrastructure recommendation should result in async mode
+    # Just check that the job was submitted
+    assert out["result"]["job_id"] == "job-123"
+
+
+def test_input_discovery_includes_session_dataset_references():
+    from backend.execution_broker import ExecutionBroker
+
+    async def dummy_executor(tool_name: str, arguments: dict):
+        return {"status": "success"}
+
+    broker = ExecutionBroker(tool_executor=dummy_executor)
+
+    session_context = {
+        "metadata": {
+            "dataset_references": [
+                {"s3_bucket": "bucket", "s3_key": "datasets/x/file.fq", "size": 123, "dataset_id": "x"},
+            ]
+        }
+    }
+    inputs = broker._discover_inputs(arguments={}, session_context=session_context)
+    assert any(i.uri == "s3://bucket/datasets/x/file.fq" and i.size_bytes == 123 for i in inputs)
+
+
+@pytest.mark.asyncio
+async def test_sync_execution_still_calls_tool_executor():
+    from backend.execution_broker import ExecutionBroker, ExecutionRequest
+
+    called = {}
+
+    async def dummy_executor(tool_name: str, arguments: dict):
+        called["tool_name"] = tool_name
+        return {"status": "success", "text": "done", "value": 1}
+
+    broker = ExecutionBroker(tool_executor=dummy_executor)
+    out = await broker.execute_tool(
+        ExecutionRequest(
+            tool_name="fetch_ncbi_sequence",
+            arguments={"accession": "NC_000001.11"},
+            session_id="s",
+            original_command="fetch",
+            session_context={},
+        )
+    )
+    assert called["tool_name"] == "fetch_ncbi_sequence"
+    assert out["mode"] == "sync"
+    assert out["status"] == "success"
+    assert out["result"]["value"] == 1
+
+

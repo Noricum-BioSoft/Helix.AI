@@ -33,6 +33,7 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 logger.info("Backend application starting up...")
+# Reload with updated env vars
 
 from backend.history_manager import history_manager
 from backend.tool_schemas import list_tool_schemas
@@ -47,47 +48,51 @@ from backend.execution_broker import ExecutionBroker, ExecutionRequest
 # to work in sandbox/CI environments where LLM dependencies may not be installed.
 # See the three locations where "from backend.agent import handle_command" appears for details.
 
-def _truncate_sequences_in_dict(obj: Any, max_length: int = 100) -> Any:
+def _truncate_sequences_in_dict(obj: Any, max_length: int = 100, _seen: Optional[frozenset] = None) -> Any:
     """
     Recursively truncate sequences in dictionaries, lists, and nested structures.
     This prevents large sequences from being included in JSON responses or LLM context.
+
+    Includes cycle detection to guard against circular references that can appear in
+    LangGraph/LangChain message objects embedded in session_context or agent results.
     """
+    if _seen is None:
+        _seen = frozenset()
+
     if isinstance(obj, str):
         # NEVER truncate Newick format strings (phylogenetic trees)
-        # Newick strings contain parentheses, colons, commas, semicolons - not sequences
         if obj.strip().endswith(';') and ('(' in obj or ')' in obj or ':' in obj):
-            return obj  # This is a Newick string, keep it intact
-        
-        # Truncate if it's longer than max_length
+            return obj
         if len(obj) > max_length:
-            # Check if it looks like a sequence (mostly ATCGUN characters, not text with spaces/punctuation)
-            # Sample first 200 chars to check
             sample = obj[:200].upper()
             if len(sample) > 50:
-                # If >80% of characters are ATCGUN and no spaces, it's likely a sequence
                 seq_chars = sum(1 for c in sample if c in 'ATCGUN')
                 has_spaces = ' ' in sample
                 if seq_chars / len(sample) > 0.8 and not has_spaces:
                     return _truncate_sequence(obj, max_length)
         return obj
     elif isinstance(obj, dict):
+        obj_id = id(obj)
+        if obj_id in _seen:
+            return "[circular reference]"
+        child_seen = _seen | {obj_id}
         truncated = {}
         for key, value in obj.items():
-            # NEVER truncate tree_newick - it's needed for visualization
             if key == "tree_newick" and isinstance(value, str):
-                truncated[key] = value  # Keep full Newick string
-            # Always truncate "sequence" fields if they're strings
+                truncated[key] = value
             elif key == "sequence" and isinstance(value, str) and len(value) > max_length:
                 truncated[key] = _truncate_sequence(value, max_length)
-            # Truncate full_sequence fields too - they shouldn't be in JSON responses
-            # Full sequences should be stored separately or accessed via download, not in API responses
             elif key == "full_sequence" and isinstance(value, str) and len(value) > max_length:
                 truncated[key] = _truncate_sequence(value, max_length)
             else:
-                truncated[key] = _truncate_sequences_in_dict(value, max_length)
+                truncated[key] = _truncate_sequences_in_dict(value, max_length, child_seen)
         return truncated
     elif isinstance(obj, list):
-        return [_truncate_sequences_in_dict(item, max_length) for item in obj]
+        obj_id = id(obj)
+        if obj_id in _seen:
+            return "[circular reference]"
+        child_seen = _seen | {obj_id}
+        return [_truncate_sequences_in_dict(item, max_length, child_seen) for item in obj]
     else:
         return obj
 
@@ -299,6 +304,10 @@ def _determine_visualization_type(tool: str, result: Any, prompt: str) -> str:
     # Agent responses always render as markdown
     if tool_lower == 'agent':
         return 'markdown'
+
+    # Results browsing / report viewer
+    if tool_lower == "s3_browse_results":
+        return "results_viewer"
     
     if not isinstance(result, dict):
         # Check prompt for informational queries
@@ -434,8 +443,8 @@ def build_standard_response(
     data = {
         "sequences": truncated_result.get("sequences", []) if isinstance(truncated_result, dict) else [],
         "results": truncated_result if isinstance(truncated_result, dict) else {},
-        "visuals": [],
-        "links": [],
+        "visuals": truncated_result.get("visuals", []) if isinstance(truncated_result, dict) else [],
+        "links": truncated_result.get("links", []) if isinstance(truncated_result, dict) else [],
     }
     
     # Determine visualization type for frontend rendering
@@ -786,29 +795,8 @@ async def execute(req: CommandRequest, request: Request):
         if not req.session_id:
             req.session_id = history_manager.create_session()
         else:
-            # Ensure session exists; auto-create if missing
-            if not history_manager.get_session(req.session_id):
-                # Create local directory for the session
-                session_dir = history_manager.storage_dir / req.session_id
-                session_dir.mkdir(exist_ok=True)
-                logger.info(f"Auto-created session directory: {session_dir}")
-                
-                # Create S3 path for the session
-                s3_path = history_manager._create_s3_session_path(req.session_id)
-                history_manager.sessions[req.session_id] = {
-                    "session_id": req.session_id,
-                    "user_id": None,
-                    "created_at": datetime.now().isoformat(),
-                    "updated_at": datetime.now().isoformat(),
-                    "history": [],
-                    "results": {},
-                    "metadata": {
-                        "s3_path": s3_path,
-                        "s3_bucket": history_manager.s3_bucket_name if s3_path else None,
-                        "local_path": str(session_dir)
-                    }
-                }
-                history_manager._save_session(req.session_id)
+            # Ensure session exists; auto-create if missing (thread-safe)
+            history_manager.ensure_session_exists(req.session_id)
         
         # Rate limit per identity (session or IP)
         identity = _get_request_identity(request, req.session_id)
@@ -818,6 +806,56 @@ async def execute(req: CommandRequest, request: Request):
         session_context = {}
         if hasattr(history_manager, 'sessions') and req.session_id in history_manager.sessions:
             session_context = history_manager.sessions[req.session_id]
+
+        # Fast path: S3 browse/display requests should NOT require LLM calls.
+        # This prevents CloudFront 60s timeouts and avoids mis-mapping "fastqc" in a path to running FastQC.
+        # Use word-boundary matching to avoid false positives (e.g. "shown" matching "show").
+        try:
+            import re
+
+            cmd_lower = (req.command or "").lower()
+            _browse_verbs = ["display", "show", "list", "view", "browse", "fetch"]
+            _exec_guards  = ["run fastqc", "pipeline steps", "preprocessing pipeline",
+                              "run trimming", "run merging", "then trim", "then merge"]
+            _has_browse_verb = any(re.search(r'\b' + v + r'\b', cmd_lower) for v in _browse_verbs)
+            _has_exec_intent = any(g in cmd_lower for g in _exec_guards)
+            if "s3://" in cmd_lower and _has_browse_verb and not _has_exec_intent:
+                uris = re.findall(r"s3://[^\s]+", req.command or "")
+                if uris and ("results.json" in cmd_lower or "fastqc" in cmd_lower):
+                    show_uri = next((u for u in uris if u.lower().endswith("results.json") or u.lower().endswith(".json")), None)
+                    prefix_uri = next((u for u in uris if u.endswith("/")), None)
+                    if not prefix_uri and show_uri:
+                        parts = show_uri.rstrip("/").rsplit("/", 1)
+                        if len(parts) == 2:
+                            prefix_uri = parts[0] + "/"
+                    if prefix_uri:
+                        from backend.agent_tools import s3_browse_results
+
+                        tool_input = {
+                            "prefix": prefix_uri,
+                            "show": show_uri,
+                            "recursive": True,
+                            "max_keys": 200,
+                            "mode": "list" if ("list objects" in cmd_lower or "list files" in cmd_lower) else "display",
+                        }
+                        # s3_browse_results is a LangChain StructuredTool (@tool), so use invoke/func.
+                        if hasattr(s3_browse_results, "invoke"):
+                            result = s3_browse_results.invoke(tool_input)
+                        elif hasattr(s3_browse_results, "func"):
+                            result = s3_browse_results.func(**tool_input)
+                        else:
+                            result = s3_browse_results(**tool_input)
+                        standard_response = build_standard_response(
+                            prompt=req.command,
+                            tool="s3_browse_results",
+                            result=result,
+                            session_id=req.session_id,
+                            mcp_route="/execute",
+                            success=True if not isinstance(result, dict) else result.get("status") != "error",
+                        )
+                        return CustomJSONResponse(standard_response)
+        except Exception as e:
+            logger.warning(f"S3 browse fast-path skipped due to error: {e}")
 
         # Phase 3: detect multi-step workflows and execute as a Plan IR (sync/async broker handles routing)
         def _looks_like_workflow(cmd: str) -> bool:
@@ -852,9 +890,24 @@ async def execute(req: CommandRequest, request: Request):
                 
                 print(f"🔧 Agent mapped tool '{tool_name}', executing via router...")
                 
-                # Add session_id for tools that need it
-                if tool_name == "fastqc_quality_analysis" and "session_id" not in parameters:
-                    parameters["session_id"] = req.session_id
+                # Validate and fix S3 URIs for FastQC tool
+                if tool_name == "fastqc_quality_analysis":
+                    # Add session_id if needed
+                    if "session_id" not in parameters:
+                        parameters["session_id"] = req.session_id
+                    
+                    # Fix malformed S3 URIs (missing s3: prefix)
+                    for param_name in ["input_r1", "input_r2", "output"]:
+                        if param_name in parameters and parameters[param_name]:
+                            uri = parameters[param_name]
+                            # Fix URIs that start with // instead of s3://
+                            if isinstance(uri, str) and uri.startswith("//") and not uri.startswith("s3://"):
+                                fixed_uri = "s3:" + uri
+                                print(f"⚠️  Fixed malformed S3 URI for {param_name}: {uri} → {fixed_uri}")
+                                parameters[param_name] = fixed_uri
+                    
+                    # Log the parameters for debugging
+                    print(f"📋 FastQC parameters: input_r1={parameters.get('input_r1')}, input_r2={parameters.get('input_r2')}")
                 
                 # Execute the tool via router
                 tool_start_time = time.time()
@@ -910,13 +963,25 @@ async def execute(req: CommandRequest, request: Request):
                 print(f"✅ [PERF] History entry added, took {(history_done_time - agent_done_time)*1000:.2f}ms")
                 
                 response_start_time = time.time()
+                # Determine success: check both explicit success field and status
+                if isinstance(agent_result, dict):
+                    # Check explicit success field first (most reliable)
+                    if "success" in agent_result:
+                        is_success = agent_result["success"]
+                    # Fall back to status check (success/completed vs error/failed)
+                    else:
+                        status = agent_result.get("status", "success")
+                        is_success = status not in ["error", "failed", "workflow_failed"]
+                else:
+                    is_success = True
+                
                 standard_response = build_standard_response(
                     prompt=req.command,
                     tool="agent",
                     result=agent_result,
                     session_id=req.session_id,
                     mcp_route="/execute",
-                    success=True if not isinstance(agent_result, dict) else agent_result.get("status", "success") != "error"
+                    success=is_success
                 )
                 response_done_time = time.time()
                 total_duration = response_done_time - agent_start_time
@@ -1145,9 +1210,18 @@ async def agent_command(req: AgentCommandRequest, request: Request):
             print(f"🔧 Agent mapped tool '{tool_name}', executing via router...")
             
             try:
-                # Execute the tool via router
+                # Execute via broker for consistent routing (sync vs async jobs)
                 tool_start_time = time.time()
-                tool_result = await call_mcp_tool(tool_name, parameters)
+                broker = _get_execution_broker()
+                tool_result = await broker.execute_tool(
+                    ExecutionRequest(
+                        tool_name=tool_name,
+                        arguments=parameters,
+                        session_id=session_id,
+                        original_command=req.prompt,
+                        session_context=session_context,
+                    )
+                )
                 tool_done_time = time.time()
                 tool_duration = tool_done_time - tool_start_time
                 print(f"✅ [PERF] Tool execution completed in {tool_duration:.2f}s")
@@ -1730,12 +1804,279 @@ async def list_mcp_tools():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# ── Per-tool required-input definitions ──────────────────────────────────────
+# Each entry describes what a tool needs before it can execute.  The general
+# _build_needs_inputs_response function uses this registry to build a
+# structured, human-readable response for *any* tool, without containing any
+# tool-specific logic or code scaffolds.
+_TOOL_INPUT_REQUIREMENTS: Dict[str, Dict[str, Any]] = {
+    "bulk_rnaseq_analysis": {
+        "display_name": "Bulk RNA-seq differential expression analysis",
+        "description": (
+            "Performs differential expression analysis on raw count data. "
+            "Models main effects, interactions, and multi-factor experimental designs."
+        ),
+        "required_inputs": [
+            {
+                "name":        "count_matrix",
+                "description": "Raw count matrix — genes as rows, samples as columns (CSV or TSV).",
+                "example":     "s3://your-bucket/counts.csv",
+            },
+            {
+                "name":        "sample_metadata",
+                "description": "Sample annotation table — one row per sample with factor columns (CSV or TSV).",
+                "example":     "s3://your-bucket/metadata.csv",
+            },
+        ],
+        "optional_inputs": [
+            {
+                "name":        "design_formula",
+                "description": "R-style model formula (default: ~condition).",
+                "example":     "~infection + time + infection:time",
+            },
+            {
+                "name":        "alpha",
+                "description": "FDR significance threshold (default: 0.05).",
+                "example":     "0.05",
+            },
+        ],
+    },
+    "fastqc_quality_analysis": {
+        "display_name": "FastQC quality analysis",
+        "description": (
+            "Runs FastQC on paired-end FASTQ files to assess base quality, "
+            "adapter content, and per-sequence statistics."
+        ),
+        "required_inputs": [
+            {
+                "name":        "input_r1",
+                "description": "S3 path to the forward (R1) FASTQ file.",
+                "example":     "s3://your-bucket/sample_R1.fastq.gz",
+            },
+            {
+                "name":        "input_r2",
+                "description": "S3 path to the reverse (R2) FASTQ file.",
+                "example":     "s3://your-bucket/sample_R2.fastq.gz",
+            },
+        ],
+        "optional_inputs": [
+            {
+                "name":        "output",
+                "description": "S3 prefix for result files.",
+                "example":     "s3://your-bucket/qc-results/",
+            },
+        ],
+    },
+    "read_merging": {
+        "display_name": "Paired-end read merging",
+        "description": (
+            "Merges overlapping paired-end reads into single consensus sequences "
+            "using overlap assembly."
+        ),
+        "required_inputs": [
+            {
+                "name":        "forward_reads",
+                "description": "S3 path or FASTQ content for R1/forward reads.",
+                "example":     "s3://your-bucket/sample_R1.fastq.gz",
+            },
+            {
+                "name":        "reverse_reads",
+                "description": "S3 path or FASTQ content for R2/reverse reads.",
+                "example":     "s3://your-bucket/sample_R2.fastq.gz",
+            },
+        ],
+        "optional_inputs": [
+            {
+                "name":        "min_overlap",
+                "description": "Minimum overlap length for merging (default: 12).",
+                "example":     "12",
+            },
+        ],
+    },
+    "read_trimming": {
+        "display_name": "Adapter and quality trimming",
+        "description": "Trims adapter sequences and low-quality bases from paired-end reads.",
+        "required_inputs": [
+            {
+                "name":        "forward_reads",
+                "description": "S3 path or FASTQ content for R1/forward reads.",
+                "example":     "s3://your-bucket/sample_R1.fastq.gz",
+            },
+            {
+                "name":        "reverse_reads",
+                "description": "S3 path or FASTQ content for R2/reverse reads.",
+                "example":     "s3://your-bucket/sample_R2.fastq.gz",
+            },
+        ],
+        "optional_inputs": [
+            {
+                "name":        "adapter",
+                "description": "Adapter sequence to remove (default: AGATCGGAAGAGC).",
+                "example":     "AGATCGGAAGAGC",
+            },
+        ],
+    },
+    "sequence_alignment": {
+        "display_name": "Multiple sequence alignment",
+        "description": "Aligns multiple nucleotide or protein sequences.",
+        "required_inputs": [
+            {
+                "name":        "sequences",
+                "description": "FASTA-formatted sequences to align.",
+                "example":     ">seq1\nATGCATGC\n>seq2\nATGCATGA",
+            },
+        ],
+    },
+    "phylogenetic_tree": {
+        "display_name": "Phylogenetic tree construction",
+        "description": "Builds a phylogenetic tree from aligned sequences.",
+        "required_inputs": [
+            {
+                "name":        "aligned_sequences",
+                "description": "FASTA-formatted aligned sequences.",
+                "example":     ">seq1\nATGCATGC\n>seq2\nATGCATGA",
+            },
+        ],
+    },
+    "single_cell_analysis": {
+        "display_name": "Single-cell RNA-seq analysis",
+        "description": (
+            "Performs full scRNA-seq analysis: QC, normalization (SCTransform), "
+            "dimensionality reduction (PCA/UMAP), clustering (Leiden), cell-type "
+            "annotation, and differential expression between conditions."
+        ),
+        "required_inputs": [
+            {
+                "name":        "data_file",
+                "description": (
+                    "Path to the gene-expression matrix. Accepted formats: "
+                    "10x HDF5 (.h5), AnnData (.h5ad), Seurat RDS (.rds), "
+                    "Cell Ranger output directory (matrix.mtx + barcodes + features), "
+                    "or a plain count CSV."
+                ),
+                "example":     "s3://your-bucket/sample_cellranger_out/filtered_feature_bc_matrix.h5",
+            },
+        ],
+        "optional_inputs": [
+            {
+                "name":        "data_format",
+                "description": "File format hint: '10x' (default), 'h5', 'h5ad', 'seurat', 'csv'.",
+                "example":     "10x",
+            },
+            {
+                "name":        "resolution",
+                "description": "Leiden clustering resolution (default: 0.5).",
+                "example":     "0.5",
+            },
+            {
+                "name":        "steps",
+                "description": "Analysis steps to run. Use 'all' or specify: qc, normalization, clustering, annotation, differential, pathways.",
+                "example":     "all",
+            },
+        ],
+    },
+}
+
+
+def _build_needs_inputs_response(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    """General handler for when a tool was identified but required inputs are missing.
+
+    Returns a structured response that tells the user what Helix understood,
+    which inputs are needed, and how to provide them — without executing anything.
+    This function is tool-agnostic: it works for any entry in _TOOL_INPUT_REQUIREMENTS
+    and gracefully degrades for tools not in the registry.
+    """
+    spec         = _TOOL_INPUT_REQUIREMENTS.get(tool_name, {})
+    display_name = spec.get("display_name", tool_name.replace("_", " ").title())
+    description  = spec.get("description", f"Runs {display_name}.")
+    required     = spec.get("required_inputs", [])
+    optional     = spec.get("optional_inputs", [])
+
+    lines: list = [
+        f"**Helix understood your request as: {display_name}**",
+        "",
+        description,
+        "",
+        "Before Helix can execute this analysis, the following inputs are needed:",
+        "",
+    ]
+
+    if required:
+        lines += [
+            "### Required inputs",
+            "| Parameter | Description | Example |",
+            "|-----------|-------------|---------|",
+        ]
+        for inp in required:
+            name    = inp.get("name", "")
+            desc    = inp.get("description", "")
+            example = inp.get("example", "—")
+            lines.append(f"| `{name}` | {desc} | `{example}` |")
+        lines.append("")
+
+    if optional:
+        lines += [
+            "### Optional inputs",
+            "| Parameter | Description | Example |",
+            "|-----------|-------------|---------|",
+        ]
+        for inp in optional:
+            name    = inp.get("name", "")
+            desc    = inp.get("description", "")
+            example = inp.get("example", "—")
+            lines.append(f"| `{name}` | {desc} | `{example}` |")
+        lines.append("")
+
+    # Surface only the parameters that came from the user's prompt.
+    # Exclude internal broker/router fields that are not meaningful to the user
+    # and may carry large or circular objects (e.g. session_context contains
+    # LangGraph message objects with circular dict references).
+    _INTERNAL_KEYS = {
+        "needs_inputs", "command", "original_command",
+        "session_context", "session_id", "_from_broker",
+    }
+    extracted = {
+        k: v for k, v in arguments.items()
+        if k not in _INTERNAL_KEYS and v not in (None, "", [], {})
+    }
+    if extracted:
+        lines += ["### Parameters detected from your prompt"]
+        for k, v in extracted.items():
+            lines.append(f"- **{k}**: `{v}`")
+        lines.append("")
+
+    lines.append(
+        "Provide the required inputs above (file paths, S3 URIs, or inline data) "
+        "and Helix will execute the full analysis immediately."
+    )
+
+    text = "\n".join(lines)
+
+    return {
+        "status":               "needs_inputs",
+        "tool_name":            tool_name,
+        "needs_inputs":         True,
+        "text":                 text,
+        "required_inputs":      required,
+        "optional_inputs":      optional,
+        "detected_parameters":  extracted,
+    }
+
+
 async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
     """Call an MCP tool and return the result."""
     # Add tools directory to path
     tools_path = str((Path(__file__).resolve().parent.parent / "tools").resolve())
     # tools/ is injected via PYTHONPATH by start.sh (and by tests/conftest.py in unit tests)
-    
+
+    # ── General needs_inputs gate ────────────────────────────────────────────
+    # When the router sets needs_inputs=True it means the user's prompt
+    # described an analysis but did not supply the required data files.
+    # We return a structured response for *any* tool here, before any
+    # tool-specific dispatch, so this behaviour is universal.
+    if arguments.get("needs_inputs"):
+        return _build_needs_inputs_response(tool_name, arguments)
+
     if tool_name == "toolbox_inventory":
         from tool_inventory import build_toolbox_inventory, format_toolbox_inventory_markdown
         inv = build_toolbox_inventory()
@@ -1862,88 +2203,54 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
             }
 
     elif tool_name == "read_merging":
-        # Check if inputs are S3 paths - if so, use tool-generator-agent
+        # Directly use the existing read_merging implementation
+        # The execution broker already handles routing decisions (EMR vs local) before calling this
         forward_reads = arguments.get("forward_reads", "")
         reverse_reads = arguments.get("reverse_reads", "")
+        output = arguments.get("output")
+        min_overlap = arguments.get("min_overlap", 12)
         
-        # Check if either input is an S3 path or file path (not FASTQ content)
-        # FASTQ content typically starts with "@" (read header) or contains newlines
+        import read_merging
+        
+        # Check if inputs are S3 paths
         is_s3_path = (forward_reads.startswith("s3://") or reverse_reads.startswith("s3://"))
-        
-        # Also check for file paths (local paths starting with /)
-        is_file_path = ((forward_reads.startswith("/") and not forward_reads.startswith("@")) or
-                       (reverse_reads.startswith("/") and not reverse_reads.startswith("@")))
         
         # Check if it looks like FASTQ content (starts with @ or contains newlines with @)
         is_fastq_content = (forward_reads.startswith("@") or reverse_reads.startswith("@") or
                            "\n@" in forward_reads or "\n@" in reverse_reads)
         
-        # Also check if the original command contains S3 paths
-        original_command = arguments.get("command") or arguments.get("user_request") or arguments.get("original_command", "")
-        if original_command and "s3://" in original_command:
-            is_s3_path = True
-        
-        # Use tool-generator-agent if S3 paths or file paths (but not FASTQ content)
-        use_tool_generator = is_s3_path or (is_file_path and not is_fastq_content)
-        
-        # Check if we're already being called from the execution broker to prevent infinite loop
-        from_broker = arguments.get("_from_broker", False)
-        
-        if use_tool_generator and not from_broker:
-            # Use tool-generator-agent for S3 paths
-            # BUT: Route through execution broker first to respect file size routing decisions
-            # The execution broker will check file sizes and route to EMR if needed
-            logger.info(f"🔧 read_merging tool detected S3 paths, routing through execution broker for infrastructure decision...")
+        if is_s3_path and not is_fastq_content:
+            # For S3 paths, use merge_reads_from_s3 (requires output path)
+            if not output:
+                # Try to infer output path from input paths
+                if forward_reads.startswith("s3://"):
+                    if forward_reads.endswith(".fq") or forward_reads.endswith(".fastq"):
+                        output = forward_reads.rsplit(".", 1)[0] + "_merged.fq"
+                    else:
+                        output = forward_reads + "_merged.fq"
+                else:
+                    if reverse_reads.endswith(".fq") or reverse_reads.endswith(".fastq"):
+                        output = reverse_reads.rsplit(".", 1)[0] + "_merged.fq"
+                    else:
+                        output = reverse_reads + "_merged.fq"
             
-            # Route through execution broker instead of calling tool-generator-agent directly
-            # This ensures file size-based routing (EMR vs EC2) is respected
-            from backend.execution_broker import ExecutionBroker, ExecutionRequest
-            broker = _get_execution_broker()
-            
-            # The execution broker will:
-            # 1. Discover inputs and calculate file sizes
-            # 2. Evaluate routing policy (EMR if >100MB)
-            # 3. Route to EMR if needed, or call tool-generator-agent via _tool_executor if sync
-            result = await broker.execute_tool(
-                ExecutionRequest(
-                    tool_name="read_merging",
-                    arguments=arguments,
-                    session_id=arguments.get("session_id"),
-                    original_command=arguments.get("command") or arguments.get("user_request", ""),
-                    session_context={}
-                )
+            logger.info(f"🔧 read_merging: Merging S3 files (R1: {forward_reads}, R2: {reverse_reads}, output: {output})")
+            result = read_merging.merge_reads_from_s3(
+                r1_path=forward_reads,
+                r2_path=reverse_reads,
+                output_path=output,
+                min_overlap=min_overlap
             )
-            
-            # Extract the actual result from broker wrapper
-            if isinstance(result, dict) and result.get("result"):
-                return result["result"]
-            return result
-        elif use_tool_generator and from_broker:
-            # We're already being called from the broker, so call tool-generator-agent directly
-            # to avoid infinite recursion
-            logger.info(f"🔧 read_merging tool called from broker, using tool-generator-agent directly...")
-            from backend.tool_generator_agent import generate_and_execute_tool, _discover_inputs_from_args, _discover_outputs_from_args
-            
-            session_context = arguments.get("session_context") or {}
-            discovered_inputs = _discover_inputs_from_args(arguments, session_context)
-            discovered_outputs = _discover_outputs_from_args(arguments, original_command)
-            
-            result = await generate_and_execute_tool(
-                command=original_command,
-                user_request=original_command,
-                session_id=arguments.get("session_id"),
-                inputs=discovered_inputs,
-                outputs=discovered_outputs
+        else:
+            # For FASTQ content strings or local file paths, use run_read_merging_raw
+            logger.info(f"🔧 read_merging: Merging FASTQ content or local files")
+            result = read_merging.run_read_merging_raw(
+                forward_reads,
+                reverse_reads,
+                min_overlap
             )
-            return result
         
-        # Fallback: If not using tool-generator-agent, use the existing read_merging implementation
-        import read_merging
-        return read_merging.run_read_merging_raw(
-            forward_reads,
-            reverse_reads,
-            arguments.get("min_overlap", 12),
-        )
+        return result
     
     elif tool_name == "quality_assessment":
         import quality_assessment
@@ -2115,38 +2422,31 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
         }
 
     elif tool_name == "bulk_rnaseq_analysis":
-        # Handle bulk RNA-seq analysis
         import bulk_rnaseq
-        
-        # In mock mode or when Rscript missing, supply defaults so the stub returns success
+
+        count_matrix    = arguments.get("count_matrix", "")
+        sample_metadata = arguments.get("sample_metadata", "")
+        design_formula  = arguments.get("design_formula", "~condition")
+        alpha           = float(arguments.get("alpha", 0.05))
+
+        # ── In mock mode or when Rscript is missing, supply stub data ───────────
         if os.getenv("HELIX_MOCK_MODE") or shutil.which("Rscript") is None:
-            if not arguments.get("count_matrix"):
-                arguments["count_matrix"] = str(Path(__file__).resolve().parent.parent / "tests" / "data" / "counts.csv")
-            if not arguments.get("sample_metadata"):
-                arguments["sample_metadata"] = str(Path(__file__).resolve().parent.parent / "tests" / "data" / "metadata.csv")
-        
-        count_matrix = arguments.get("count_matrix")
-        sample_metadata = arguments.get("sample_metadata")
-        design_formula = arguments.get("design_formula", "~condition")
-        alpha = arguments.get("alpha", 0.05)
-        if not count_matrix or not sample_metadata:
-            return {
-                "status": "error",
-                "result": {},
-                "text": "Count matrix and sample metadata paths are required for bulk RNA-seq analysis"
-            }
-        
+            if not count_matrix:
+                count_matrix    = str(Path(__file__).resolve().parent.parent / "tests" / "data" / "counts.csv")
+            if not sample_metadata:
+                sample_metadata = str(Path(__file__).resolve().parent.parent / "tests" / "data" / "metadata.csv")
+
         result = bulk_rnaseq.run_deseq2_analysis(
             count_matrix=count_matrix,
             sample_metadata=sample_metadata,
             design_formula=design_formula,
-            alpha=alpha
+            alpha=alpha,
         )
-        
+
         return {
             "status": result.get("status", "success"),
             "result": result,
-            "text": "Bulk RNA-seq analysis completed" if result.get("status") == "success" else f"Error: {result.get('message', 'Unknown error')}"
+            "text": "Bulk RNA-seq analysis completed" if result.get("status") == "success" else f"Error: {result.get('message', 'Unknown error')}",
         }
     
     elif tool_name == "dna_vendor_research":
@@ -2168,13 +2468,16 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
         }
     
     elif tool_name == "fastqc_quality_analysis":
-        # Handle FastQC quality analysis
-        from job_manager import get_job_manager
+        # Delegate to the proper fastqc_quality_analysis function in agent_tools.py
+        # which has proper infrastructure decision handling (_from_broker flag)
+        # We access the underlying function via .func attribute to bypass LangChain's @tool wrapper
+        from backend.agent_tools import fastqc_quality_analysis as fastqc_tool
         
         input_r1 = arguments.get("input_r1", "")
         input_r2 = arguments.get("input_r2", "")
         output = arguments.get("output")
-        session_id = arguments.get("session_id")  # Get session_id from arguments if provided
+        _from_broker = arguments.get("_from_broker", False)
+        session_id = arguments.get("session_id")
         
         if not input_r1 or not input_r2:
             return {
@@ -2183,48 +2486,62 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
                 "text": "Both input_r1 and input_r2 are required for FastQC analysis"
             }
         
-        job_manager = get_job_manager()
+        # Call the underlying function directly (bypassing LangChain's @tool decorator)
+        # The _from_broker flag will determine whether to use local or EMR execution
         try:
-            # Run blocking submit_fastqc_job in executor to avoid blocking event loop
-            # This is necessary because submit_fastqc_job can block for up to 15 minutes
-            # waiting for EMR cluster to be ready
-            if hasattr(asyncio, 'to_thread'):
-                # Python 3.9+ - use to_thread
-                job_id = await asyncio.to_thread(
-                    job_manager.submit_fastqc_job,
-                    r1_path=input_r1,
-                    r2_path=input_r2,
-                    output_path=output,
+            # Access the underlying function via .func attribute
+            if hasattr(fastqc_tool, 'func'):
+                # LangChain tool - call underlying function
+                result = fastqc_tool.func(
+                    input_r1=input_r1,
+                    input_r2=input_r2,
+                    output=output,
+                    _from_broker=_from_broker,
                     session_id=session_id
                 )
             else:
-                # Python < 3.9 - use run_in_executor
-                loop = asyncio.get_event_loop()
-                job_id = await loop.run_in_executor(
-                    None,
-                    lambda: job_manager.submit_fastqc_job(
-                        r1_path=input_r1,
-                        r2_path=input_r2,
-                        output_path=output,
-                        session_id=session_id
-                    )
+                # Not a LangChain tool - call directly
+                result = fastqc_tool(
+                    input_r1=input_r1,
+                    input_r2=input_r2,
+                    output=output,
+                    _from_broker=_from_broker,
+                    session_id=session_id
                 )
-            
-            return {
-                "type": "job",
-                "status": "submitted",
-                "job_id": job_id,
-                "message": "FastQC job submitted. Processing will take 10-30 minutes.",
-                "input_r1": input_r1,
-                "input_r2": input_r2,
-                "output": output
-            }
+            return result
         except Exception as e:
+            logger.error(f"FastQC tool invocation failed: {e}")
             return {
                 "status": "error",
                 "result": {},
-                "text": f"Failed to submit FastQC job: {str(e)}",
+                "text": f"Failed to invoke FastQC tool: {str(e)}",
                 "error": str(e)
+            }
+
+    elif tool_name == "s3_browse_results":
+        from backend.agent_tools import s3_browse_results as s3_tool
+
+        tool_input = {
+            "prefix": arguments.get("prefix") or arguments.get("output") or arguments.get("s3_prefix") or "",
+            "show": arguments.get("show") or arguments.get("results_json") or arguments.get("results_path"),
+            "recursive": bool(arguments.get("recursive", True)),
+            "max_keys": int(arguments.get("max_keys", 200) or 200),
+            "mode": arguments.get("mode") or "display",
+        }
+
+        try:
+            if hasattr(s3_tool, "invoke"):
+                return s3_tool.invoke(tool_input)
+            if hasattr(s3_tool, "func"):
+                return s3_tool.func(**tool_input)
+            return s3_tool(**tool_input)
+        except Exception as e:
+            logger.error(f"s3_browse_results invocation failed: {e}")
+            return {
+                "status": "error",
+                "result": {},
+                "text": f"Failed to browse S3 results: {str(e)}",
+                "error": str(e),
             }
     
     else:
@@ -2286,7 +2603,8 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
                 user_request=user_request,
                 session_id=arguments.get("session_id"),
                 inputs=discovered_inputs,
-                outputs=discovered_outputs
+                outputs=discovered_outputs,
+                session_context=session_context
             )
             
             if result.get("status") == "success":
@@ -2360,7 +2678,7 @@ async def submit_fastqc_job(req: FastQCJobRequest):
     Returns immediately with a job_id for tracking.
     """
     try:
-        from job_manager import get_job_manager
+        from backend.job_manager import get_job_manager
         
         job_manager = get_job_manager()
         # Run blocking submit_fastqc_job in executor to avoid blocking event loop
@@ -2404,7 +2722,7 @@ async def submit_fastqc_job(req: FastQCJobRequest):
 async def get_job_status(job_id: str):
     """Get the current status of a job."""
     try:
-        from job_manager import get_job_manager
+        from backend.job_manager import get_job_manager
         
         job_manager = get_job_manager()
         job = job_manager.get_job_status(job_id)
@@ -2421,17 +2739,29 @@ async def get_job_status(job_id: str):
 
 @app.get("/jobs/{job_id}/results")
 async def get_job_results(job_id: str):
-    """Get results for a completed job."""
+    """Get results for a completed job, including output file validation."""
     try:
-        from job_manager import get_job_manager
+        from backend.job_manager import get_job_manager
         
         job_manager = get_job_manager()
         results = job_manager.get_job_results(job_id)
         
-        return CustomJSONResponse({
+        # Include validation warnings in response
+        validation = results.get("output_validation", {})
+        warnings = validation.get("validation_warnings", [])
+        
+        response = {
             "success": True,
-            "results": results
-        })
+            "results": results,
+        }
+        
+        # Add top-level warning if files are missing
+        if warnings:
+            response["warnings"] = warnings
+            if not validation.get("all_files_exist", True):
+                response["warning"] = "Some expected output files are missing. Check validation details."
+        
+        return CustomJSONResponse(response)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -2453,7 +2783,7 @@ async def copy_job_results_to_session(job_id: str, req: Optional[CopyToSessionRe
         session_id: Optional session ID. If not provided, will try to get from job metadata.
     """
     try:
-        from job_manager import get_job_manager
+        from backend.job_manager import get_job_manager
         from backend.history_manager import history_manager
         
         job_manager = get_job_manager()
@@ -2616,7 +2946,7 @@ async def get_job_results_data(job_id: str, results_path: Optional[str] = None):
         import boto3
         import tempfile
         
-        from job_manager import get_job_manager
+        from backend.job_manager import get_job_manager
         
         # If results_path not provided, try to get from job manager
         if not results_path:
@@ -2671,7 +3001,7 @@ async def get_job_results_data(job_id: str, results_path: Optional[str] = None):
 async def cancel_job(job_id: str):
     """Cancel a running job."""
     try:
-        from job_manager import get_job_manager
+        from backend.job_manager import get_job_manager
         
         job_manager = get_job_manager()
         result = job_manager.cancel_job(job_id)
@@ -2690,7 +3020,7 @@ async def cancel_job(job_id: str):
 async def retry_job(job_id: str):
     """Retry a failed job with the same parameters."""
     try:
-        from job_manager import get_job_manager
+        from backend.job_manager import get_job_manager
         
         job_manager = get_job_manager()
         new_job_id = job_manager.retry_job(job_id)
@@ -2714,7 +3044,7 @@ async def retry_job(job_id: str):
 async def get_job_logs(job_id: str):
     """Get EMR logs for a job."""
     try:
-        from job_manager import get_job_manager
+        from backend.job_manager import get_job_manager
         
         job_manager = get_job_manager()
         logs = job_manager.get_job_logs(job_id)
@@ -2733,7 +3063,7 @@ async def get_job_logs(job_id: str):
 async def list_jobs(status: Optional[str] = None, limit: int = 100):
     """List all jobs, optionally filtered by status."""
     try:
-        from job_manager import get_job_manager
+        from backend.job_manager import get_job_manager
         
         job_manager = get_job_manager()
         jobs = job_manager.list_jobs(status=status, limit=limit)
@@ -2756,7 +3086,7 @@ async def backfill_job_directories(job_ids: Optional[List[str]] = None):
     If job_ids is not provided, backfills all jobs.
     """
     try:
-        from job_manager import get_job_manager
+        from backend.job_manager import get_job_manager
         job_manager = get_job_manager()
         results = job_manager.backfill_job_directories(job_ids=job_ids)
         success_count = sum(1 for v in results.values() if v)

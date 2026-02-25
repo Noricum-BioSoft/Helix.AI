@@ -97,9 +97,22 @@ class CommandRouter:
 
         # Priority-based matching to avoid conflicts
         # Check for specific phrases first, then general keywords
-        
-        # Check for clustering analysis (HIGHEST PRIORITY - before variant selection)
-        if any(phrase in command_lower for phrase in ['cluster', 'clustering', 'group sequences', 'cluster sequences', 'representative sequences']):
+
+        # ── BULK RNA-SEQ (HIGHEST PRIORITY) ──────────────────────────────────────
+        # Must come before clustering and single-cell checks because RNA-seq prompts
+        # legitimately use terms like "clustering", "differential expression", etc.
+        # in an EDA/statistics context, not as sequence-biology operations.
+        if self._is_rnaseq_transcriptomics_command(command_lower):
+            print(f"🔧 Command router: Matched 'bulk RNA-seq transcriptomics' -> bulk_rnaseq_analysis")
+            return 'bulk_rnaseq_analysis', self._extract_parameters(command, 'bulk_rnaseq_analysis', session_context)
+
+        # Check for clustering analysis – ONLY when there are actual molecular-sequence
+        # cues (FASTA headers, file extensions, nucleotide strings, etc.).
+        # This prevents EDA/statistical "clustering" in RNA-seq prompts from being
+        # mis-routed here.
+        if (any(phrase in command_lower for phrase in
+                ['cluster', 'clustering', 'group sequences', 'cluster sequences', 'representative sequences'])
+                and self._has_sequence_cues(command)):
             print(f"🔧 Command router: Matched 'clustering' -> clustering_analysis")
             return 'clustering_analysis', self._extract_parameters(command, 'clustering_analysis', session_context)
         
@@ -129,10 +142,6 @@ class CommandRouter:
             print(f"🔧 Command router: Matched 'alignment' -> sequence_alignment")
             return 'sequence_alignment', self._extract_parameters(command, 'sequence_alignment', session_context)
         
-        # Check for bulk RNA-seq analysis (HIGH PRIORITY to avoid misrouting to vendor due to 'expression')
-        if any(phrase in command_lower for phrase in ['bulk rna-seq', 'deseq2', 'differential expression', 'rna-seq analysis', 'transcriptomics']):
-            print(f"🔧 Command router: Matched 'bulk RNA-seq' -> bulk_rnaseq_analysis")
-            return 'bulk_rnaseq_analysis', self._extract_parameters(command, 'bulk_rnaseq_analysis', session_context)
         
         # Check for FastQC analysis (HIGH PRIORITY - before vendor check to avoid false matches with "test" in paths)
         if any(phrase in command_lower for phrase in ['fastqc', 'fastqc analysis', 'quality control analysis', 'perform fastqc', 'run fastqc']):
@@ -174,7 +183,9 @@ class CommandRouter:
             return 'session_creation', {"command": command}
         
         # Check for single-cell analysis (HIGH PRIORITY - before other checks)
-        if any(phrase in command_lower for phrase in ['single cell', 'scrna-seq', 'scrnaseq', 'single-cell', 'cell type', 'marker genes', 'differential expression', 'pathway analysis', 'batch correction', 'seurat', 'scpipeline']):
+        # NOTE: "differential expression" is intentionally removed here; bulk RNA-seq
+        # prompts that mention DE are caught earlier by _is_rnaseq_transcriptomics_command.
+        if any(phrase in command_lower for phrase in ['single cell', 'scrna-seq', 'scrnaseq', 'single-cell', 'cell type', 'marker genes', 'pathway analysis', 'batch correction', 'seurat', 'scpipeline']):
             print(f"🔧 Command router: Matched 'single-cell analysis' -> single_cell_analysis")
             return 'single_cell_analysis', self._extract_parameters(command, 'single_cell_analysis', session_context)
         
@@ -222,6 +233,54 @@ class CommandRouter:
         print(f"🔧 Command router: No specific match, using natural command handler")
         return "handle_natural_command", {"command": command, "session_id": session_context.get("session_id", "")}
         
+    # ── Helper: is this a bulk RNA-seq / transcriptomics analysis request? ──────
+    # Covers both "execute with files" and "plan / code generation" prompts.
+    _RNASEQ_PHRASES = (
+        'rna-seq', 'rnaseq', 'rna seq', 'rna-sequencing',
+        'transcriptom',               # transcriptome, transcriptomics
+        'deseq2', 'deseq',
+        'edger', 'limma voom',
+        'differential expression',
+        'count matrix', 'count data', 'raw count',
+        'gene expression',
+        'bulk rna',
+        'sample metadata',
+        'factorial design', 'factorial experiment', 'two-factor', '2x2', '2 x 2',
+        'days post infection', ' dpi',  # leading space avoids partial matches
+        'infection status', 'time point',
+        'biological replicates',
+        'normalization', 'multiple testing correction', 'false discovery',
+        'pca', 'principal component',  # EDA in an RNA-seq context
+        'vst', 'voom', 'rpkm', 'fpkm', 'tpm',
+        'volcano plot', 'ma plot', 'heatmap of samples',
+        'sample distance',
+    )
+
+    def _is_rnaseq_transcriptomics_command(self, command_lower: str) -> bool:
+        """Return True when the lowercased command clearly describes a bulk
+        RNA-seq / transcriptomics analysis (with or without file paths)."""
+        return any(phrase in command_lower for phrase in self._RNASEQ_PHRASES)
+
+    # ── Helper: does the command contain molecular-sequence biology cues? ────────
+    def _has_sequence_cues(self, command: str) -> bool:
+        """Return True when the command has clear evidence of biological sequences:
+        FASTA headers, nucleotide file extensions, long DNA/RNA strings, or explicit
+        molecule-type words.  Used to avoid routing RNA-seq EDA "clustering" to the
+        phylogenetic sequence-clustering tool."""
+        # FASTA header
+        if re.search(r'>\s*\w', command):
+            return True
+        # Nucleotide file extensions
+        if re.search(r'\.(fasta|fa|fq|fastq|bam|sam)(\.gz)?\b', command, re.IGNORECASE):
+            return True
+        # Long nucleotide strings (≥8 chars, only ATCGNU)
+        if re.search(r'\b[ATCGNU]{8,}\b', command.upper()):
+            return True
+        # Explicit molecule-type terms unambiguously tied to sequence data
+        if re.search(r'\b(dna|rna sequence|nucleotide|amino acid|peptide)\b', command, re.IGNORECASE):
+            return True
+        return False
+
     def route_plan(self, command: str, session_context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Phase 3: Emit a minimal Plan IR for multi-step workflows.
@@ -657,10 +716,12 @@ class CommandRouter:
             if output_match:
                 output_path = output_match.group(1).strip()
             
+            needs_inputs = not bool(r1_path or r2_path)
             return {
-                "input_r1": r1_path or "",
-                "input_r2": r2_path or "",
-                "output": output_path
+                "input_r1":    r1_path or "",
+                "input_r2":    r2_path or "",
+                "output":      output_path,
+                "needs_inputs": needs_inputs,
             }
         
         elif tool_name == "dna_vendor_research":
@@ -881,25 +942,29 @@ class CommandRouter:
                 print(f"🔧 [DEBUG] No adapter sequence found in command")
             
             # Return parameters - prefer forward/reverse if both present
+            has_reads = bool(forward_reads or reverse_reads or reads)
             if forward_reads and reverse_reads:
                 return {
-                    "forward_reads": forward_reads,
-                    "reverse_reads": reverse_reads,
-                    "adapter": adapter,
-                    "quality_threshold": quality_threshold
+                    "forward_reads":   forward_reads,
+                    "reverse_reads":   reverse_reads,
+                    "adapter":         adapter,
+                    "quality_threshold": quality_threshold,
+                    "needs_inputs":    False,
                 }
             elif reads:
                 return {
-                    "reads": reads,
-                    "adapter": adapter,
-                    "quality_threshold": quality_threshold
+                    "reads":           reads,
+                    "adapter":         adapter,
+                    "quality_threshold": quality_threshold,
+                    "needs_inputs":    False,
                 }
             else:
                 return {
-                    "forward_reads": forward_reads,
-                    "reverse_reads": reverse_reads,
-                    "adapter": adapter,
-                    "quality_threshold": quality_threshold
+                    "forward_reads":   forward_reads,
+                    "reverse_reads":   reverse_reads,
+                    "adapter":         adapter,
+                    "quality_threshold": quality_threshold,
+                    "needs_inputs":    not has_reads,
                 }
         
         elif tool_name == "read_merging":
@@ -1017,13 +1082,15 @@ class CommandRouter:
                 if min_overlap_match:
                     min_overlap = int(min_overlap_match.group(1))
             
+            needs_inputs = not bool(forward_reads or reverse_reads)
             return {
-                "forward_reads": forward_reads,
-                "reverse_reads": reverse_reads,
-                "min_overlap": min_overlap,
-                "output": output_path,
-                "command": command,  # Include original command for tool-generator-agent
-                "original_command": command  # Also include as original_command
+                "forward_reads":  forward_reads,
+                "reverse_reads":  reverse_reads,
+                "min_overlap":    min_overlap,
+                "output":         output_path,
+                "command":        command,
+                "original_command": command,
+                "needs_inputs":   needs_inputs,
             }
         
         elif tool_name == "quality_assessment":
@@ -1139,7 +1206,9 @@ class CommandRouter:
                 "steps": steps,
                 "resolution": resolution,
                 "nfeatures": nfeatures,
-                "command": command
+                "command": command,
+                # Request inputs when no data file was found in the prompt or session context
+                "needs_inputs": not bool(data_file),
             }
         
         elif tool_name == "fetch_ncbi_sequence":
@@ -1184,31 +1253,60 @@ class CommandRouter:
             return params
         
         elif tool_name == "bulk_rnaseq_analysis":
-            params = {}
-            
-            # Extract file paths (first two CSV-like tokens)
-            csv_paths = re.findall(r'[\w./-]+\.csv', command)
-            if len(csv_paths) >= 1:
-                params["count_matrix"] = csv_paths[0]
-            if len(csv_paths) >= 2:
-                params["sample_metadata"] = csv_paths[1]
-            
-            # Fallback to session context if available
+            params: Dict[str, Any] = {}
+
+            # ── 1. File paths ────────────────────────────────────────────────────
+            # Accept CSV, TSV, or plain filenames/S3 URIs
+            csv_paths = re.findall(r'[\w./-]+\.(?:csv|tsv)', command)
+            s3_paths  = re.findall(r's3://[^\s]+', command)
+            all_paths = csv_paths + s3_paths
+
+            if len(all_paths) >= 1:
+                params["count_matrix"] = all_paths[0]
+            if len(all_paths) >= 2:
+                params["sample_metadata"] = all_paths[1]
+
+            # Fallback to session context
             if not params.get("count_matrix"):
                 params["count_matrix"] = session_context.get("count_matrix", "")
             if not params.get("sample_metadata"):
                 params["sample_metadata"] = session_context.get("sample_metadata", "")
-            
-            # Extract design formula and alpha
-            design_match = re.search(r'design\s*[:=]\s*([~\w+\s]+)', command, re.IGNORECASE)
+
+            # ── 2. Design formula ────────────────────────────────────────────────
+            # Explicit "design: ~..." notation – the captured group must start with
+            # "~" (R formula syntax) so we don't accidentally grab prose like
+            # "factorial design: infection status".
+            design_match = re.search(r'design\s*[:=]\s*(~[\w+*:\s]+)', command, re.IGNORECASE)
             if design_match:
                 params["design_formula"] = design_match.group(1).strip()
+            # Factorial / 2×2 designs: infer from keyword context.
+            # Covers common phrasings:
+            #   "factorial design", "two-factor", "2×2"
+            #   "infection status … time point"
+            #   "infected/uninfected … 11 dpi / 33 dpi"
+            elif re.search(
+                r'factorial|two.factor|2\s*[×x]\s*2'
+                r'|infect\w*[^.]*(?:dpi|time\s*point|time\s*post)'
+                r'|(?:dpi|time\s*point)[^.]*infect\w*',
+                command, re.IGNORECASE
+            ):
+                params["design_formula"] = "~infection + time + infection:time"
             else:
                 params["design_formula"] = "~condition"
-            
+
+            # ── 3. Alpha ─────────────────────────────────────────────────────────
             alpha_match = re.search(r'alpha\s*[:=]\s*([\d.]+)', command, re.IGNORECASE)
             params["alpha"] = float(alpha_match.group(1)) if alpha_match else 0.05
-            
+
+            # ── 4. Missing-inputs flag ────────────────────────────────────────────
+            # Set when the prompt describes the analysis but provides no data paths.
+            # The execution layer will return a plan + code scaffold instead of
+            # attempting to run DESeq2 with empty inputs.
+            if not params.get("count_matrix") and not params.get("sample_metadata"):
+                params["needs_inputs"] = True
+            else:
+                params["needs_inputs"] = False
+
             return params
         
         else:
