@@ -646,6 +646,136 @@ class CommandProcessor:
         
         return result
     
+    # ------------------------------------------------------------------
+    # Helper: extract explicitly-numbered pipeline steps from the prompt
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _extract_inline_pipeline_plan(command: str) -> Dict | None:
+        """
+        If the user's prompt contains a numbered list of pipeline steps
+        (e.g. "1. Run FastQC ...  2. Trim adapter sequences ..."),
+        parse them and return a ready-to-return workflow plan response.
+
+        Returns None if no numbered steps are found.
+        """
+        import re as _re
+
+        # Narrow the search to just the pipeline/steps section (if labelled).
+        # This avoids capturing downstream sections like "Desired Outputs".
+        _section_re = _re.search(
+            r'(?:pipeline\s+steps?|workflow\s+steps?|steps?)\s*:?\s*\n?(.*)',
+            command,
+            _re.IGNORECASE | _re.DOTALL,
+        )
+        search_text = _section_re.group(1) if _section_re else command
+
+        # Truncate at common section-header phrases so the last numbered step
+        # doesn't accidentally absorb subsequent sections (e.g. "Desired Outputs").
+        # Works with or without a preceding newline.
+        _section_stop_re = _re.search(
+            r'(?:\n|(?<=[.!?])\s+)(?:desired\s+outputs?|expected\s+outputs?|desired\s+output)',
+            search_text,
+            _re.IGNORECASE,
+        )
+        if _section_stop_re:
+            search_text = search_text[: _section_stop_re.start()]
+
+        # Match "N. text" items — non-greedy so each step ends at the next "N. "
+        # Works whether the steps are on separate lines OR inline on one line.
+        # The lookahead (?=\s*\b\d+\.\s+|\Z) terminates each step at the next
+        # numbered item or end of string.
+        raw_steps = _re.findall(
+            r'\b(\d+)\.\s+(.*?)(?=\s*\b\d+\.\s+|\Z)',
+            search_text,
+            _re.DOTALL,
+        )
+        # Only use consecutive steps that start at 1; require at least 2 steps
+        numbered = sorted(
+            [(int(n), txt.strip().replace('\n', ' ')) for n, txt in raw_steps],
+            key=lambda x: x[0],
+        )
+        # Filter to the first run of consecutive integers starting at 1
+        consecutive = []
+        for expected, (n, txt) in enumerate(numbered, start=1):
+            if n == expected:
+                consecutive.append((n, txt))
+            else:
+                break
+        if len(consecutive) < 2:
+            return None
+
+        # Map step descriptions to known Helix tool names
+        _TOOL_MAP = [
+            # More-specific patterns first so they win over partial matches below
+            (["quality report", "qc report", "quality summary"],                  "quality_report"),
+            (["fastqc", "quality assessment", "quality control"],                 "fastqc_quality_analysis"),
+            (["trim", "adapter", "cutadapt", "trimmomatic"],                      "read_trimming"),
+            (["merge overlap", "merge paired", "overlapping paired", "flash", "pear"],
+                                                                                  "read_merging"),
+            (["merge", "overlap"],                                                 "read_merging"),
+            (["align", "map ", "star ", "hisat", "bowtie"],                       "sequence_alignment"),
+            (["quantif", "featurecount", "htseq"],                                "read_quantification"),
+            (["differential", "deseq", "edger", "limma"],                         "differential_expression"),
+            (["single.cell", "scanpy", "seurat", "cell ranger"],                  "single_cell_analysis"),
+            (["diversity", "qiime", "kraken", "metaphlan"],                       "microbiome_analysis"),
+            (["report", "summary", "csv", "visualiz", "plot"],                    "quality_report"),
+        ]
+
+        def _tool_for(text: str) -> str:
+            tl = text.lower()
+            for keywords, tool in _TOOL_MAP:
+                if any(kw in tl for kw in keywords):
+                    return tool
+            return "custom_step"
+
+        steps = []
+        for num, desc in consecutive:
+            steps.append({
+                "step": num,
+                "name": desc[:80],
+                "tool": _tool_for(desc),
+                "description": desc,
+            })
+
+        # Detect workflow type for a friendly header
+        cmd_lower = command.lower()
+        if any(k in cmd_lower for k in ["16s", "amplicon", "microbiome", "rrna"]):
+            wf_type = "16S Amplicon / Microbiome Preprocessing"
+        elif any(k in cmd_lower for k in ["single-cell", "scrna", "single cell"]):
+            wf_type = "Single-Cell RNA-seq"
+        elif any(k in cmd_lower for k in ["wgs", "wes", "variant", "somatic"]):
+            wf_type = "WGS/WES Variant Calling"
+        elif any(k in cmd_lower for k in ["rnaseq", "rna-seq", "transcriptome"]):
+            wf_type = "Bulk RNA-seq"
+        else:
+            wf_type = "Multi-Step Bioinformatics Pipeline"
+
+        lines = [f"## Pipeline Plan\n", f"**Workflow type:** {wf_type}\n",
+                 f"**Steps ({len(steps)} total):**\n"]
+        for s in steps:
+            line = f"{s['step']}. **{s['name']}**"
+            if s["tool"] != "custom_step":
+                line += f" (`{s['tool']}`)"
+            lines.append(line)
+        lines.append("\n*To execute this pipeline, submit each step or provide a job-execution request.*")
+        plan_md = "\n".join(lines)
+
+        return {
+            "status": "workflow_planned",
+            "success": True,
+            "workflow_type": wf_type,
+            "text": plan_md,
+            "message": plan_md,
+            "data": {
+                "workflow_plan": {
+                    "type": wf_type,
+                    "steps": steps,
+                },
+                "sequences": [],
+                "visuals": [],
+            },
+        }
+
     async def _handle_multi_step_workflow(
         self, command: str, session_id: str, session_context: Dict
     ) -> Dict:
@@ -660,6 +790,14 @@ class CommandProcessor:
             Dict with workflow execution results
         """
         print("[CommandProcessor] 🔄 Starting multi-step workflow execution...")
+
+        # Fast path: if the command already contains explicitly-numbered pipeline
+        # steps, parse them directly rather than going through the playbook matcher
+        # (which can mis-classify e.g. amplicon prompts as RNA-seq).
+        inline_plan = self._extract_inline_pipeline_plan(command)
+        if inline_plan:
+            print("[CommandProcessor] ✅ Extracted inline pipeline plan from numbered steps.")
+            return inline_plan
         
         try:
             # Import workflow modules

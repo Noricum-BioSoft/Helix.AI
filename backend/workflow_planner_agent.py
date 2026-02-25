@@ -63,12 +63,26 @@ class RNASeqPlaybook(WorkflowPlaybook):
     
     @classmethod
     def matches(cls, inputs: List[DataInput], command: str, session_context: Dict[str, Any]) -> bool:
-        """Match if: FASTQ files + RNA-seq keywords in command."""
+        """Match if: FASTQ files + RNA-seq keywords, but NOT amplicon/microbiome data."""
         has_fastq = any(_is_fastq(inp.uri) for inp in inputs)
         command_lower = command.lower()
+
+        # Explicitly exclude amplicon sequencing / microbiome pipelines.
+        # "rRNA" contains "rna" but is 16S amplicon, not bulk RNA-seq.
+        amplicon_exclusions = [
+            "16s", "18s", "its ", "amplicon", "microbiome",
+            "v3-v4", "v3–v4", "v4-v5", "hypervariable",
+            "16s rrna", "rrna amplicon",
+        ]
+        if any(kw in command_lower for kw in amplicon_exclusions):
+            return False
+
         rna_keywords = ["rna-seq", "rnaseq", "rna seq", "transcriptome", "expression", "differential"]
         has_rna_keyword = any(kw in command_lower for kw in rna_keywords)
-        return has_fastq and (has_rna_keyword or "rna" in command_lower)
+        # Only match "rna" as standalone indicator when it is not preceded by "r" (i.e. avoid "rrna")
+        import re as _re
+        has_bare_rna = bool(_re.search(r'(?<![a-z])rna(?!-seq)', command_lower))
+        return has_fastq and (has_rna_keyword or has_bare_rna)
     
     @classmethod
     def required_parameters(cls) -> List[Dict[str, Any]]:
