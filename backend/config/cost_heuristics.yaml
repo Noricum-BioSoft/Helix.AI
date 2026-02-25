@@ -1,0 +1,142 @@
+# Cost Heuristic Table
+# Relative cost classes and ranges (not exact dollars)
+# Version: 1.0
+# Last updated: 2026-01-17
+
+heuristics:
+  # Local (Free)
+  - environment: Local
+    operation_class: Small
+    cost_range_usd: [0.0, 0.0]
+    cost_class: Free
+    cost_confidence: 1.0
+    assumptions: "No cloud costs, local compute"
+    compute_cost_usd: null
+    data_transfer_cost_usd: null
+    storage_cost_usd: null
+    description: "Small operation on local machine"
+    notes: null
+
+  - environment: Local
+    operation_class: Medium
+    cost_range_usd: [0.0, 0.0]
+    cost_class: Free
+    cost_confidence: 1.0
+    assumptions: "No cloud costs, local compute"
+    compute_cost_usd: null
+    data_transfer_cost_usd: null
+    storage_cost_usd: null
+    description: "Medium operation on local machine"
+    notes: null
+
+  # EC2
+  - environment: EC2
+    operation_class: Small
+    cost_range_usd: [0.1, 0.5]
+    cost_class: Low
+    cost_confidence: 0.6
+    assumptions: "us-east-1, t3.medium (~$0.04/hr), 5-10min runtime"
+    compute_cost_usd: [0.05, 0.2]
+    data_transfer_cost_usd: 0.01
+    storage_cost_usd: null
+    description: "Small operation on EC2 instance"
+    notes: "Data transfer cost depends on file sizes"
+
+  - environment: EC2
+    operation_class: Medium
+    cost_range_usd: [0.5, 2.0]
+    cost_class: Low
+    cost_confidence: 0.5
+    assumptions: "us-east-1, m5.xlarge (~$0.19/hr), 15-30min runtime"
+    compute_cost_usd: [0.3, 1.5]
+    data_transfer_cost_usd: 0.05
+    storage_cost_usd: null
+    description: "Medium operation on EC2 instance"
+    notes: "Actual cost depends on instance type and runtime"
+
+  # EMR
+  - environment: EMR
+    operation_class: Small
+    cost_range_usd: [0.8, 2.0]
+    cost_class: Low
+    cost_confidence: 0.5
+    assumptions: "us-east-1, m5.xlarge nodes (2), 10-15min runtime, EMR markup ~40%"
+    compute_cost_usd: [0.5, 1.5]
+    data_transfer_cost_usd: 0.0
+    storage_cost_usd: [0.1, 0.3]
+    description: "Small operation on EMR (inefficient due to startup overhead)"
+    notes: "EMR startup takes ~3min, not cost-effective for small jobs"
+
+  - environment: EMR
+    operation_class: Medium
+    cost_range_usd: [1.5, 4.0]
+    cost_class: Medium
+    cost_confidence: 0.5
+    assumptions: "us-east-1, m5.xlarge nodes (2-3), 15-30min runtime, EMR markup ~40%"
+    compute_cost_usd: [1.0, 3.0]
+    data_transfer_cost_usd: 0.0
+    storage_cost_usd: [0.1, 0.5]
+    description: "Medium distributed operation on EMR"
+    notes: "Cluster startup time adds ~3min overhead"
+
+  - environment: EMR
+    operation_class: Large
+    cost_range_usd: [3.0, 15.0]
+    cost_class: Medium
+    cost_confidence: 0.4
+    assumptions: "us-east-1, m5.xlarge nodes (4-8), 30-60min runtime, EMR markup ~40%"
+    compute_cost_usd: [2.0, 12.0]
+    data_transfer_cost_usd: 0.0
+    storage_cost_usd: [0.5, 2.0]
+    description: "Large distributed operation on EMR"
+    notes: "Cost scales with cluster size and runtime"
+
+  - environment: EMR
+    operation_class: Distributed
+    cost_range_usd: [5.0, 30.0]
+    cost_class: High
+    cost_confidence: 0.3
+    assumptions: "us-east-1, m5.xlarge nodes (8-16), 1-3hr runtime, EMR markup ~40%"
+    compute_cost_usd: [4.0, 25.0]
+    data_transfer_cost_usd: 0.0
+    storage_cost_usd: [1.0, 5.0]
+    description: "Distributed operation with parallelization on EMR"
+    notes: "High variability depending on parallelization efficiency"
+
+  # Batch
+  - environment: Batch
+    operation_class: Small
+    cost_range_usd: [0.2, 0.8]
+    cost_class: Low
+    cost_confidence: 0.5
+    assumptions: "us-east-1, t3.medium compute, 10-20min runtime"
+    compute_cost_usd: [0.1, 0.5]
+    data_transfer_cost_usd: 0.01
+    storage_cost_usd: null
+    description: "Small containerized job on Batch"
+    notes: "Container pull adds startup overhead"
+
+  - environment: Batch
+    operation_class: Medium
+    cost_range_usd: [1.0, 3.0]
+    cost_class: Low
+    cost_confidence: 0.4
+    assumptions: "us-east-1, m5.xlarge compute, 20-40min runtime"
+    compute_cost_usd: [0.8, 2.5]
+    data_transfer_cost_usd: 0.05
+    storage_cost_usd: null
+    description: "Medium containerized job on Batch"
+    notes: "Good for reproducible, medium-sized jobs"
+
+  # Lambda
+  - environment: Lambda
+    operation_class: Small
+    cost_range_usd: [0.0, 0.2]
+    cost_class: Low
+    cost_confidence: 0.7
+    assumptions: "us-east-1, 2GB memory, <5min runtime"
+    compute_cost_usd: [0.0, 0.1]
+    data_transfer_cost_usd: 0.0
+    storage_cost_usd: null
+    description: "Small serverless function on Lambda"
+    notes: "First 1M requests/month free"

@@ -1,0 +1,108 @@
+# syntax=docker/dockerfile:1.7
+#
+# Minimal Bioinformatics Tools Sandbox - Fast build with essential tools only
+# 
+# This is a minimal version for quick setup and testing.
+# Includes only FastQC, MUSCLE, and Clustal Omega.
+# Build time: ~5 minutes (vs ~20 minutes for full version)
+#
+# To use the full version with all tools, build Dockerfile.biotools instead.
+#
+
+FROM python:3.11-slim AS base
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    DEBIAN_FRONTEND=noninteractive
+
+WORKDIR /app
+
+# ============================================================================
+# System Dependencies
+# ============================================================================
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    ca-certificates \
+    wget \
+    unzip \
+    bzip2 \
+    default-jre \
+    perl \
+    libz-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# ============================================================================
+# Essential Bioinformatics Tools
+# ============================================================================
+
+# ------------------------------
+# FastQC (Quality Control)
+# ------------------------------
+RUN FASTQC_VERSION="0.12.1" && \
+    wget https://www.bioinformatics.babraham.ac.uk/projects/fastqc/fastqc_v${FASTQC_VERSION}.zip -O /tmp/fastqc.zip && \
+    unzip /tmp/fastqc.zip -d /opt/ && \
+    chmod +x /opt/FastQC/fastqc && \
+    ln -s /opt/FastQC/fastqc /usr/local/bin/fastqc && \
+    rm /tmp/fastqc.zip
+
+# ------------------------------
+# MUSCLE (Multiple Sequence Alignment)
+# Note: Using v5.1 for better compatibility with Apple Silicon
+# ------------------------------
+RUN ARCH=$(dpkg --print-architecture) && \
+    if [ "$ARCH" = "amd64" ]; then \
+        MUSCLE_URL="https://github.com/rcedgar/muscle/releases/download/5.1.0/muscle5.1.linux_intel64"; \
+    elif [ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]; then \
+        MUSCLE_URL="https://github.com/rcedgar/muscle/releases/download/5.1.0/muscle5.1.linux_intel64"; \
+    else \
+        echo "Unsupported architecture: $ARCH" && exit 1; \
+    fi && \
+    wget "$MUSCLE_URL" -O /usr/local/bin/muscle && \
+    chmod +x /usr/local/bin/muscle
+
+# ------------------------------
+# Clustal Omega (Multiple Sequence Alignment)
+# ------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    clustalo \
+    && rm -rf /var/lib/apt/lists/*
+
+# ============================================================================
+# Python Dependencies
+# ============================================================================
+COPY backend/requirements.txt /app/backend/requirements.txt
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r /app/backend/requirements.txt
+
+# Additional bioinformatics Python packages (minimal set)
+# Install numpy first as biopython depends on it
+RUN pip install --no-cache-dir \
+    numpy==1.26.4 \
+    biopython==1.83
+
+# ============================================================================
+# Application Code
+# ============================================================================
+COPY backend /app/backend
+COPY agents /app/agents
+COPY tools /app/tools
+
+# Set PYTHONPATH
+ENV PYTHONPATH=/app:/app/tools
+
+# Create sandbox work directory with restricted permissions
+RUN mkdir -p /sandbox/work /sandbox/input /sandbox/output && \
+    chmod 755 /sandbox && \
+    chmod 777 /sandbox/work /sandbox/input /sandbox/output
+
+# Default port
+EXPOSE 8001
+
+# Healthcheck
+HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
+  CMD curl -f http://localhost:8001/health || exit 1
+
+# Run the app
+CMD ["uvicorn", "backend.main_with_mcp:app", "--host", "0.0.0.0", "--port", "8001", "--log-level", "info", "--access-log"]
