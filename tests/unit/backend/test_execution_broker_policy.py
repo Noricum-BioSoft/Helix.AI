@@ -49,11 +49,10 @@ async def test_policy_threshold_env_var_promotes_to_async(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_tool_override_force_async(monkeypatch):
+async def test_fastqc_threshold_routes_async(monkeypatch):
     from backend.execution_broker import ExecutionBroker, ExecutionRequest
-    from backend.contracts.infra_decision import InfraDecision
 
-    # Large threshold; override should still force async for fastqc
+    # Large threshold; FastQC should still go async when estimated bytes exceed it.
     monkeypatch.setenv("HELIX_ASYNC_BYTES_THRESHOLD", str(10_000_000_000))
 
     async def dummy_executor(tool_name: str, arguments: dict):
@@ -65,34 +64,30 @@ async def test_tool_override_force_async(monkeypatch):
         return {"type": "job", "status": "submitted", "job_id": "job-123"}
 
     monkeypatch.setattr(broker, "_submit_fastqc_job", fake_submit)
-    
-    # Mock infrastructure decision to recommend EMR (not LOCAL) so tool override applies
-    async def mock_decide_infrastructure(*args, **kwargs):
-        return InfraDecision(
-            infrastructure="EMR",
-            reasoning="Large files detected",
-            confidence_score=0.9,
-            estimated_cost_usd=10.0,
-            estimated_runtime_minutes=30.0,
-            warnings=[]
-        )
-    
-    # Mock the decide_infrastructure function from infrastructure_decision_agent
-    monkeypatch.setattr("backend.infrastructure_decision_agent.decide_infrastructure", mock_decide_infrastructure)
 
-    out = await broker.execute_tool(
-        ExecutionRequest(
-            tool_name="fastqc_quality_analysis",
-            arguments={"input_r1": "s3://b/k1", "input_r2": "s3://b/k2", "session_id": "s"},
-            session_id="s",
-            original_command="fastqc",
-            session_context={},
+    # Force threshold-based routing for this test (no infrastructure agent).
+    original_import = __import__
+
+    def mock_import(name, *args, **kwargs):
+        if name == "backend.infrastructure_decision_agent":
+            raise ImportError("Infrastructure agent disabled for test")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.__import__", mock_import)
+
+    # Pretend inputs are larger than the threshold (so routing chooses async)
+    with patch.object(broker, "_estimate_total_bytes", return_value=(10_000_000_001, 0)):
+        out = await broker.execute_tool(
+            ExecutionRequest(
+                tool_name="fastqc_quality_analysis",
+                arguments={"input_r1": "s3://b/k1", "input_r2": "s3://b/k2", "session_id": "s"},
+                session_id="s",
+                original_command="fastqc",
+                session_context={},
+            )
         )
-    )
 
     assert out["mode"] == "async"
-    # Tool override or infrastructure recommendation should result in async mode
-    # Just check that the job was submitted
     assert out["result"]["job_id"] == "job-123"
 
 

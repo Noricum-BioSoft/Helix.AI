@@ -111,6 +111,33 @@ class AgentInvocation:
             "timestamp": datetime.fromtimestamp(self.start_time).isoformat()
         }
 
+    @property
+    def output(self):
+        """Back-compat: parsed output contract (typed when possible)."""
+        if not self.output_contract:
+            return None
+        try:
+            if self.agent_name == AgentName.INFRASTRUCTURE_DECISION.value:
+                return InfraDecision.model_validate_json(self.output_contract)
+            if self.agent_name == AgentName.IMPLEMENTATION.value:
+                return ExecutionToolSpec.model_validate_json(self.output_contract)
+        except Exception:
+            pass
+        try:
+            return json.loads(self.output_contract)
+        except Exception:
+            return None
+
+    @property
+    def input(self):
+        """Back-compat: parsed input contract (typed when possible)."""
+        if not self.input_contract:
+            return None
+        try:
+            return json.loads(self.input_contract)
+        except Exception:
+            return None
+
 
 @dataclass
 class OrchestratorTrace:
@@ -130,6 +157,11 @@ class OrchestratorTrace:
     # Final outputs
     infra_decision: Optional[InfraDecision] = None
     execution_spec: Optional[ExecutionToolSpec] = None
+
+    @property
+    def agent_invocations(self) -> List[AgentInvocation]:
+        """Back-compat alias for older tests/docs."""
+        return self.invocations
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""

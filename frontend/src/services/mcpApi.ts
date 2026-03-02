@@ -1,8 +1,18 @@
 import axios from 'axios';
 
-// Use VITE_API_BASE_URL from environment for production builds
-// Falls back to localhost for local development
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8001';
+const normalizeBaseUrl = (value?: string) => {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  return trimmed.replace(/\/+$/, '');
+};
+
+// Resolution order:
+// - Explicit build-time override via VITE_API_BASE_URL (for separate API domains)
+// - Production default: same-origin (CloudFront can route API paths to the backend)
+// - Dev default: local backend
+const API_BASE_URL =
+  normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL as string | undefined) ??
+  (import.meta.env.PROD ? '' : 'http://localhost:8001');
 
 export const mcpApi = {
   // Health check
@@ -22,6 +32,16 @@ export const mcpApi = {
     const response = await axios.post(`${API_BASE_URL}/execute`, { 
       command,
       session_id: sessionId 
+    });
+    return response.data;
+  },
+
+  // Dispatch a previously-planned pipeline (execute_plan=true flag)
+  executePipelinePlan: async (command: string, sessionId?: string) => {
+    const response = await axios.post(`${API_BASE_URL}/execute`, {
+      command,
+      session_id: sessionId,
+      execute_plan: true,
     });
     return response.data;
   },
@@ -71,7 +91,8 @@ export const mcpApi = {
   // Jobs API (async jobs like EMR FastQC)
   getJob: async (jobId: string) => {
     const response = await axios.get(`${API_BASE_URL}/jobs/${jobId}`);
-    return response.data;
+    // API returns {success: true, job: {...}}, extract the job object
+    return response.data.job || response.data;
   },
 
   getJobResults: async (jobId: string) => {

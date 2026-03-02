@@ -3,6 +3,7 @@ import Button from 'react-bootstrap/Button';
 import Card from 'react-bootstrap/Card';
 import { theme } from '../theme';
 import { getExampleWithSequences, sampleSequences } from '../utils/sampleSequences';
+import { demoScenarios } from '../data/demoScenarios';
 
 interface ExampleCommand {
   command: string;
@@ -25,6 +26,14 @@ export const ExampleCommandsPanel: React.FC<ExampleCommandsPanelProps> = ({
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
 
   const exampleCategories: ExampleCategory[] = [
+    {
+      category: "Demo Scenarios",
+      icon: "🧬",
+      commands: demoScenarios.map((s) => ({
+        command: s.prompt,
+        description: `${s.icon} ${s.title} — ${s.subtitle}`,
+      })),
+    },
     {
       category: "Getting Started",
       icon: "🚀",

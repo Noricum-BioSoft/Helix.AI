@@ -1,0 +1,50 @@
+metadata:
+  id: real_read_merging_small
+  category: execute
+  description: "Real read merging on small paired-end dataset (local)"
+  tags: [real-execution, read-merging, small-dataset, paired-end, local]
+  author: "Demo System"
+  requires_mock: false
+
+input:
+  user_prompt: "Merge my paired-end reads"
+  session_context:
+    uploaded_files:
+      # Small test dataset - structured format
+      - name: "test_mate_R1.fq"
+        uri: "s3://noricum-ngs-data/datasets/GRCh38.p12.MafHi/test/test_mate_R1.fq"
+        size: "10MB"
+        format: "fastq"
+      - name: "test_mate_R2.fq"
+        uri: "s3://noricum-ngs-data/datasets/GRCh38.p12.MafHi/test/test_mate_R2.fq"
+        size: "10MB"
+        format: "fastq"
+    dataset_info:
+      reference_genome: "GRCh38.p12"
+      sequencing_platform: "Illumina"
+      read_type: "paired_end"
+      format: "fastq"
+    processing_params:
+      quality_threshold: 30
+      min_overlap: 10
+
+expected_behavior:
+  # Backend uses tool mapping mode
+  agent_sequence:
+    - BioinformaticsExecutor
+  
+  intent:
+    type: "execute"
+    confidence_min: 0.7
+  
+  contracts:
+    - agent: BioinformaticsExecutor
+      output_type: ToolMapping
+      validations:
+        - field: tool_name
+          not_empty: true  # Tool name varies (read_merging, merge_paired_reads, etc.)
+
+  policy_checks: []
+  
+  min_duration_ms: 0
+  max_duration_ms: 30000

@@ -50,6 +50,30 @@ class FileAnalysis(BaseModel):
         ge=0.0,
         description="Size of largest file in megabytes"
     )
+
+    @property
+    def all_local(self) -> bool:
+        """True if all analyzed inputs are local paths."""
+        return bool(self.locations) and all(loc == "Local" for loc in self.locations)
+
+    @property
+    def all_s3(self) -> bool:
+        """True if all analyzed inputs are S3 URIs."""
+        return bool(self.locations) and all(loc == "S3" for loc in self.locations)
+
+    @property
+    def all_in_s3(self) -> bool:
+        """Back-compat alias."""
+        return self.all_s3
+
+    @property
+    def mixed_locations(self) -> bool:
+        """True if inputs span multiple location types (e.g., Local + S3)."""
+        return len(set(self.locations or [])) > 1
+
+    @property
+    def has_unknown_sizes(self) -> bool:
+        return self.unknown_sizes > 0
     
     @field_validator('total_size_mb', mode='before')
     @classmethod
@@ -119,6 +143,18 @@ class CostAnalysis(BaseModel):
         default=None,
         description="Optional cost breakdown by component (compute, storage, transfer)"
     )
+
+    @property
+    def cost_class(self) -> Literal["Free", "Low", "Medium", "High"]:
+        """Coarse cost class derived from the estimated max cost."""
+        _, max_cost = self.estimated_cost_range_usd
+        if max_cost <= 0:
+            return "Free"
+        if max_cost <= 2:
+            return "Low"
+        if max_cost <= 10:
+            return "Medium"
+        return "High"
     
     @field_validator('estimated_cost_range_usd')
     @classmethod
@@ -291,3 +327,21 @@ class InfraDecision(BaseModel):
             }
         }
     )
+
+
+# -----------------------------------------------------------------------------
+# Backward-compatible names (older code/tests)
+# -----------------------------------------------------------------------------
+
+class AlternativeRecommendation(InfraAlternative):
+    """Back-compat wrapper with default confidence."""
+
+    confidence: float = Field(
+        default=0.4,
+        ge=0.0,
+        le=1.0,
+        description="Confidence in this alternative (0-1)"
+    )
+
+
+InfrastructureDecision = InfraDecision

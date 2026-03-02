@@ -136,3 +136,6 @@ echo "3. Check Docker Desktop logs for network errors"
 echo "4. Try pushing a smaller test image first to verify connectivity"
 
 
+
+
+

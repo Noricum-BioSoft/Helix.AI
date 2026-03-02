@@ -8,12 +8,14 @@ pandas
 numpy
 requests>=2.31.0
 scikit-learn
+matplotlib
 
 # Bioinformatics
 biopython>=1.81
 plotly
 ete3
 seaborn
+pydeseq2
 
 # LangChain (for agent functionality)
 # Pin exact versions to ensure reproducible builds across CI/CD environments.

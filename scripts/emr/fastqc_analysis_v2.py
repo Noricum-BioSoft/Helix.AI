@@ -69,6 +69,11 @@ def process_fastq_chunk(text_chunk):
 
 
 def main():
+    import subprocess
+    import os
+    
+    hdfs_base = None  # Track HDFS directory for cleanup
+    
     try:
         parser = argparse.ArgumentParser(description='FASTQ Quality Analysis with PySpark')
         parser.add_argument('--input-r1', required=True, help='S3 path to R1 FASTQ file')
@@ -119,9 +124,8 @@ def main():
         
         # Download files from S3 to HDFS first to avoid filesystem class issues
         # This is a workaround for the EmrFileSystem/S3AFileSystem ClassNotFoundException
-        import subprocess
-        import os
         import tempfile
+        import random
         
         print_flush("Downloading files from S3 to HDFS...")
         print_flush(f"  R1: {args.input_r1}")
@@ -197,14 +201,7 @@ def main():
             import traceback
             traceback.print_exc()
             raise
-        finally:
-            # Clean up HDFS files after processing (optional, can leave for debugging)
-            try:
-                print_flush(f"Cleaning up HDFS files in {hdfs_base}...")
-                subprocess.run(["hadoop", "fs", "-rm", "-r", "-f", hdfs_base], 
-                             capture_output=True, text=True)
-            except:
-                pass
+        # Note: HDFS cleanup moved to end of main() to avoid deleting files still in use
         
         # Process lines into 4-line records using mapPartitions
         # Note: This approach may miss records that span partition boundaries
@@ -346,7 +343,6 @@ def main():
     
         # Save results to local file first, then upload to S3
         # This avoids Hadoop filesystem class issues
-        import subprocess
         local_output_file = f"/tmp/fastqc_results_{os.getpid()}.json"
         print_flush(f"Saving results to local file: {local_output_file}...")
         results_json = json.dumps(results, indent=2)
@@ -402,6 +398,19 @@ def main():
         sys.stdout.flush()
         sys.stderr.flush()
         return 1
+    
+    finally:
+        # Clean up HDFS files at the very end, after all processing is complete
+        if hdfs_base:
+            try:
+                print_flush(f"\nCleaning up HDFS files in {hdfs_base}...")
+                subprocess.run(["hadoop", "fs", "-rm", "-r", "-f", hdfs_base], 
+                             capture_output=True, text=True, check=False)
+                print_flush("✅ HDFS cleanup complete")
+            except Exception as cleanup_error:
+                print_flush(f"⚠️  Warning: Could not clean up HDFS files: {cleanup_error}")
+                # Don't fail the job if cleanup fails
+                pass
 
 
 if __name__ == "__main__":

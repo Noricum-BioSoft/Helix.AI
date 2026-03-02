@@ -16,8 +16,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from backend.job_manager import get_job_manager
 import json
 
-def test_real_job_validation(job_id: str):
-    """Test validation with a real job ID."""
+def run_real_job_validation(job_id: str):
+    """Run validation with a real job ID (CLI helper; not a pytest test)."""
     print("=" * 70)
     print(f"Testing Validation for REAL Job: {job_id}")
     print("=" * 70)
@@ -106,5 +106,5 @@ if __name__ == '__main__':
         sys.exit(1)
     
     job_id = sys.argv[1]
-    test_real_job_validation(job_id)
+    run_real_job_validation(job_id)
 

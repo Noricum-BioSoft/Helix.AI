@@ -1,0 +1,68 @@
+metadata:
+  id: execute_fastqc_basic
+  category: execute
+  description: "Basic FastQC execution - full workflow path without CodeGen"
+  tags: [baseline, execute, quality-control, full-workflow]
+  requires_mock: true
+
+input:
+  user_prompt: "Run FastQC on sample_R1.fastq and sample_R2.fastq"
+  session_context:
+    uploaded_files:
+      - "s3://helix-data/demo/sample_R1.fastq"
+      - "s3://helix-data/demo/sample_R2.fastq"
+
+expected_behavior:
+  agent_sequence:
+    - IntentDetector
+    - BioinformaticsExecutor
+    - InfrastructureExpert
+    - ExecutionBroker
+    - DataVisualizer
+  
+  intent:
+    type: "execute"
+    confidence_min: 0.8
+  
+  contracts:
+    - agent: IntentDetector
+      output_type: IntentResult
+      validations:
+        - field: intent
+          equals: "execute"
+        - field: confidence
+          greater_than: 0.8
+    
+    - agent: BioinformaticsExecutor
+      output_type: WorkflowPlan
+      validations:
+        - field: version
+          equals: "v1"
+        - field: steps
+          not_empty: true
+    
+    - agent: InfrastructureExpert
+      output_type: InfraDecisionContract
+      validations:
+        - field: recommended_environment
+          not_empty: true
+        - field: confidence_score
+          greater_than: 0.5
+    
+    - agent: ExecutionBroker
+      output_type: ExecutionResult
+      validations:
+        - field: status
+          not_empty: true
+    
+    - agent: DataVisualizer
+      output_type: VisualizationArtifacts
+      validations:
+        - field: summary
+          not_empty: true
+
+  policy_checks:
+    - strict_role_separation
+    - confidence_thresholds
+  
+  max_duration_ms: 10000

@@ -1,0 +1,39 @@
+metadata:
+  id: ask_tool_recommendation
+  category: ask
+  description: "Ask for tool recommendations without execution"
+  tags: [ask, guru-only, tool-selection]
+  requires_mock: true
+
+input:
+  user_prompt: "Which aligner should I use for long-read sequencing data?"
+  session_context: {}
+
+expected_behavior:
+  agent_sequence:
+    - IntentDetector
+    - BioinformaticsGuru
+  
+  intent:
+    type: "ask"
+    confidence_min: 0.75
+  
+  contracts:
+    - agent: IntentDetector
+      output_type: IntentResult
+      validations:
+        - field: intent
+          equals: "ask"
+    
+    - agent: BioinformaticsGuru
+      output_type: Answer
+      validations:
+        - field: text
+          not_empty: true
+        - field: text
+          min_length: 100
+
+  policy_checks:
+    - no_execution_side_effects
+    - no_infrastructure_decisions
+    - strict_role_separation

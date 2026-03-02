@@ -144,14 +144,10 @@ class TestDeployedBackend:
         assert result.get("success") is True, f"Command failed: {result}"
         assert result.get("tool") == "mutate_sequence", f"Wrong tool: {result.get('tool')}"
         
-        # Check for mutation results
-        output = result.get("output", {})
-        if isinstance(output, dict):
-            # Check for variants
-            stats = output.get("statistics", {})
-            assert "variants" in stats or "total_variants" in stats, "No variants in response"
-        else:
-            assert len(str(output)) > 0, "Empty output"
+        # Check for mutation results - mutations are in text field
+        text = result.get("text", "")
+        assert len(text) > 0, "No output text"
+        assert "variant" in text.lower() or "mutation" in text.lower(), "No mutation info in response"
     
     @pytest.mark.integration
     def test_phylogenetic_analysis(self, tester, session):
@@ -281,5 +277,8 @@ class TestDeployedBackendPerformance:
 if __name__ == "__main__":
     # Allow running directly
     pytest.main([__file__, "-v", "-s"])
+
+
+
 
 

@@ -1,0 +1,35 @@
+metadata:
+  id: edge_missing_infrastructure_decision
+  category: edge
+  description: "Ensure Planner cannot skip Infrastructure Expert"
+  tags: [edge-case, policy-enforcement, handoff-validation]
+  requires_mock: true
+
+input:
+  user_prompt: "Run quality control on my samples"
+  session_context:
+    uploaded_files:
+      - "s3://helix-data/demo/sample.fastq"
+
+expected_behavior:
+  # Must include Infrastructure Expert - cannot skip from Planner to Broker
+  agent_sequence:
+    - IntentDetector
+    - BioinformaticsExecutor
+    - InfrastructureExpert
+    - ExecutionBroker
+    - DataVisualizer
+  
+  intent:
+    type: "execute"
+    confidence_min: 0.7
+  
+  contracts:
+    - agent: InfrastructureExpert
+      output_type: InfraDecisionContract
+      validations:
+        - field: recommended_environment
+          not_empty: true
+
+  policy_checks:
+    - strict_role_separation

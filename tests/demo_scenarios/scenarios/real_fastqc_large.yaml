@@ -1,0 +1,50 @@
+metadata:
+  id: real_fastqc_large
+  category: execute
+  description: "Real FastQC execution on large dataset (should route to EMR)"
+  tags: [real-execution, fastqc, large-dataset, demo, emr, scale]
+  author: "Demo System"
+  requires_mock: false  # This will execute real workflow
+
+input:
+  user_prompt: "Run FastQC quality control on my sequencing data"
+  session_context:
+    uploaded_files:
+      # Actual large dataset - structured format expected by backend
+      - name: "mate_R1.fq"
+        uri: "s3://noricum-ngs-data/datasets/GRCh38.p12.MafHi/mate_R1.fq"
+        size: "2.5GB"
+        format: "fastq"
+      - name: "mate_R2.fq"
+        uri: "s3://noricum-ngs-data/datasets/GRCh38.p12.MafHi/mate_R2.fq"
+        size: "2.5GB"
+        format: "fastq"
+    dataset_info:
+      reference_genome: "GRCh38.p12"
+      sequencing_platform: "Illumina"
+      read_type: "paired_end"
+      format: "fastq"
+      dataset_name: "GRCh38.p12.MafHi"
+  environment_vars:
+    AWS_REGION: "us-west-2"
+
+expected_behavior:
+  # Backend uses tool mapping mode - validates tool identification only
+  agent_sequence:
+    - BioinformaticsExecutor
+  
+  intent:
+    type: "execute"
+    confidence_min: 0.8
+  
+  contracts:
+    - agent: BioinformaticsExecutor
+      output_type: ToolMapping
+      validations:
+        - field: tool_name
+          equals: "fastqc_quality_analysis"
+
+  policy_checks: []  # Tool mapping mode skips policy checks
+  
+  min_duration_ms: 0
+  max_duration_ms: 30000

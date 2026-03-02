@@ -1,0 +1,32 @@
+metadata:
+  id: edge_guru_no_execution
+  category: edge
+  description: "Verify Guru never triggers execution without escalation"
+  tags: [edge-case, policy-enforcement, guru-constraint]
+  requires_mock: true
+
+input:
+  user_prompt: "What quality control tools are available?"
+  session_context: {}
+
+expected_behavior:
+  # Guru answers but does NOT escalate to execution
+  agent_sequence:
+    - IntentDetector
+    - BioinformaticsGuru
+  
+  intent:
+    type: "ask"
+    confidence_min: 0.7
+  
+  contracts:
+    - agent: BioinformaticsGuru
+      output_type: Answer
+      validations:
+        - field: text
+          not_empty: true
+
+  policy_checks:
+    - no_execution_side_effects
+    - no_infrastructure_decisions
+    - strict_role_separation

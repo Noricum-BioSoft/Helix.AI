@@ -182,18 +182,8 @@ python -c "import paramiko; print(f'✅ paramiko {paramiko.__version__}')" || {
 # Check for environment variables
 print_status "Checking environment configuration..."
 if [ ! -f "../.env" ] && [ ! -f ".env" ]; then
-    print_warning "No .env file found. Creating example configuration..."
-    cat > .env.example << EOF
-# Helix.AI Environment Configuration
-# Copy this file to .env and fill in your API keys
-
-# OpenAI API Key (required for fallback and some features)
-OPENAI_API_KEY=your_openai_api_key_here
-
-# DeepSeek API Key (optional - if not provided, will fallback to OpenAI)
-DEEPSEEK_API_KEY=your_deepseek_api_key_here
-EOF
-    print_warning "Please create a .env file with your API keys. See ENVIRONMENT_SETUP.md for details."
+    print_warning "No .env file found."
+    print_warning "Copy backend/.env.example to .env (repo root) and set at least one API key."
 fi
 
 # Check if at least one API key is available

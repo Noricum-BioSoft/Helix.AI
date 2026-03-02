@@ -96,3 +96,6 @@ echo "  2. Deploy the updated stack: cd infrastructure && cdk deploy"
 echo "  3. Force ECS service to redeploy: aws ecs update-service --cluster helix-ai-cluster --service HelixAIStack-ServiceD69D759B-G23PygXszFhF --force-new-deployment --region us-west-1"
 
 
+
+
+

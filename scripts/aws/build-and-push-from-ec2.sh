@@ -45,3 +45,6 @@ echo "🚀 You can now force ECS to redeploy:"
 echo "   aws ecs update-service --cluster helix-ai-cluster --service HelixAIStack-ServiceD69D759B-G23PygXszFhF --force-new-deployment --region us-west-1"
 
 
+
+
+

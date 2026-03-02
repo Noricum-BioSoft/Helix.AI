@@ -1,0 +1,43 @@
+metadata:
+  id: ask_basic_question
+  category: ask
+  description: "Simple bioinformatics question requiring only Guru response"
+  tags: [baseline, guru-only, knowledge-retrieval]
+  requires_mock: true
+
+input:
+  user_prompt: "What is the difference between RNA-seq and DNA-seq?"
+  session_context: {}
+
+expected_behavior:
+  agent_sequence:
+    - IntentDetector
+    - BioinformaticsGuru
+  
+  intent:
+    type: "ask"
+    confidence_min: 0.7
+  
+  contracts:
+    - agent: IntentDetector
+      output_type: IntentResult
+      validations:
+        - field: intent
+          equals: "ask"
+        - field: confidence
+          greater_than: 0.7
+    
+    - agent: BioinformaticsGuru
+      output_type: Answer
+      validations:
+        - field: text
+          not_empty: true
+        - field: text
+          min_length: 50
+
+  policy_checks:
+    - no_execution_side_effects
+    - no_infrastructure_decisions
+    - strict_role_separation
+  
+  max_duration_ms: 5000

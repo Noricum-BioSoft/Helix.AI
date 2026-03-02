@@ -831,10 +831,6 @@ async def _execute_generated_code(
     if use_sandbox and os.getenv("HELIX_MOCK_MODE") != "1":
         logger.info("🐳 Attempting to execute generated code in Docker sandbox (all bioinfo tools available)")
         try:
-            import tempfile
-            from pathlib import Path
-            import subprocess
-            
             # Get Docker image name
             biotools_image = os.getenv('HELIX_BIOTOOLS_IMAGE', 'helix-biotools:latest')
             

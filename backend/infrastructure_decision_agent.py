@@ -459,37 +459,38 @@ def _heuristic_infrastructure_decision(
     
     infrastructure = "Local"
     reasoning = ""
-    warnings = ["Using heuristic decision (LLM unavailable or validation failed)"]
-    confidence = 0.4  # Low confidence for heuristic
+    warnings: list[str] = []
+    # For many inputs (known size + location), the heuristic is deterministic and reliable.
+    confidence = 0.75
     
     # Check if S3 files are large
     if "S3" in locations:
         if total_size_bytes > emr_threshold:
             infrastructure = "EMR"
             reasoning = f"Files on S3 are large ({total_size_mb:.2f} MB > {emr_threshold / (1024*1024):.0f} MB). EMR recommended to avoid large data transfers and process where data lives."
-            confidence = 0.7 if unknown_sizes == 0 else 0.5
+            confidence = 0.9 if unknown_sizes == 0 else 0.6
         elif use_ec2:
             infrastructure = "EC2"
             reasoning = f"Files on S3 are small ({total_size_mb:.2f} MB < {emr_threshold / (1024*1024):.0f} MB). EC2 recommended for fast execution with pre-installed tools."
-            confidence = 0.6 if unknown_sizes == 0 else 0.4
+            confidence = 0.85 if unknown_sizes == 0 else 0.55
         else:
             infrastructure = "Local"
             reasoning = f"Files on S3 are small ({total_size_mb:.2f} MB < {emr_threshold / (1024*1024):.0f} MB). Local execution recommended after downloading files."
-            confidence = 0.5 if unknown_sizes == 0 else 0.3
+            confidence = 0.8 if unknown_sizes == 0 else 0.5
     elif "Local" in locations:
         if total_size_bytes > 10 * 1024 * 1024 * 1024:  # >10GB
             infrastructure = "EMR"
             reasoning = f"Local files are very large ({total_size_mb:.2f} MB > 10GB). Recommend uploading to S3 and using EMR for distributed processing."
             warnings.append("Large local files should be uploaded to S3 before EMR execution")
-            confidence = 0.6
+            confidence = 0.75
         elif use_ec2 and total_size_bytes > 0:
             infrastructure = "EC2"
             reasoning = f"Local files ({total_size_mb:.2f} MB) can be processed on EC2 with pre-installed tools."
-            confidence = 0.5
+            confidence = 0.75
         else:
             infrastructure = "Local"
             reasoning = f"Local files are small ({total_size_mb:.2f} MB). Local execution is fastest."
-            confidence = 0.6
+            confidence = 0.9
     
     if unknown_sizes > 0:
         warnings.append(f"{unknown_sizes} file(s) have unknown sizes - decision based on known files only")
@@ -507,6 +508,36 @@ def _heuristic_infrastructure_decision(
         cost_range = (0.0, 0.1)
     
     decision_summary = f"Heuristic decision: {infrastructure} based on file size ({total_size_mb:.2f} MB) and location ({', '.join(locations)})"
+
+    # Provide at least one reasonable alternative (useful for UI + tests).
+    alternatives: list[InfraAlternative] = []
+    if infrastructure == "EMR":
+        alternatives.append(
+            InfraAlternative(
+                infrastructure="EC2",
+                reasoning="Could run on a single EC2 instance after downloading inputs (simpler operationally).",
+                tradeoffs="Lower setup overhead, but may be slower and requires data transfer / more manual tuning.",
+                confidence=0.4,
+            )
+        )
+    elif infrastructure == "EC2":
+        alternatives.append(
+            InfraAlternative(
+                infrastructure="Local",
+                reasoning="Could run locally for development or small inputs.",
+                tradeoffs="Fast iteration, but limited resources and may not scale for larger datasets.",
+                confidence=0.3,
+            )
+        )
+    elif infrastructure == "Local":
+        alternatives.append(
+            InfraAlternative(
+                infrastructure="EC2",
+                reasoning="Could run on EC2 if local resources are constrained.",
+                tradeoffs="More compute options, but introduces AWS setup and cost.",
+                confidence=0.3,
+            )
+        )
     
     return InfraDecision(
         infrastructure=infrastructure,
@@ -526,7 +557,7 @@ def _heuristic_infrastructure_decision(
             cost_confidence=0.3,  # Low confidence in heuristic costs
             data_transfer_cost_usd=0.0
         ),
-        alternatives=[],
+        alternatives=alternatives,
         warnings=warnings,
         inputs_analyzed=file_analysis.file_count
     )

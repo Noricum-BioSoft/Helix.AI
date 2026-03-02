@@ -104,31 +104,29 @@ class TestEMRClusterAutoCreation:
                     with patch.object(job_manager, '_check_cluster_state', return_value='WAITING'):
                         with patch('subprocess.run') as mock_subprocess:
                             mock_subprocess.return_value = Mock(returncode=0, stdout="", stderr="")
-                            with patch('tempfile.NamedTemporaryFile') as mock_tempfile:
-                                mock_tempfile.return_value.__enter__.return_value.name = '/tmp/test.json'
+                            
+                            # This should NOT raise an error
+                            try:
+                                job_id = job_manager.submit_universal_emr_job(
+                                    tool_name="read_merging",
+                                    tool_args={"forward_reads": "s3://bucket/R1.fq"},
+                                    output_path="s3://bucket/emr-results/test-job/",
+                                    # Avoid bundling local tools/ (slow + filesystem dependent)
+                                    tools_bundle_s3="s3://bucket/emr-scripts/tools_bundle_test.zip",
+                                )
                                 
-                                # This should NOT raise an error
-                                try:
-                                    job_id = job_manager.submit_universal_emr_job(
-                                        tool_name="read_merging",
-                                        tool_args={"forward_reads": "s3://bucket/R1.fq"},
-                                        session_id="test-session"
-                                    )
-                                    
-                                    # Verify cluster creation was attempted
-                                    mock_create.assert_called_once()
-                                    # Note: For async jobs, _wait_for_cluster_ready is NOT called
-                                    # (EMR will queue the step and execute when cluster is ready)
-                                    
-                                    # Verify EMR_CLUSTER_ID was set
-                                    assert os.environ.get("EMR_CLUSTER_ID") == 'j-TEST789'
-                                    
-                                    print("✅ PASS: submit_universal_emr_job auto-creates cluster when EMR_CLUSTER_ID not set")
-                                except ValueError as e:
-                                    if "EMR_CLUSTER_ID" in str(e):
-                                        pytest.fail(f"❌ FAIL: Still raises error when EMR_CLUSTER_ID not set: {e}")
-                                    else:
-                                        raise
+                                # Verify cluster creation was attempted
+                                mock_create.assert_called_once()
+                                
+                                # Verify EMR_CLUSTER_ID was set
+                                assert os.environ.get("EMR_CLUSTER_ID") == 'j-TEST789'
+                                
+                                print("✅ PASS: submit_universal_emr_job auto-creates cluster when EMR_CLUSTER_ID not set")
+                            except ValueError as e:
+                                if "EMR_CLUSTER_ID" in str(e):
+                                    pytest.fail(f"❌ FAIL: Still raises error when EMR_CLUSTER_ID not set: {e}")
+                                else:
+                                    raise
     
     def test_no_error_when_emr_cluster_id_not_set(self):
         """Test that no ValueError is raised when EMR_CLUSTER_ID is not set."""
@@ -163,7 +161,8 @@ class TestEMRClusterAutoCreation:
                                     job_manager.submit_universal_emr_job(
                                         tool_name="test_tool",
                                         tool_args={},
-                                        session_id="test"
+                                    output_path="s3://bucket/emr-results/test-job/",
+                                    tools_bundle_s3="s3://bucket/emr-scripts/tools_bundle_test.zip",
                                     )
                                     print("✅ PASS: No ValueError raised when EMR_CLUSTER_ID not set")
                                 except ValueError as e:

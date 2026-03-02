@@ -1,0 +1,70 @@
+metadata:
+  id: execute_with_codegen
+  category: execute
+  description: "Workflow requiring custom tool generation via CodeGen"
+  tags: [execute, codegen, custom-tools]
+  requires_mock: true
+
+input:
+  user_prompt: "Perform read merging on my paired-end reads using a custom quality threshold of 30"
+  session_context:
+    uploaded_files:
+      - "s3://helix-data/demo/sample_R1.fastq"
+      - "s3://helix-data/demo/sample_R2.fastq"
+
+expected_behavior:
+  agent_sequence:
+    - IntentDetector
+    - BioinformaticsExecutor
+    - InfrastructureExpert
+    - CodeGenerator
+    - ExecutionBroker
+    - DataVisualizer
+  
+  intent:
+    type: "execute"
+    confidence_min: 0.75
+  
+  contracts:
+    - agent: IntentDetector
+      output_type: IntentResult
+      validations:
+        - field: intent
+          equals: "execute"
+    
+    - agent: BioinformaticsExecutor
+      output_type: WorkflowPlan
+      validations:
+        - field: steps
+          not_empty: true
+    
+    - agent: InfrastructureExpert
+      output_type: InfraDecisionContract
+      validations:
+        - field: recommended_environment
+          not_empty: true
+    
+    - agent: CodeGenerator
+      output_type: ExecutionSpec
+      validations:
+        - field: target
+          not_empty: true
+        - field: command
+          not_empty: true
+    
+    - agent: ExecutionBroker
+      output_type: ExecutionResult
+      validations:
+        - field: status
+          not_empty: true
+    
+    - agent: DataVisualizer
+      output_type: VisualizationArtifacts
+      validations:
+        - field: summary
+          not_empty: true
+
+  policy_checks:
+    - strict_role_separation
+  
+  max_duration_ms: 15000

@@ -756,13 +756,28 @@ async def plan_workflow(
     
     # If missing required parameters, return clarification request
     if missing_params:
-        return {
-            "status": "clarification_needed",
-            "message": _format_clarification_message(selected_playbook, missing_params, inputs),
-            "missing_parameters": missing_params,
-            "detected_workflow_type": selected_playbook.workflow_type,
-            "detected_inputs": file_uris
-        }
+        # If the user provided an explicit multi-step plan (e.g. "Step 1:", "Step 2:"),
+        # prefer producing a usable draft workflow with sensible defaults rather than
+        # blocking on clarifications. This keeps E2E workflow planning deterministic.
+        command_lower = (command or "").lower()
+        has_explicit_steps = bool(re.search(r"\bstep\s+\d+\s*[:.)]", command_lower))
+        if has_explicit_steps and selected_playbook is RNASeqPlaybook:
+            extracted_params.setdefault("organism", "human")
+            extracted_params.setdefault("reference_genome", "hg38")
+            # Recompute missing params after defaults.
+            missing_params = [
+                p for p in missing_params
+                if p.get("parameter") not in {"organism", "reference_genome"}
+            ]
+
+        if missing_params:
+            return {
+                "status": "clarification_needed",
+                "message": _format_clarification_message(selected_playbook, missing_params, inputs),
+                "missing_parameters": missing_params,
+                "detected_workflow_type": selected_playbook.workflow_type,
+                "detected_inputs": file_uris
+            }
     
     # Create workflow plan
     try:

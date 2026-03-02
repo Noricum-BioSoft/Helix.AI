@@ -1,0 +1,33 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "HelixEmrOps",
+      "Effect": "Allow",
+      "Action": [
+        "elasticmapreduce:RunJobFlow",
+        "elasticmapreduce:AddTags",
+        "elasticmapreduce:AddJobFlowSteps",
+        "elasticmapreduce:DescribeCluster",
+        "elasticmapreduce:DescribeStep",
+        "elasticmapreduce:ListClusters",
+        "elasticmapreduce:ListBootstrapActions",
+        "elasticmapreduce:ListInstanceGroups",
+        "elasticmapreduce:ListSteps",
+        "elasticmapreduce:TerminateJobFlows"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "HelixEmrPassRoles",
+      "Effect": "Allow",
+      "Action": ["iam:PassRole"],
+      "Resource": [
+        "arn:aws:iam::794270057041:role/EMR_DefaultRole",
+        "arn:aws:iam::794270057041:role/EMR_EC2_DefaultRole",
+        "arn:aws:iam::794270057041:role/EMR_AutoScaling_DefaultRole"
+      ]
+    }
+  ]
+}
+

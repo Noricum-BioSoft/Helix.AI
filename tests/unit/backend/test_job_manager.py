@@ -37,12 +37,17 @@ class TestJobManager:
     """Test suite for JobManager class."""
 
     @pytest.fixture
-    def job_manager(self):
-        """Create a fresh JobManager instance for each test."""
+    def job_manager(self, tmp_path):
+        """Create an isolated JobManager instance for each test."""
         # Reset the singleton
         import backend.job_manager as jm_module
         jm_module._job_manager_instance = None
-        return JobManager()
+        jm = JobManager()
+        # Isolate from any persisted local state (repo-level sessions/jobs.json)
+        jm.jobs = {}
+        jm.jobs_file = tmp_path / "sessions" / "jobs.json"
+        jm._save_jobs()
+        return jm
 
     @pytest.fixture
     def mock_env_vars(self):
@@ -97,12 +102,14 @@ class TestJobManager:
 
             # Check job is stored
             job = job_manager.jobs[job_id]
-            assert job["status"] == STATUS_SUBMITTED
+            # Background submission can update quickly in tests.
+            assert job["status"] in (STATUS_SUBMITTED, STATUS_RUNNING)
             assert job["r1_path"] == r1_path
             assert job["r2_path"] == r2_path
             assert job["output_path"] == output_path
             assert job["cluster_id"] == "j-TEST123456789"
-            assert job["step_id"] == "s-ABC123456"
+            # Step submission happens asynchronously; step_id is populated later.
+            assert job["step_id"] in (None, "s-ABC123456")
             assert job["type"] == "fastqc"
             assert "submitted_at" in job
             assert "updated_at" in job
@@ -162,7 +169,15 @@ class TestJobManager:
     def test_submit_fastqc_job_script_fails(
         self, job_manager, mock_env_vars, mock_script_path
     ):
-        """Test job submission handles script failure."""
+        """Test job submission records failure when script fails."""
+        class _ImmediateThread:
+            def __init__(self, target, daemon=True):
+                self._target = target
+                self.daemon = daemon
+
+            def start(self):
+                self._target()
+
         with patch.object(
             job_manager, "project_root", mock_script_path.parent.parent.parent
         ), patch.object(
@@ -174,12 +189,16 @@ class TestJobManager:
                 stdout="",
                 stderr="Error: Cluster not ready",
             ),
-        ), pytest.raises(
-            RuntimeError, match="Failed to submit job"
+        ), patch(
+            "threading.Thread",
+            side_effect=lambda *args, **kwargs: _ImmediateThread(kwargs["target"], daemon=kwargs.get("daemon", True)),
         ):
-            job_manager.submit_fastqc_job(
+            job_id = job_manager.submit_fastqc_job(
                 r1_path="s3://bucket/R1.fastq", r2_path="s3://bucket/R2.fastq"
             )
+            job = job_manager.jobs[job_id]
+            assert job["status"] == STATUS_FAILED
+            assert "Cluster not ready" in (job.get("error") or "")
 
     def test_extract_step_id(self, job_manager):
         """Test step ID extraction from script output."""
@@ -440,7 +459,15 @@ class TestJobManager:
         assert manager1 is manager2
 
     def test_submit_with_timeout(self, job_manager, mock_env_vars, mock_script_path):
-        """Test job submission timeout handling."""
+        """Test job submission timeout handling (recorded as failed)."""
+        class _ImmediateThread:
+            def __init__(self, target, daemon=True):
+                self._target = target
+                self.daemon = daemon
+
+            def start(self):
+                self._target()
+
         with patch.object(
             job_manager, "project_root", mock_script_path.parent.parent.parent
         ), patch.object(
@@ -448,23 +475,31 @@ class TestJobManager:
         ), patch(
             "subprocess.run",
             side_effect=subprocess.TimeoutExpired("script.sh", 60),
-        ), pytest.raises(
-            RuntimeError, match="timed out"
+        ), patch(
+            "threading.Thread",
+            side_effect=lambda *args, **kwargs: _ImmediateThread(kwargs["target"], daemon=kwargs.get("daemon", True)),
         ):
-            job_manager.submit_fastqc_job(
+            job_id = job_manager.submit_fastqc_job(
                 r1_path="s3://bucket/R1.fastq", r2_path="s3://bucket/R2.fastq"
             )
+            job = job_manager.jobs[job_id]
+            assert job["status"] == STATUS_FAILED
+            assert "timed out" in (job.get("error") or "").lower()
 
 
 class TestJobManagerIntegration:
     """Integration-style tests with more complex scenarios."""
 
     @pytest.fixture
-    def job_manager(self):
-        """Create a fresh JobManager instance."""
+    def job_manager(self, tmp_path):
+        """Create an isolated JobManager instance."""
         import backend.job_manager as jm_module
         jm_module._job_manager_instance = None
-        return JobManager()
+        jm = JobManager()
+        jm.jobs = {}
+        jm.jobs_file = tmp_path / "sessions" / "jobs.json"
+        jm._save_jobs()
+        return jm
 
     @pytest.fixture
     def mock_env_vars(self):
@@ -509,7 +544,8 @@ class TestJobManagerIntegration:
 
             assert job_id is not None
             initial_status = job_manager.get_job_status(job_id)
-            assert initial_status["status"] == STATUS_SUBMITTED
+            # Background submission may already have transitioned to running.
+            assert initial_status["status"] in (STATUS_SUBMITTED, STATUS_RUNNING)
 
             # Update to running
             with patch(
@@ -611,7 +647,7 @@ class TestJobManagerRetryAndLogs:
             original_job = job_manager.jobs[original_job_id]
             assert new_job["r1_path"] == original_job["r1_path"]
             assert new_job["r2_path"] == original_job["r2_path"]
-            assert new_job["status"] == STATUS_SUBMITTED
+            assert new_job["status"] in (STATUS_SUBMITTED, STATUS_RUNNING)
 
     def test_retry_non_failed_job_raises_error(
         self, job_manager, mock_env_vars, mock_script_path

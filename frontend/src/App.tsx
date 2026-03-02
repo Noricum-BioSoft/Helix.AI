@@ -18,6 +18,8 @@ import { getExampleWithSequences, sampleSequences } from './utils/sampleSequence
 import { theme } from './theme';
 import { JobsPanel } from './components/JobsPanel';
 import { ExamplesPanel } from './components/ExamplesPanel';
+import { DemoScenariosPanel } from './components/DemoScenariosPanel';
+import { getDemoScenarioById, getDemoScenarioByTool, DataPreviewTable } from './data/demoScenarios';
 import { ThinkingIndicator, ActivityIndicator } from './components/ThinkingIndicator';
 
 interface HistoryItem {
@@ -25,6 +27,8 @@ interface HistoryItem {
   output: any;
   type: string;
   timestamp: Date;
+  /** Set when the item was triggered by a demo scenario card — links back to followUpPrompt */
+  scenarioId?: string;
 }
 
 interface WorkflowContext {
@@ -57,9 +61,18 @@ function App() {
   const [uploadedFiles, setUploadedFiles] = useState<Array<{ name: string; content: string }>>([]);
   const [workflowContext, setWorkflowContext] = useState<WorkflowContext>({});
   const [isInitialized, setIsInitialized] = useState(false);
+  // Track which pipeline commands have already been submitted so the Execute button
+  // on the original plan card turns into "Submitted ✓" after the user clicks it.
+  const [executedPipelineCommands, setExecutedPipelineCommands] = useState<Set<string>>(new Set());
+  const historyTopRef = useRef<HTMLDivElement>(null);
   const [selectedDesign, setSelectedDesign] = useState<DesignOptionId>('integrated');
   const [examplesOpen, setExamplesOpen] = useState(false);
   const [jobsOpen, setJobsOpen] = useState(false);
+  const [demoOpen, setDemoOpen] = useState(false);
+  /** Holds the scenario id of the most-recently loaded demo prompt, cleared after one submission. */
+  const [pendingScenarioId, setPendingScenarioId] = useState<string | undefined>(undefined);
+  /** Data-preview modal state */
+  const [previewTables, setPreviewTables] = useState<DataPreviewTable[] | null>(null);
   const [sessionModalOpen, setSessionModalOpen] = useState(false);
   const [sessionInfo, setSessionInfo] = useState<any>(null);
   const [sessionInfoLoading, setSessionInfoLoading] = useState(false);
@@ -98,8 +111,9 @@ function App() {
     }, 3000);
   };
 
-  const handleExampleClick = (exampleCommand: string) => {
+  const handleExampleClick = (exampleCommand: string, scenarioId?: string) => {
     setCommand(exampleCommand);
+    setPendingScenarioId(scenarioId);
   };
 
   const handleToggleExamples = () => {
@@ -166,7 +180,11 @@ function App() {
   const checkServerHealth = async () => {
     try {
       const health = await mcpApi.healthCheck();
-      setServerStatus((health as any).status);
+      const status = (health as any)?.status;
+      if (typeof status !== 'string' || !status.trim()) {
+        throw new Error('Invalid health response');
+      }
+      setServerStatus(status);
     } catch (error) {
       setServerStatus('error');
       console.error('Server health check failed:', error);
@@ -223,8 +241,12 @@ function App() {
     return command;
   };
 
-  const handleSubmit = async () => {
-    if (!command.trim()) return;
+  const executeCommand = async (
+    commandText: string,
+    scenarioIdOverride?: string,
+    clearInputsAfter: boolean = true
+  ) => {
+    if (!commandText.trim()) return;
     
     setLoading(true);
     const activityId = addActivity('Processing your request...');
@@ -235,13 +257,13 @@ function App() {
       
       console.log('Command mode:', commandMode);
       console.log('Session ID:', sessionId);
-      console.log('Command:', command);
+      console.log('Command:', commandText);
       console.log('Workflow context:', workflowContext);
       
       // Enhance command with workflow context
-      let finalCommand = enhanceCommandWithContext(command);
+      let finalCommand = enhanceCommandWithContext(commandText);
       
-      console.log('Original command:', command);
+      console.log('Original command:', commandText);
       console.log('Enhanced command:', finalCommand);
       console.log('Workflow context before sending:', workflowContext);
       
@@ -347,10 +369,11 @@ function App() {
       // Add to history
       // Since /execute always routes through the agent, all responses are agent responses
       const historyItem: HistoryItem = {
-        input: command,
+        input: commandText,
         output: response,
         type: 'agent',
-        timestamp: new Date()
+        timestamp: new Date(),
+        scenarioId: scenarioIdOverride ?? pendingScenarioId,
       };
       
       console.log('🔍 Adding to history:', historyItem);
@@ -358,6 +381,7 @@ function App() {
       console.log('🔍 Response success:', (response as any).success);
       console.log('🔍 Response result keys:', (response as any).result ? Object.keys((response as any).result) : 'No result');
       
+      setPendingScenarioId(undefined);
       setHistory(prev => [historyItem, ...prev]);
       updateActivity(activityId, 'completed');
       
@@ -368,18 +392,26 @@ function App() {
       // Add error to history
       // Since /execute always routes through the agent, errors are agent errors
       const historyItem: HistoryItem = {
-        input: command,
+        input: commandText,
         output: { error: error instanceof Error ? error.message : 'Unknown error' },
         type: 'agent_error',
-        timestamp: new Date()
+        timestamp: new Date(),
+        scenarioId: scenarioIdOverride ?? pendingScenarioId,
       };
       
       setHistory(prev => [historyItem, ...prev]);
     } finally {
-      setCommand('');
-      setUploadedFiles([]); // Clear uploaded files after processing
+      if (clearInputsAfter) {
+        setCommand('');
+        setUploadedFiles([]); // Clear uploaded files after processing
+      }
       setLoading(false);
     }
+  };
+
+  const handleSubmit = async () => {
+    if (!command.trim()) return;
+    return executeCommand(command, pendingScenarioId, true);
   };
 
   const handleAgentSubmit = async () => {
@@ -435,6 +467,48 @@ function App() {
   };
 
 
+
+  // Execute a previously-planned pipeline when the user clicks "Execute Pipeline"
+  const handleExecutePipeline = async (originalCommand: string) => {
+    setLoading(true);
+    // Immediately mark the plan as submitted so its Execute button turns into "Submitted ✓"
+    setExecutedPipelineCommands(prev => new Set([...prev, originalCommand]));
+    const activityId = addActivity('Submitting pipeline jobs...');
+    try {
+      const response = await mcpApi.executePipelinePlan(originalCommand, sessionId || undefined);
+      if ((response as any).session_id && !sessionId) {
+        setSessionId((response as any).session_id);
+      }
+      const historyItem: HistoryItem = {
+        input: `▶ Execute Pipeline`,
+        output: response,
+        type: 'agent',
+        timestamp: new Date(),
+      };
+      setHistory(prev => [historyItem, ...prev]);
+      updateActivity(activityId, 'completed');
+      // Scroll to the top of the history so the user sees the new execution result
+      setTimeout(() => historyTopRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
+    } catch (error) {
+      console.error('Error executing pipeline:', error);
+      // Unmark the command so the user can retry
+      setExecutedPipelineCommands(prev => {
+        const next = new Set(prev);
+        next.delete(originalCommand);
+        return next;
+      });
+      updateActivity(activityId, 'error');
+      const historyItem: HistoryItem = {
+        input: `▶ Execute Pipeline`,
+        output: { error: error instanceof Error ? error.message : 'Failed to submit pipeline' },
+        type: 'agent_error',
+        timestamp: new Date(),
+      };
+      setHistory(prev => [historyItem, ...prev]);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // Drag-and-drop handlers
   const handleDragOver = (e: React.DragEvent) => {
@@ -1110,19 +1184,156 @@ function App() {
       );
     }
     
+    // Extract messages from multiple possible locations
     const messages: any[] = Array.isArray(agentResult?.messages)
       ? agentResult.messages
       : Array.isArray(agentResult?.output?.messages)
         ? agentResult.output.messages
-        : [];
+        : Array.isArray(agentOutput?.raw_result?.messages)
+          ? agentOutput.raw_result.messages
+          : Array.isArray(actualResult?.messages)
+            ? actualResult.messages
+            : Array.isArray(rawResult?.messages)
+              ? rawResult.messages
+              : [];
 
-    const assistantMessages = messages.filter((msg) =>
-      msg?.role === 'assistant' || msg?.type === 'ai'
-    );
+    // Debug logging for questions
+    if (agentOutput?.tool === 'agent' || agentOutput?.raw_result?.task_type === 'qa') {
+      console.log('🔍 [Question Detection] Detected question response');
+      console.log('🔍 [Question Detection] Messages count:', messages.length);
+      console.log('🔍 [Question Detection] Raw result keys:', agentOutput?.raw_result ? Object.keys(agentOutput.raw_result) : 'none');
+    }
+
+    // Filter for assistant messages only (skip system messages)
+    const assistantMessages = messages.filter((msg) => {
+      const role = msg?.role?.toLowerCase();
+      const type = msg?.type?.toLowerCase();
+      return (role === 'assistant' || type === 'ai') && role !== 'system' && type !== 'system';
+    });
+    
+    // Get the last assistant message (most recent answer)
     const finalAssistant = assistantMessages.length > 0 ? assistantMessages[assistantMessages.length - 1] : null;
     let finalText = finalAssistant
       ? extractAgentMessageText((finalAssistant as any).content ?? (finalAssistant as any).text ?? (finalAssistant as any).value)
       : '';
+    
+    // CRITICAL FIX: If the text is JSON wrapped in code blocks, parse it and extract the answer
+    // The agent returns JSON with details_markdown or user_friendly_summary containing the actual markdown answer
+    if (finalText && (finalText.includes('```json') || finalText.includes('```')) && (finalText.includes('user_friendly') || finalText.includes('details_markdown') || finalText.includes('task_type'))) {
+      try {
+        // Extract JSON from code block (handle both ```json and ```)
+        const jsonMatch = finalText.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+        if (jsonMatch && jsonMatch[1]) {
+          const jsonString = jsonMatch[1].trim();
+          console.log('🔍 [Question Detection] Extracted JSON string length:', jsonString.length);
+          console.log('🔍 [Question Detection] JSON string preview:', jsonString.substring(0, 200));
+          
+          const jsonContent = JSON.parse(jsonString);
+          console.log('🔍 [Question Detection] Parsed JSON keys:', Object.keys(jsonContent));
+          
+          // Extract the answer field - check for details_markdown first (full answer), then user_friendly_summary
+          // The backend returns details_markdown (full markdown answer) and user_friendly_summary (brief summary)
+          if (jsonContent.details_markdown && typeof jsonContent.details_markdown === 'string') {
+            finalText = jsonContent.details_markdown;
+            console.log('✅ [Question Detection] Extracted details_markdown from JSON, length:', finalText.length);
+          } else if (jsonContent.user_friendly_summary && typeof jsonContent.user_friendly_summary === 'string') {
+            finalText = jsonContent.user_friendly_summary;
+            console.log('✅ [Question Detection] Extracted user_friendly_summary from JSON, length:', finalText.length);
+          } else if (jsonContent.user_friendly && typeof jsonContent.user_friendly === 'string') {
+            finalText = jsonContent.user_friendly;
+            console.log('✅ [Question Detection] Extracted user_friendly from JSON, length:', finalText.length);
+          } else if (jsonContent.answer && typeof jsonContent.answer === 'string') {
+            finalText = jsonContent.answer;
+            console.log('✅ [Question Detection] Extracted answer from JSON, length:', finalText.length);
+          } else if (jsonContent.text && typeof jsonContent.text === 'string') {
+            finalText = jsonContent.text;
+            console.log('✅ [Question Detection] Extracted text from JSON, length:', finalText.length);
+          } else if (jsonContent.response && typeof jsonContent.response === 'string') {
+            finalText = jsonContent.response;
+            console.log('✅ [Question Detection] Extracted response from JSON, length:', finalText.length);
+          } else if (jsonContent.content && typeof jsonContent.content === 'string') {
+            finalText = jsonContent.content;
+            console.log('✅ [Question Detection] Extracted content from JSON, length:', finalText.length);
+          } else {
+            console.warn('🔍 [Question Detection] JSON found but no details_markdown/user_friendly_summary/user_friendly/answer/text/response/content field');
+            console.warn('🔍 [Question Detection] Available fields:', Object.keys(jsonContent));
+            console.warn('🔍 [Question Detection] Full JSON content:', JSON.stringify(jsonContent, null, 2).substring(0, 500));
+            // If JSON parsing worked but no text field found, try regex fallback on original text
+            // Try details_markdown first, then user_friendly_summary, then user_friendly
+            let regexMatch = null;
+            const detailsMarkdownRegex = /"details_markdown"\s*:\s*"((?:[^"\\]|\\.|\\n|\\r|\\t)*)"/;
+            regexMatch = finalText.match(detailsMarkdownRegex);
+            if (!regexMatch) {
+              const userFriendlySummaryRegex = /"user_friendly_summary"\s*:\s*"((?:[^"\\]|\\.|\\n|\\r|\\t)*)"/;
+              regexMatch = finalText.match(userFriendlySummaryRegex);
+            }
+            if (!regexMatch) {
+              const userFriendlyRegex = /"user_friendly"\s*:\s*"((?:[^"\\]|\\.|\\n|\\r|\\t)*)"/;
+              regexMatch = finalText.match(userFriendlyRegex);
+            }
+            if (regexMatch && regexMatch[1]) {
+              finalText = regexMatch[1]
+                .replace(/\\"/g, '"')
+                .replace(/\\n/g, '\n')
+                .replace(/\\t/g, '\t')
+                .replace(/\\r/g, '\r')
+                .replace(/\\\\/g, '\\');
+              console.log('✅ [Question Detection] Extracted text via regex fallback, length:', finalText.length);
+            } else {
+              console.warn('🔍 [Question Detection] Regex fallback also found no match');
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('🔍 [Question Detection] Failed to parse JSON from assistant message:', e);
+        // Try to extract the answer value directly from the string as fallback
+        try {
+          // Try details_markdown first, then user_friendly_summary, then user_friendly
+          let regexMatch = null;
+          const detailsMarkdownRegex = /"details_markdown"\s*:\s*"((?:[^"\\]|\\.|\\n|\\r|\\t)*)"/s;
+          regexMatch = finalText.match(detailsMarkdownRegex);
+          if (!regexMatch) {
+            const userFriendlySummaryRegex = /"user_friendly_summary"\s*:\s*"((?:[^"\\]|\\.|\\n|\\r|\\t)*)"/s;
+            regexMatch = finalText.match(userFriendlySummaryRegex);
+          }
+          if (!regexMatch) {
+            const userFriendlyRegex = /"user_friendly"\s*:\s*"((?:[^"\\]|\\.|\\n|\\r|\\t)*)"/s;
+            regexMatch = finalText.match(userFriendlyRegex);
+          }
+          if (regexMatch && regexMatch[1]) {
+            finalText = regexMatch[1]
+              .replace(/\\"/g, '"')
+              .replace(/\\n/g, '\n')
+              .replace(/\\t/g, '\t')
+              .replace(/\\r/g, '\r')
+              .replace(/\\\\/g, '\\');
+            console.log('✅ [Question Detection] Extracted text via regex fallback, length:', finalText.length);
+          } else {
+            console.warn('🔍 [Question Detection] Regex fallback found no match');
+          }
+        } catch (regexError) {
+          console.warn('🔍 [Question Detection] Regex fallback also failed:', regexError);
+        }
+      }
+    }
+    
+    // If we got text but it looks like a system prompt, try the previous assistant message
+    if (finalText && (finalText.includes('BioAgent') || finalText.includes('autonomous bioinformatics assistant') || finalText.length > 5000)) {
+      if (assistantMessages.length > 1) {
+        const prevAssistant = assistantMessages[assistantMessages.length - 2];
+        const prevText = extractAgentMessageText((prevAssistant as any).content ?? (prevAssistant as any).text ?? (prevAssistant as any).value);
+        if (prevText && !prevText.includes('BioAgent') && prevText.length < 5000) {
+          finalText = prevText;
+        }
+      }
+    }
+    
+    // Debug logging
+    if (agentOutput?.tool === 'agent' || agentOutput?.raw_result?.task_type === 'qa') {
+      console.log('🔍 [Question Detection] Assistant messages count:', assistantMessages.length);
+      console.log('🔍 [Question Detection] Final text length:', finalText?.length || 0);
+      console.log('🔍 [Question Detection] Final text preview:', finalText?.substring(0, 100) || 'empty');
+    }
 
     if (!finalText && typeof agentResult?.final_output === 'string') {
       finalText = agentResult.final_output;
@@ -1133,13 +1344,201 @@ function App() {
     if (!finalText && typeof agentResult?.text === 'string') {
       finalText = agentResult.text;
     }
+    // Also check top-level text from standard response
+    if (!finalText && typeof agentOutput?.text === 'string') {
+      finalText = agentOutput.text;
+    }
+    // Check raw_result for text fields
+    if (!finalText && typeof agentOutput?.raw_result?.text === 'string') {
+      finalText = agentOutput.raw_result.text;
+    }
+    if (!finalText && typeof actualResult?.text === 'string') {
+      finalText = actualResult.text;
+    }
+
+    // Results viewer (S3 / FastQC HTML)
+    const resultsLinks = agentOutput?.data?.links || actualResult?.links || rawResult?.links || [];
+    const resultsVisuals = agentOutput?.data?.visuals || actualResult?.visuals || rawResult?.visuals || [];
+    const mainResultsIframe = Array.isArray(resultsVisuals)
+      ? resultsVisuals.find((v: any) => v && v.type === 'iframe' && typeof v.url === 'string' && v.url.length > 0)
+      : null;
+
+    // Check if there are special visualizations (which would indicate it's not just a question)
+    // This needs to be defined before isQuestion check
+    const hasSpecialVisualizations = 
+      treeNewick || 
+      plasmidData || 
+      plasmidResults || 
+      qualityMetrics || 
+      qualityPlotData || 
+      alignedSequences || 
+      plotData || 
+      vendors ||
+      agentOutput?.visualization_type === 'results_viewer' ||
+      (Array.isArray(resultsVisuals) && resultsVisuals.length > 0);
+    
+    // Check if this is a question response (QA intent) - do this before checking finalText
+    // Questions should only show the markdown answer, not debug info or full JSON
+    const prompt = agentOutput?.prompt || '';
+    const promptLower = prompt.toLowerCase().trim();
+    const looksLikeQuestion = promptLower.endsWith('?') || 
+      /^(what|how|why|when|where|who|which|can|could|should|would|is|are|does|do|will|tell me|explain|describe|help me|i need help|i want to know)/.test(promptLower);
+    
+    // Check for task_type: "qa" in various locations (this is a key indicator from the backend)
+    let taskType = agentOutput?.raw_result?.task_type || 
+                   actualResult?.task_type || 
+                   agentResult?.task_type ||
+                   rawResult?.task_type ||
+                   rawResult?.result?.task_type;
+    
+    // If taskType is still undefined, try to extract it from the assistant message JSON
+    // This handles the case where the agent returns JSON in a code block
+    if (!taskType && finalText && (finalText.includes('```json') || finalText.includes('```')) && finalText.includes('task_type')) {
+      try {
+        const jsonMatch = finalText.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+        if (jsonMatch && jsonMatch[1]) {
+          const jsonContent = JSON.parse(jsonMatch[1]);
+          taskType = jsonContent.task_type;
+          console.log('✅ [Question Detection] Extracted task_type from JSON:', taskType);
+        }
+      } catch (e) {
+        // Try regex fallback
+        const taskTypeMatch = finalText.match(/"task_type"\s*:\s*"([^"]+)"/);
+        if (taskTypeMatch && taskTypeMatch[1]) {
+          taskType = taskTypeMatch[1];
+          console.log('✅ [Question Detection] Extracted task_type via regex:', taskType);
+        }
+      }
+    }
+    
+    // If taskType is still undefined, try to extract it from the assistant message JSON
+    // This handles the case where the agent returns JSON in a code block
+    if (!taskType && finalText && (finalText.includes('```json') || finalText.includes('```')) && finalText.includes('task_type')) {
+      try {
+        const jsonMatch = finalText.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+        if (jsonMatch && jsonMatch[1]) {
+          const jsonContent = JSON.parse(jsonMatch[1]);
+          taskType = jsonContent.task_type;
+          console.log('✅ [Question Detection] Extracted task_type from JSON:', taskType);
+        }
+      } catch (e) {
+        // Try regex fallback
+        const taskTypeMatch = finalText.match(/"task_type"\s*:\s*"([^"]+)"/);
+        if (taskTypeMatch && taskTypeMatch[1]) {
+          taskType = taskTypeMatch[1];
+          console.log('✅ [Question Detection] Extracted task_type via regex:', taskType);
+        }
+      }
+    }
+    
+    // Enhanced question detection with better logging
+    const isQuestion = 
+      taskType === 'qa' ||
+      agentOutput?.tool === 'agent' || 
+      agentOutput?.visualization_type === 'markdown' ||
+      (agentOutput?.raw_result?.intent === 'qa') ||
+      (agentOutput?.raw_result?.intent_reason && agentOutput.raw_result.intent_reason.includes('question')) ||
+      (actualResult?.intent === 'qa') ||
+      (actualResult?.intent_reason && actualResult.intent_reason.includes('question')) ||
+      (rawResult?.intent === 'qa') ||
+      (rawResult?.result?.intent === 'qa') ||
+      (looksLikeQuestion && agentOutput?.tool === 'agent' && !hasSpecialVisualizations);
+    
+    // Debug logging for question detection
+    if (agentOutput?.tool === 'agent' || looksLikeQuestion) {
+      console.log('🔍 [Question Detection] taskType:', taskType);
+      console.log('🔍 [Question Detection] isQuestion:', isQuestion);
+      console.log('🔍 [Question Detection] tool:', agentOutput?.tool);
+      console.log('🔍 [Question Detection] visualization_type:', agentOutput?.visualization_type);
+      console.log('🔍 [Question Detection] hasSpecialVisualizations:', hasSpecialVisualizations);
+    }
 
     if (finalText) {
+      // If it's a question and has no special visualizations, render only the markdown
+      if (isQuestion && !hasSpecialVisualizations) {
+        return (
+          <div>
+            <div className="agent-response-markdown">
+              <ReactMarkdown>{finalText}</ReactMarkdown>
+            </div>
+          </div>
+        );
+      }
+      
+      // Otherwise, render with debug info (for commands/actions)
       return (
         <div>
           <div className="agent-response-markdown">
             <ReactMarkdown>{finalText}</ReactMarkdown>
           </div>
+
+          {/* Results Viewer (embed main HTML report + links) */}
+          {agentOutput?.visualization_type === 'results_viewer' && (
+            <div className="p-3 border rounded mb-3" style={{ background: '#F8FAFC' }}>
+              {/* iFrame reports (e.g. FastQC HTML) */}
+              {mainResultsIframe?.url && (
+                <div style={{ width: '100%', marginBottom: '16px' }}>
+                  <iframe
+                    src={mainResultsIframe.url}
+                    title={mainResultsIframe.title || 'Results report'}
+                    style={{ width: '100%', height: '720px', border: 0, background: '#fff' }}
+                  />
+                </div>
+              )}
+
+              {/* Image visuals (e.g. volcano plots, PCA) */}
+              {Array.isArray(resultsVisuals) && resultsVisuals.some((v: any) => v?.type === 'image') && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', marginBottom: '16px' }}>
+                  {resultsVisuals
+                    .filter((v: any) => v?.type === 'image' && v?.url)
+                    .map((v: any, idx: number) => (
+                      <div key={idx} style={{ flex: '1 1 420px', minWidth: '280px', maxWidth: '600px' }}>
+                        <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#475569', marginBottom: '4px' }}>
+                          {v.title || `Plot ${idx + 1}`}
+                        </div>
+                        <a href={v.url} target="_blank" rel="noreferrer" title="Open full-size">
+                          <img
+                            src={v.url}
+                            alt={v.title || `Plot ${idx + 1}`}
+                            style={{ width: '100%', borderRadius: '6px', border: '1px solid #E2E8F0', background: '#fff', cursor: 'pointer' }}
+                          />
+                        </a>
+                      </div>
+                    ))}
+                </div>
+              )}
+
+              {/* No visuals fallback */}
+              {!mainResultsIframe && !(Array.isArray(resultsVisuals) && resultsVisuals.some((v: any) => v?.url)) && (
+                <div className="alert alert-info mb-2">
+                  No plots available yet. Use the links below to download results.
+                </div>
+              )}
+
+              {/* Downloadable artifacts */}
+              {Array.isArray(resultsLinks) && resultsLinks.length > 0 && (
+                <div className="mt-2">
+                  <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#475569', marginBottom: '6px' }}>
+                    Download results
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                    {resultsLinks.map((l: any, idx: number) => (
+                      <a
+                        key={`${l?.label || 'artifact'}-${idx}`}
+                        href={l.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="btn btn-outline-primary btn-sm"
+                        style={{ fontSize: '0.78rem' }}
+                      >
+                        ⬇ {l.label || l.s3_uri || 'artifact'}
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           
           {/* Debug Section - Consistent across all commands */}
           {renderDebugInfo(agentOutput, actualResult)}
@@ -1147,7 +1546,125 @@ function App() {
       );
     }
 
-    if (renderStructuredData(agentResult)) {
+    // If no finalText but it's a question, try to extract from messages more aggressively
+    if (isQuestion && !hasSpecialVisualizations && assistantMessages.length > 0) {
+      // Try to find any assistant message with content (skip system prompts)
+      for (let i = assistantMessages.length - 1; i >= 0; i--) {
+        const msg = assistantMessages[i];
+        const extracted = extractAgentMessageText(msg.content ?? msg.text ?? msg.value);
+        if (extracted && extracted.trim().length > 0) {
+          // Skip system prompts - they're usually very long and contain specific keywords
+          const isSystemPrompt = extracted.includes('BioAgent') || 
+                                 extracted.includes('autonomous bioinformatics assistant') ||
+                                 extracted.includes('Core Capabilities:') ||
+                                 extracted.includes('Non-Negotiable Principles') ||
+                                 extracted.length > 5000;
+          
+          if (!isSystemPrompt) {
+            return (
+              <div>
+                <div className="agent-response-markdown">
+                  <ReactMarkdown>{extracted}</ReactMarkdown>
+                </div>
+              </div>
+            );
+          }
+        }
+      }
+    }
+
+    // CRITICAL: Don't render structured data for questions - this is what's causing the JSON to show
+    // If it's a question, we must return early and never call renderStructuredData
+    if (isQuestion && !hasSpecialVisualizations) {
+      // First, try one more time to extract from all messages
+      if (messages.length > 0) {
+        // Look through all messages (not just assistant) to find the answer
+        for (let i = messages.length - 1; i >= 0; i--) {
+          const msg = messages[i];
+          // Skip system messages
+          if (msg?.role === 'system' || msg?.type === 'system') continue;
+          
+          const extracted = extractAgentMessageText(msg.content ?? msg.text ?? msg.value);
+          if (extracted && extracted.trim().length > 0) {
+            const isSystemPrompt = extracted.includes('BioAgent') || 
+                                   extracted.includes('autonomous bioinformatics assistant') ||
+                                   extracted.includes('Core Capabilities:') ||
+                                   extracted.includes('Non-Negotiable Principles') ||
+                                   extracted.length > 5000;
+            
+            if (!isSystemPrompt) {
+              return (
+                <div>
+                  <div className="agent-response-markdown">
+                    <ReactMarkdown>{extracted}</ReactMarkdown>
+                  </div>
+                </div>
+              );
+            }
+          }
+        }
+      }
+      // Last resort: try to find any text content in the response
+      const allTextFields = [
+        agentOutput?.text,
+        agentOutput?.raw_result?.text,
+        actualResult?.text,
+        agentResult?.text,
+        agentResult?.response,
+        agentResult?.final_output,
+      ].filter(Boolean);
+      
+      if (allTextFields.length > 0) {
+        const foundText = allTextFields[0];
+        if (typeof foundText === 'string' && foundText.trim().length > 0) {
+          return (
+            <div>
+              <div className="agent-response-markdown">
+                <ReactMarkdown>{foundText}</ReactMarkdown>
+              </div>
+            </div>
+          );
+        }
+      }
+      
+      // If we still can't find text, show a message instead of structured data
+      // This prevents renderStructuredData from being called
+      return (
+        <div>
+          <div className="alert alert-info">
+            <p>Question detected but answer could not be extracted from the response structure.</p>
+          </div>
+        </div>
+      );
+    }
+
+    // CRITICAL: Never render structured data for questions - this is the root cause
+    // Even if isQuestion check somehow fails, we should check again here
+    const finalIsQuestion = isQuestion || 
+                            taskType === 'qa' || 
+                            (agentOutput?.tool === 'agent' && !hasSpecialVisualizations && looksLikeQuestion);
+    
+    if (finalIsQuestion && !hasSpecialVisualizations) {
+      console.log('🔍 [Question Detection] Final check: This is a question, preventing structured data render');
+      // Return a simple message instead of structured data
+      return (
+        <div>
+          <div className="alert alert-warning">
+            <p>Question detected but answer text could not be extracted. Check console for response structure.</p>
+            <details className="mt-2">
+              <summary className="text-muted small" style={{ cursor: 'pointer' }}>Debug: Response Structure</summary>
+              <pre className="small mt-2 bg-white p-2 border rounded" style={{maxHeight: '200px', overflow: 'auto'}}>
+                {JSON.stringify({taskType, isQuestion, finalIsQuestion, messagesCount: messages.length, assistantMessagesCount: assistantMessages.length}, null, 2)}
+              </pre>
+            </details>
+          </div>
+        </div>
+      );
+    }
+    
+    // Only render structured data if it's NOT a question
+    // This check prevents questions from showing JSON structure
+    if (!finalIsQuestion && renderStructuredData(agentResult)) {
       return (
         <div>
           <div className="bg-light p-3 border rounded">
@@ -1159,6 +1676,30 @@ function App() {
         </div>
       );
     }
+    
+    // Final fallback - but only if NOT a question
+    if (!finalIsQuestion) {
+      return (
+        <div>
+          <details className="bg-light p-2 border rounded">
+            <summary className="text-muted" style={{ cursor: 'pointer' }}>View Raw Agent Output</summary>
+            <pre className="bg-white border rounded p-2 mt-2">{JSON.stringify(agentResult, null, 2)}</pre>
+          </details>
+          
+          {/* Debug Section - Consistent across all commands */}
+          {renderDebugInfo(agentOutput, actualResult)}
+        </div>
+      );
+    }
+    
+    // If we get here and it's a question, something went wrong
+    return (
+      <div>
+        <div className="alert alert-warning">
+          <p>Unable to render question response. Please check the browser console for details.</p>
+        </div>
+      </div>
+    );
 
     return (
       <div>
@@ -1218,16 +1759,135 @@ function App() {
       return <div className="alert alert-danger mb-0">{message}</div>;
     }
 
-    // Since /execute always routes through the agent, all responses (including legacy types)
-    // should be handled by renderAgentResponse for consistency
-    // This provides backward compatibility with old history items while using the unified rendering
-    if (type === 'agent' || type === 'natural_command' || type === 'structured_command' || type === 'error') {
-      return renderAgentResponse(output);
+    // Detect a workflow plan response so we can append the "Execute Pipeline" button
+    const isWorkflowPlan =
+      output?.execute_ready === true ||
+      output?.result?.execute_ready === true ||
+      output?.status === 'workflow_planned' ||
+      output?.result?.status === 'workflow_planned';
+
+    // Detect a needs_inputs response so we can show the "Use example data" button.
+    // Some demos come back as plain agent markdown (status=success) but still clearly ask
+    // for count matrix / sample metadata. Handle that case too.
+    const explicitNeedsInputs =
+      output?.status === 'needs_inputs' ||
+      output?.result?.status === 'needs_inputs';
+
+    const getAssistantTextForDetection = (o: any): string => {
+      const msgs =
+        o?.raw_result?.messages ||
+        o?.result?.raw_result?.messages ||
+        o?.data?.results?.messages ||
+        o?.data?.results?.result?.messages ||
+        [];
+      if (!Array.isArray(msgs) || msgs.length === 0) return '';
+      const lastAssistant = [...msgs].reverse().find((m: any) => {
+        const t = (m?.type || '').toString().toLowerCase();
+        const r = (m?.role || '').toString().toLowerCase();
+        return t === 'ai' || t === 'assistant' || r === 'assistant';
+      });
+      return extractAgentMessageText(
+        (lastAssistant as any)?.content ?? (lastAssistant as any)?.text ?? (lastAssistant as any)?.value
+      );
+    };
+
+    const agentText = getAssistantTextForDetection(output);
+    const looksLikeNeedsInputsFromAgent =
+      (output?.tool === 'agent' || output?.result?.tool === 'agent' || output?.visualization_type === 'markdown') &&
+      /please provide|required information|required inputs|before .* can .* proceed/i.test(agentText) &&
+      /count matrix|sample metadata|design formula/i.test(agentText);
+
+    const isNeedsInputs = explicitNeedsInputs || looksLikeNeedsInputsFromAgent;
+
+    const renderedResponse = renderAgentResponse(output);
+
+    if (isWorkflowPlan) {
+      const alreadyExecuted = executedPipelineCommands.has(item.input);
+      return (
+        <div>
+          {renderedResponse}
+          <div className="mt-3 d-flex align-items-center gap-3">
+            {alreadyExecuted ? (
+              <Button variant="outline-success" disabled className="px-4">
+                ✓ Submitted
+              </Button>
+            ) : (
+              <Button
+                variant="success"
+                onClick={() => handleExecutePipeline(item.input)}
+                disabled={loading}
+                className="px-4"
+              >
+                {loading ? 'Submitting…' : '▶ Execute Pipeline'}
+              </Button>
+            )}
+            <span className="text-muted small">
+              {alreadyExecuted
+                ? 'Pipeline submitted — see results above.'
+                : 'Confirms the plan above and queues all steps for execution.'}
+            </span>
+          </div>
+        </div>
+      );
     }
-    
-    // Fallback for any other legacy types - also route through agent response handler
-    // since the response structure from /execute is standardized
-    return renderAgentResponse(output);
+
+    if (isNeedsInputs) {
+      // Resolve scenario by explicit scenarioId first, then fall back to matching the
+      // backend's reported tool name so the button appears even when the prompt was
+      // typed directly (not loaded via the demo modal).
+      const needsInputsTool =
+        output?.tool || output?.tool_name || output?.result?.tool;
+      const scenario =
+        (item.scenarioId ? getDemoScenarioById(item.scenarioId) : undefined) ??
+        (needsInputsTool ? getDemoScenarioByTool(needsInputsTool) : undefined);
+      if (scenario?.followUpPrompt) {
+        return (
+          <div>
+            {renderedResponse}
+            <div
+              className="mt-3 p-3 rounded-3 d-flex align-items-start gap-3"
+              style={{
+                background: 'linear-gradient(135deg, #EFF6FF, #F0FDF4)',
+                border: '1px solid #BFDBFE',
+              }}
+            >
+              <span style={{ fontSize: '1.4rem', lineHeight: 1, flexShrink: 0 }}>📋</span>
+              <div className="flex-grow-1">
+                <div style={{ fontWeight: 600, fontSize: '0.88rem', color: '#1E40AF', marginBottom: '4px' }}>
+                  Example data available for this demo
+                </div>
+                <div style={{ fontSize: '0.8rem', color: '#475569', marginBottom: '10px' }}>
+                  Helix provides a synthetic {scenario.domain} dataset on S3 that matches this study design.
+                </div>
+                <div className="d-flex align-items-center gap-2 flex-wrap">
+                  {scenario.dataPreview && (
+                    <Button
+                      size="sm"
+                      variant="outline-secondary"
+                      onClick={() => setPreviewTables(scenario.dataPreview!)}
+                      style={{ fontSize: '0.8rem', fontWeight: 600 }}
+                    >
+                      🔍 Preview data
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="success"
+                    disabled={loading}
+                    onClick={() => executeCommand(scenario.followUpPrompt!, item.scenarioId ?? scenario.id, true)}
+                    style={{ fontSize: '0.8rem', fontWeight: 600 }}
+                  >
+                    {loading ? 'Running…' : '▶ Load & run'}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      }
+    }
+
+    return renderedResponse;
   };
 
 
@@ -1306,14 +1966,14 @@ function App() {
     return (
       <section className="mt-4">
         <h2 className="h5 mb-3">Conversation</h2>
-        <div className="d-flex flex-column gap-4">
+        <div ref={historyTopRef} className="d-flex flex-column gap-4">
           {history.map((item, index) => {
             const timestamp = item.timestamp instanceof Date ? item.timestamp : new Date(item.timestamp);
             return (
               <div key={index} className="d-flex flex-column gap-3">
                 <div
-                  className="align-self-start bg-blue-subtle border border-brand-blue rounded-4 shadow-sm px-3 py-2"
-                  style={{ maxWidth: '100%', wordBreak: 'break-word', overflowWrap: 'anywhere' }}
+                  className="align-self-end bg-blue-subtle border border-brand-blue rounded-4 shadow-sm px-3 py-2"
+                  style={{ maxWidth: '50%', wordBreak: 'break-word', overflowWrap: 'anywhere' }}
                 >
                   <div className="text-muted small text-uppercase fw-semibold mb-1">Prompt</div>
                   <div style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{item.input}</div>
@@ -1417,8 +2077,30 @@ function App() {
             <Button
               variant="outline-secondary"
               className="prompt-toolbar-button"
+              onClick={() => setDemoOpen(true)}
+              aria-label="Open demo scenarios"
+              style={{
+                background: 'linear-gradient(135deg, #3A60A8, #7B3FA8)',
+                color: '#FFFFFF',
+                border: 'none',
+                fontWeight: 700,
+                letterSpacing: '0.02em',
+              }}
+            >
+              🧬 Demo
+            </Button>
+            <Button
+              variant="outline-secondary"
+              className="prompt-toolbar-button"
               onClick={handleToggleExamples}
               aria-label="Toggle examples"
+              style={{
+                background: 'linear-gradient(135deg, #3A60A8, #7B3FA8)',
+                color: '#FFFFFF',
+                border: 'none',
+                fontWeight: 700,
+                letterSpacing: '0.02em',
+              }}
             >
               📚 Examples
             </Button>
@@ -1427,6 +2109,13 @@ function App() {
               className="prompt-toolbar-button"
               onClick={handleToggleJobs}
               aria-label="Toggle jobs"
+              style={{
+                background: 'linear-gradient(135deg, #3A60A8, #7B3FA8)',
+                color: '#FFFFFF',
+                border: 'none',
+                fontWeight: 700,
+                letterSpacing: '0.02em',
+              }}
             >
               🧾 Jobs{jobIds.length > 0 ? ` (${jobIds.length})` : ''}
             </Button>
@@ -1436,7 +2125,56 @@ function App() {
         <SelectedDesignComponent {...designProps} />
         <JobsPanel show={jobsOpen} onHide={() => setJobsOpen(false)} jobIds={jobIds} />
         <ExamplesPanel show={examplesOpen} onHide={() => setExamplesOpen(false)} onSelect={handleExampleClick} />
-        
+        <DemoScenariosPanel show={demoOpen} onHide={() => setDemoOpen(false)} onSelect={handleExampleClick} />
+
+        {/* Data Preview Modal */}
+        <Modal show={!!previewTables} onHide={() => setPreviewTables(null)} size="xl" centered>
+          <Modal.Header closeButton style={{ background: '#F8FAFC', borderBottom: '1px solid #E2E8F0' }}>
+            <Modal.Title style={{ fontSize: '1rem', fontWeight: 700, color: '#1E293B' }}>
+              🔍 Example Data Preview
+            </Modal.Title>
+          </Modal.Header>
+          <Modal.Body style={{ background: '#F8FAFC', maxHeight: '70vh', overflowY: 'auto' }}>
+            {(previewTables ?? []).map((table, ti) => (
+              <div key={ti} className={ti > 0 ? 'mt-4' : ''}>
+                <div style={{ fontWeight: 600, fontSize: '0.9rem', color: '#1E293B', marginBottom: '6px' }}>
+                  {table.title}
+                </div>
+                <div style={{ overflowX: 'auto' }}>
+                  <table className="table table-sm table-bordered mb-1" style={{ fontSize: '0.8rem', background: '#fff' }}>
+                    <thead style={{ background: '#EFF6FF' }}>
+                      <tr>
+                        {table.headers.map((h, hi) => (
+                          <th key={hi} style={{ whiteSpace: 'nowrap', color: '#1E40AF', fontWeight: 600 }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {table.rows.map((row, ri) => (
+                        <tr key={ri}>
+                          {row.map((cell, ci) => (
+                            <td key={ci} style={{ whiteSpace: 'nowrap', fontFamily: 'monospace', color: ci === 0 ? '#7C3AED' : '#334155' }}>
+                              {cell}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {table.note && (
+                  <div style={{ fontSize: '0.75rem', color: '#64748B', marginTop: '4px' }}>{table.note}</div>
+                )}
+              </div>
+            ))}
+          </Modal.Body>
+          <Modal.Footer style={{ background: '#F8FAFC', borderTop: '1px solid #E2E8F0' }}>
+            <Button variant="outline-secondary" size="sm" onClick={() => setPreviewTables(null)}>
+              Close
+            </Button>
+          </Modal.Footer>
+        </Modal>
+
         {/* Session Info Modal */}
         <Modal show={sessionModalOpen} onHide={() => setSessionModalOpen(false)} size="lg">
           <Modal.Header closeButton>

@@ -22,3 +22,6 @@ aws s3api get-bucket-policy \
     --output text | jq '.'
 
 
+
+
+

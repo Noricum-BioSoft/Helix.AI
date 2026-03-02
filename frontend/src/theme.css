@@ -276,6 +276,17 @@ a:hover {
   font-size: 1.05rem;
   font-weight: 600;
   padding: 0 1rem;
+  /* Override Bootstrap's outline-secondary blue text so the gradient Demo button
+     always shows white text regardless of hover state */
+  color: #FFFFFF !important;
+  border-color: transparent !important;
+}
+
+.prompt-toolbar-button:hover,
+.prompt-toolbar-button:focus,
+.prompt-toolbar-button:active {
+  color: #FFFFFF !important;
+  border-color: transparent !important;
 }
 
 .helix-header-actions {

@@ -145,11 +145,44 @@ def _dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
     if tool_name == "read_merging":
         import read_merging
 
-        return read_merging.run_read_merging_raw(
-            forward_reads=arguments.get("forward_reads", ""),
-            reverse_reads=arguments.get("reverse_reads", ""),
-            min_overlap=int(arguments.get("min_overlap", 12)),
-        )
+        forward_reads = arguments.get("forward_reads", "")
+        reverse_reads = arguments.get("reverse_reads", "")
+        output_path = arguments.get("output")
+        min_overlap = int(arguments.get("min_overlap", 12))
+        
+        # If we have an output S3 path and input paths are S3 URIs, use merge_reads_from_s3()
+        # This handles S3 files directly using boto3 (which should now be available)
+        if output_path and _looks_like_s3_uri(output_path):
+            if _looks_like_s3_uri(forward_reads) and _looks_like_s3_uri(reverse_reads):
+                return read_merging.merge_reads_from_s3(
+                    r1_path=forward_reads,
+                    r2_path=reverse_reads,
+                    output_path=output_path,
+                    min_overlap=min_overlap,
+                )
+        
+        # Otherwise, if arguments are file paths (from _materialize_s3_inputs), read them
+        # run_read_merging_raw expects FASTQ content strings, not file paths
+        forward_path = Path(forward_reads)
+        reverse_path = Path(reverse_reads)
+        
+        if forward_path.exists() and reverse_path.exists():
+            # For smaller files: Read file contents and pass as strings
+            # Note: This loads entire files into memory, not suitable for very large files
+            forward_content = forward_path.read_text()
+            reverse_content = reverse_path.read_text()
+            return read_merging.run_read_merging_raw(
+                forward_reads=forward_content,
+                reverse_reads=reverse_content,
+                min_overlap=min_overlap,
+            )
+        else:
+            # Already FASTQ content strings, pass directly
+            return read_merging.run_read_merging_raw(
+                forward_reads=forward_reads,
+                reverse_reads=reverse_reads,
+                min_overlap=min_overlap,
+            )
 
     if tool_name == "quality_assessment":
         import quality_assessment
@@ -231,84 +264,126 @@ def main() -> int:
             self.stream.flush()
             self.file.flush()
 
+    # Save original stdout/stderr
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+    
     with log_path.open("a") as lf:
         sys.stdout = Tee(sys.stdout, lf)  # type: ignore[assignment]
         sys.stderr = Tee(sys.stderr, lf)  # type: ignore[assignment]
 
-        print("==========================================")
-        print("Helix.AI Universal EMR Runner")
-        print("==========================================")
-        print(f"job_id: {job_id}")
-        print(f"started_at: {_now_iso()}")
-        print(f"workdir: {workdir}")
-        print(f"output_s3: {args.output_s3}")
-
-        status = "success"
-        error: Optional[str] = None
-        tool_output: Any = None
-        payload: Dict[str, Any] = {}
-
         try:
-            payload = _load_payload(args, workdir)
+            print("==========================================")
+            print("Helix.AI Universal EMR Runner")
+            print("==========================================")
+            print(f"job_id: {job_id}")
+            print(f"started_at: {_now_iso()}")
+            print(f"workdir: {workdir}")
+            print(f"output_s3: {args.output_s3}")
 
-            tool_name = payload.get("tool_name") or payload.get("tool") or ""
-            tool_args = payload.get("arguments") or payload.get("args") or {}
-            tools_bundle_s3 = payload.get("tools_bundle_s3")
-            python_code = payload.get("python_code")
-            python_code_s3 = payload.get("python_code_s3")
-            plan = payload.get("plan")
+            status = "success"
+            error: Optional[str] = None
+            tool_output: Any = None
+            payload: Dict[str, Any] = {}
 
-            # Ensure tools bundle if provided
-            _ensure_tools_bundle(tools_bundle_s3, workdir)
+            try:
+                payload = _load_payload(args, workdir)
 
-            # Download S3 inputs and rewrite args (best-effort)
-            if isinstance(tool_args, dict):
-                tool_args = _materialize_s3_inputs(tool_args, workdir)
+                tool_name = payload.get("tool_name") or payload.get("tool") or ""
+                tool_args = payload.get("arguments") or payload.get("args") or {}
+                tools_bundle_s3 = payload.get("tools_bundle_s3")
+                python_code = payload.get("python_code")
+                python_code_s3 = payload.get("python_code_s3")
+                plan = payload.get("plan")
 
-            if python_code_s3 and isinstance(python_code_s3, str):
-                code_path = workdir / "python_code.py"
-                _download_s3_to_file(python_code_s3, code_path)
-                python_code = code_path.read_text()
+                # Ensure tools bundle if provided
+                _ensure_tools_bundle(tools_bundle_s3, workdir)
 
-            if plan and isinstance(plan, dict):
-                tool_output = _execute_plan(plan, workdir)
-            elif python_code and isinstance(python_code, str):
-                tool_output = _execute_python_code(python_code, workdir)
+                # For read_merging with output S3 path, we want to use merge_reads_from_s3()
+                # which handles S3 paths directly, so we skip materialization
+                # For other tools, download S3 inputs and rewrite args (best-effort)
+                should_materialize = True
+                if isinstance(tool_args, dict) and tool_name == "read_merging":
+                    # For read_merging, only materialize if we don't have an output S3 path
+                    # (merge_reads_from_s3 will handle S3 paths directly)
+                    output_path = tool_args.get("output")
+                    if output_path and _looks_like_s3_uri(output_path):
+                        should_materialize = False
+                
+                if isinstance(tool_args, dict) and should_materialize:
+                    tool_args = _materialize_s3_inputs(tool_args, workdir)
+
+                if python_code_s3 and isinstance(python_code_s3, str):
+                    code_path = workdir / "python_code.py"
+                    _download_s3_to_file(python_code_s3, code_path)
+                    python_code = code_path.read_text()
+
+                if plan and isinstance(plan, dict):
+                    tool_output = _execute_plan(plan, workdir)
+                elif python_code and isinstance(python_code, str):
+                    tool_output = _execute_python_code(python_code, workdir)
+                else:
+                    if not tool_name:
+                        raise ValueError("payload missing tool_name (or plan/python_code/python_code_s3)")
+                    tool_output = _dispatch_tool(tool_name, tool_args if isinstance(tool_args, dict) else {})
+
+            except Exception as e:
+                status = "error"
+                error = str(e)
+                tool_output = {"status": "error", "error": error}
+
+            finished = time.time()
+            results = {
+                "job_id": job_id,
+                "status": status,
+                "error": error,
+                "started_at": started,
+                "finished_at": finished,
+                "duration_s": round(finished - started, 3),
+                "payload": payload,
+                "result": tool_output,
+            }
+
+            results_path = workdir / "results.json"
+            results_path.write_text(json.dumps(results, indent=2, default=str))
+
+            # Upload results + logs
+            output_prefix = args.output_s3 if args.output_s3.endswith("/") else args.output_s3 + "/"
+            upload_success = True
+            try:
+                _upload_file_to_s3(results_path, f"{output_prefix}results.json")
+                print(f"✅ Uploaded results.json to {output_prefix}results.json")
+            except Exception as e:
+                print(f"WARNING: failed to upload results.json to S3: {e}")
+                upload_success = False
+            
+            try:
+                _upload_file_to_s3(log_path, f"{output_prefix}runner.log")
+                print(f"✅ Uploaded runner.log to {output_prefix}runner.log")
+            except Exception as e:
+                print(f"WARNING: failed to upload runner.log to S3: {e}")
+                # Don't fail the job if log upload fails
+            
+            # Determine exit code
+            # If job succeeded, return 0 even if upload failed (results.json is more important)
+            # If job failed, return 2
+            if status == "success":
+                exit_code = 0
+                print(f"✅ Job completed successfully, exiting with code {exit_code}")
             else:
-                if not tool_name:
-                    raise ValueError("payload missing tool_name (or plan/python_code/python_code_s3)")
-                tool_output = _dispatch_tool(tool_name, tool_args if isinstance(tool_args, dict) else {})
-
-        except Exception as e:
-            status = "error"
-            error = str(e)
-            tool_output = {"status": "error", "error": error}
-
-        finished = time.time()
-        results = {
-            "job_id": job_id,
-            "status": status,
-            "error": error,
-            "started_at": started,
-            "finished_at": finished,
-            "duration_s": round(finished - started, 3),
-            "payload": payload,
-            "result": tool_output,
-        }
-
-        results_path = workdir / "results.json"
-        results_path.write_text(json.dumps(results, indent=2, default=str))
-
-        # Upload results + logs
-        output_prefix = args.output_s3 if args.output_s3.endswith("/") else args.output_s3 + "/"
-        try:
-            _upload_file_to_s3(results_path, f"{output_prefix}results.json")
-            _upload_file_to_s3(log_path, f"{output_prefix}runner.log")
-        except Exception as e:
-            print(f"WARNING: failed to upload outputs to S3: {e}")
-            # still exit non-zero if job failed
-
-        return 0 if status == "success" else 2
+                exit_code = 2
+                print(f"❌ Job failed, exiting with code {exit_code}")
+            
+            # Store exit code before restoring stdout/stderr
+            final_exit_code = exit_code
+            
+        finally:
+            # Always restore stdout/stderr before exiting
+            sys.stdout = original_stdout  # type: ignore[assignment]
+            sys.stderr = original_stderr  # type: ignore[assignment]
+    
+    # Return exit code after restoring stdout/stderr
+    return final_exit_code
 
 
 def _resolve_refs(obj: Any, ctx: Dict[str, Any]) -> Any:

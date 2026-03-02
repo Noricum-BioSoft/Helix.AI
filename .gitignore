@@ -129,6 +129,9 @@ celerybeat.pid
 
 # Environments
 .env
+.env.*
+.env*
+!.env.example
 .venv
 env/
 venv/
@@ -391,6 +394,14 @@ build/
 dist/
 *.egg-info/
 
+# CDK build output
+cdk.out/
+infrastructure/cdk.out/
+frontend/dist/
+
+# Archive directory (contains large obsolete files, logs, and temp data)
+archive/
+
 # Environment files
 .env
 .env.local
@@ -408,62 +419,29 @@ yarn.lock
 pnpm-lock.yaml
 
 # =============================================================================
-# Bioinformatics specific
+# Bioinformatics specific (ignore *data*, not filetypes globally)
 # =============================================================================
 
-# Sequence files (large data files)
-*.fasta
-*.fa
-*.fas
-*.fna
-*.faa
-*.aln
-*.phy
-*.nex
-*.gb
-*.gbk
-*.embl
-*.dat
+# Common data / result folders
+data/
+datasets/
+dataset/
+inputs/
+input/
+outputs/
+output/
+results/
+result/
 
-# Alignment files
-*.aln
-*.clustal
-*.msf
-*.pir
+# Common generated artifact folders
+workflow_results/
+logs/
 
-# BLAST files
-*.blast
-*.blastp
-*.blastn
-*.blastx
-*.tblastn
-*.tblastx
-
-# Phylogenetic files
-*.tree
-*.dnd
-*.nwk
-*.phylip
-
-# Large data files
-*.csv
-*.tsv
-*.txt
-!requirements.txt
-!package.json
-!package-lock.json
-!README.md
-!LICENSE
-
-# Image files (generated plots)
-*.png
-*.jpg
-*.jpeg
-*.gif
-*.svg
-*.pdf
-!logo.png
-!favicon.ico
+# Large bioinformatics file formats (only ignore under data-like dirs)
+data/**/*.{fasta,fa,fas,fna,faa,aln,phy,nex,gb,gbk,embl,dat,clustal,msf,pir,tree,dnd,nwk,phylip,blast,blastp,blastn,blastx,tblastn,tblastx,csv,tsv,txt,png,jpg,jpeg,gif,svg,pdf}
+datasets/**/*.{fasta,fa,fas,fna,faa,aln,phy,nex,gb,gbk,embl,dat,clustal,msf,pir,tree,dnd,nwk,phylip,blast,blastp,blastn,blastx,tblastn,tblastx,csv,tsv,txt,png,jpg,jpeg,gif,svg,pdf}
+workflow_results/**/*
+logs/**/*
 
 # -----------------------------------------------------------------------------
 # Legacy/obsolete docs (kept out of repository)
@@ -478,10 +456,37 @@ docs/COMPLETE_WORKFLOW_EXAMPLE.md
 docs/API_DOCUMENTATION.md
 
 # -----------------------------------------------------------------------------
-# Restrict docs tracked in repo
-# Keep only top-level README.md and TRL_ASSESSMENT.md; ignore others
+# CDK context (machine-local)
 # -----------------------------------------------------------------------------
-docs/**
-/*.md
-!/README.md
-!/TRL_ASSESSMENT.md
+cdk.context.json
+
+# -----------------------------------------------------------------------------
+# Local/generated report docs (keep repo crisp)
+# -----------------------------------------------------------------------------
+# These are frequently generated during debugging/refactors and shouldn't be
+# committed as part of the release source.
+docs/AGENT_MD_*.md
+docs/*TRACE*.json
+docs/*TRACE*.md
+docs/*PROOF*.md
+docs/*SUMMARY*.md
+docs/*COMPLETE*.md
+docs/**/[A-Z0-9_]*.md
+docs/**/[A-Z0-9_]*.json
+
+tests/*PROOF*.md
+tests/*SUMMARY*.md
+tests/*TEST_RESULTS*.md
+tests/**/[A-Z0-9_]*.md
+tests/demo_scenarios/*.md
+tests/workflows/*.md
+
+# Local scratch scripts
+test_complete_workflow.py
+
+# Large/auto-generated documentation assets (local)
+docs/tds-screenshots/
+docs/tds-screenshots-cloudfront/
+docs/architecture/*.png
+docs/architecture/*.svg
+docs/architecture/*.mmd

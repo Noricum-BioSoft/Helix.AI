@@ -154,9 +154,6 @@ class CommandRouter:
                                re.search(r'[/\\][^/\\]*test[^/\\]*[/\\]', command_lower))
         
         vendor_keywords = ['order', 'vendor', 'synthesis', 'assay', 'function', 'binding']
-        # Only include "test" if it's not in a file path
-        if not is_test_in_path:
-            vendor_keywords.append('test')
         
         if any(phrase in command_lower for phrase in vendor_keywords):
             print(f"🔧 Command router: Matched 'vendor' -> dna_vendor_research")

@@ -255,12 +255,21 @@ class ExecutionBroker:
             status = output.get("status", "success") or "success"
             text = output.get("text") or output.get("message") or ""
 
+        # Promote display-critical fields to the broker envelope so that
+        # build_standard_response can find them without drilling into `result`.
+        promoted: Dict[str, Any] = {}
+        if isinstance(output, dict):
+            for _k in ("links", "visuals", "visualization_type"):
+                if output.get(_k):
+                    promoted[_k] = output[_k]
+
         return {
             "status": status,
             "type": "execution_result",
             "mode": mode,
             "tool_name": tool_name,
             "text": text,
+            **promoted,
             # Preserve original tool output for frontend + compatibility.
             "result": output if isinstance(output, dict) else {"value": output},
             "artifacts": (output.get("artifacts") if isinstance(output, dict) else None) or [],

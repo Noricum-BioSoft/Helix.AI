@@ -49,8 +49,53 @@ if [ "$CLUSTER_STATE" != "WAITING" ] && [ "$CLUSTER_STATE" != "RUNNING" ]; then
     echo "Warning: Cluster $CLUSTER_ID is not ready. Current state: $CLUSTER_STATE"
     echo ""
     
+    # If cluster is starting, wait for it to be ready
+    if [ "$CLUSTER_STATE" == "STARTING" ]; then
+        echo "Cluster is starting. Waiting for it to be ready (max 15 minutes)..."
+        MAX_WAIT_MINUTES=15
+        CHECK_INTERVAL=30  # Check every 30 seconds
+        MAX_WAIT_SECONDS=$((MAX_WAIT_MINUTES * 60))
+        START_TIME=$(date +%s)
+        
+        while [ $(($(date +%s) - START_TIME)) -lt $MAX_WAIT_SECONDS ]; do
+            CLUSTER_STATE=$(aws emr describe-cluster \
+                --cluster-id "$CLUSTER_ID" \
+                --region "$REGION" \
+                --query 'Cluster.Status.State' \
+                --output text 2>/dev/null)
+            
+            if [ "$CLUSTER_STATE" == "WAITING" ] || [ "$CLUSTER_STATE" == "RUNNING" ]; then
+                echo "✅ Cluster $CLUSTER_ID is now ready (state: $CLUSTER_STATE)"
+                break
+            elif [[ "$CLUSTER_STATE" == *"TERMINATED"* ]] || [[ "$CLUSTER_STATE" == *"TERMINATING"* ]]; then
+                echo "❌ Cluster $CLUSTER_ID is in terminal state: $CLUSTER_STATE"
+                exit 1
+            fi
+            
+            ELAPSED_MINUTES=$(($(($(date +%s) - START_TIME)) / 60))
+            if [ $((ELAPSED_MINUTES % 2)) -eq 0 ] && [ $ELAPSED_MINUTES -gt 0 ]; then
+                echo "Cluster still starting... (state: $CLUSTER_STATE, elapsed: ${ELAPSED_MINUTES} minutes)"
+            fi
+            
+            sleep $CHECK_INTERVAL
+        done
+        
+        # Check final state
+        CLUSTER_STATE=$(aws emr describe-cluster \
+            --cluster-id "$CLUSTER_ID" \
+            --region "$REGION" \
+            --query 'Cluster.Status.State' \
+            --output text 2>/dev/null)
+        
+        if [ "$CLUSTER_STATE" != "WAITING" ] && [ "$CLUSTER_STATE" != "RUNNING" ]; then
+            echo "❌ Timeout waiting for cluster $CLUSTER_ID to be ready (final state: $CLUSTER_STATE)"
+            echo ""
+            echo "Please wait for the cluster to be ready, or use a different cluster:"
+            echo "  export EMR_CLUSTER_ID=j-XXXXXXXXXXXXX"
+            exit 1
+        fi
     # If cluster is terminated, try to find an active cluster
-    if [[ "$CLUSTER_STATE" == *"TERMINATED"* ]] || [ -z "$CLUSTER_STATE" ]; then
+    elif [[ "$CLUSTER_STATE" == *"TERMINATED"* ]] || [ -z "$CLUSTER_STATE" ]; then
         echo "Attempting to find an active EMR cluster..."
         
         # Try to find an active cluster

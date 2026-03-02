@@ -11,9 +11,7 @@ permissions:
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
   AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
-  # helix-ai-backend is the CloudFormation/CDK repo; helix-ai/backend is the Copilot repo
-  # that actually serves traffic at helix--Publi-7CO3kaz1lrRR-443122446.us-west-1.elb.amazonaws.com
-  ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY || 'helix-ai-backend' }}
+  ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
   S3_BUCKET: ${{ secrets.S3_BUCKET }} # e.g., helix-frontend-bucket
   CLOUDFRONT_DISTRIBUTION_ID: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} # optional
   IMAGE_TAG: latest
@@ -52,12 +50,15 @@ jobs:
       - name: Update ECS Service
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          # The COPILOT cluster/service serves traffic at the public ALB.
-          # Fall back to known Copilot cluster/service if secrets are not configured.
-          ECS_CLUSTER_NAME: ${{ secrets.ECS_CLUSTER_NAME || 'helix-ai-production-Cluster-nEGIXWUe21ip' }}
-          ECS_SERVICE_NAME: ${{ secrets.ECS_SERVICE_NAME || 'helix-ai-production-backend-Service-kfF1J318MES7' }}
-          ECS_TASK_DEFINITION_FAMILY: ${{ secrets.ECS_TASK_DEFINITION_FAMILY || 'helix-ai-production-backend' }}
+          ECS_CLUSTER_NAME: ${{ secrets.ECS_CLUSTER_NAME }}
+          ECS_SERVICE_NAME: ${{ secrets.ECS_SERVICE_NAME }}
+          ECS_TASK_DEFINITION_FAMILY: ${{ secrets.ECS_TASK_DEFINITION_FAMILY }}
         run: |
+          # Skip if ECS secrets are not configured
+          if [ -z "$ECS_CLUSTER_NAME" ] || [ -z "$ECS_SERVICE_NAME" ] || [ -z "$ECS_TASK_DEFINITION_FAMILY" ]; then
+            echo "ECS configuration not complete, skipping ECS service update"
+            exit 0
+          fi
           echo "Updating ECS service with new image..."
           # Get current task definition
           TASK_DEF=$(aws ecs describe-task-definition \

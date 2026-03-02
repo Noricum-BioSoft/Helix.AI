@@ -331,7 +331,7 @@ class JobManager:
                     logger.error(f"[Background] Job submission failed for {job_id}: {error_msg}")
                     # Update job status to failed
                     if job_id in self.jobs:
-                        self.jobs[job_id]["status"] = "failed"
+                        self.jobs[job_id]["status"] = STATUS_FAILED
                         self.jobs[job_id]["error"] = error_msg
                         self._save_jobs()
                     return
@@ -345,7 +345,7 @@ class JobManager:
                     # Update job record with step_id
                     if job_id in self.jobs:
                         self.jobs[job_id]["step_id"] = extracted_step_id
-                        self.jobs[job_id]["status"] = "running"  # Update from pending to running
+                        self.jobs[job_id]["status"] = STATUS_RUNNING  # Update from submitted to running
                         self._save_jobs()
                 else:
                     logger.warning(
@@ -353,26 +353,24 @@ class JobManager:
                     )
                     # Still mark as running, status checks will poll EMR
                     if job_id in self.jobs:
-                        self.jobs[job_id]["status"] = "running"
+                        self.jobs[job_id]["status"] = STATUS_RUNNING
                         self._save_jobs()
                     
             except subprocess.TimeoutExpired:
                 logger.error(f"[Background] Job submission timed out for {job_id} after 900 seconds")
                 if job_id in self.jobs:
-                    self.jobs[job_id]["status"] = "failed"
+                    self.jobs[job_id]["status"] = STATUS_FAILED
                     self.jobs[job_id]["error"] = "Job submission timed out after 15 minutes"
                     self._save_jobs()
             except Exception as e:
                 logger.error(f"[Background] Exception during job submission for {job_id}: {e}")
                 if job_id in self.jobs:
-                    self.jobs[job_id]["status"] = "failed"
+                    self.jobs[job_id]["status"] = STATUS_FAILED
                     self.jobs[job_id]["error"] = f"Job submission failed: {str(e)}"
                     self._save_jobs()
         
-        # Start background thread
-        submission_thread = threading.Thread(target=_submit_job_async, daemon=True)
-        submission_thread.start()
-        logger.info(f"✅ Job {job_id} queued for submission (background thread started)")
+        # Note: start background submission thread *after* the job record is created,
+        # so the thread can reliably update status/step_id.
         
         # Create job directory in session's directory if session_id is provided
         job_local_path = None
@@ -412,12 +410,11 @@ class JobManager:
                 import traceback
                 traceback.print_exc()
         
-        # Store job metadata
-        # Status is "pending" because background thread is submitting to EMR
-        # Will be updated to "running" once step_id is obtained
+        # Store job metadata (step submission continues in the background).
+        # Keep status in the normal lifecycle: submitted -> running -> completed/failed.
         self.jobs[job_id] = {
             "job_id": job_id,
-            "status": "pending",  # Background thread will update to "running" once submitted
+            "status": STATUS_SUBMITTED,
             "type": "fastqc",
             # Phase 1.4: generalized job fields (keep legacy keys too)
             "job_type": "tool",
@@ -448,6 +445,11 @@ class JobManager:
         
         # Save jobs to persistent storage immediately
         self._save_jobs()
+
+        # Start background thread (job record now exists)
+        submission_thread = threading.Thread(target=_submit_job_async, daemon=True)
+        submission_thread.start()
+        logger.info(f"✅ Job {job_id} queued for submission (background thread started)")
         
         # Save job metadata to local directory if job_local_path exists
         if job_local_path:

@@ -175,7 +175,10 @@ cat > /tmp/emr-bootstrap/fastqc-bootstrap.sh << 'BOOTSTRAP_EOF'
 # Update system
 sudo yum update -y
 
-# Install additional Python packages
+# Install AWS SDK and core Python packages
+sudo pip3 install boto3 botocore
+
+# Install additional Python packages for bioinformatics
 sudo pip3 install biopython pandas numpy matplotlib seaborn plotly
 
 # Install FASTQ parsing libraries

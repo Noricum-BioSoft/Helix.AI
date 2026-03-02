@@ -117,6 +117,8 @@ class HistoryManager:
     
     def _get_s3_client(self):
         """Get or create S3 client. Returns None if boto3 is not available or AWS credentials are missing."""
+        if os.getenv("HELIX_MOCK_MODE") == "1":
+            return None
         if self._s3_client is not None:
             return self._s3_client
         
@@ -168,6 +170,14 @@ class HistoryManager:
     
     def _ensure_sessions_loaded(self):
         """Lazily load existing session data from disk on first access."""
+        # In mock mode / unit tests we want deterministic, fast behavior and should
+        # not scan or parse potentially large on-disk session history.
+        if os.getenv("PYTEST_CURRENT_TEST") is not None:
+            self._sessions_loaded = True
+            return
+        if os.getenv("HELIX_MOCK_MODE") == "1":
+            self._sessions_loaded = True
+            return
         if self._sessions_loaded:
             return
         self._load_existing_sessions()

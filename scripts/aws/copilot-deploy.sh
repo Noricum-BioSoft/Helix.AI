@@ -41,3 +41,6 @@ echo "   copilot svc status --name backend --env production"
 echo "   copilot svc logs --name backend --env production --follow"
 
 
+
+
+
