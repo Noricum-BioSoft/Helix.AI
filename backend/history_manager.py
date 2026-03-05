@@ -6,6 +6,7 @@ from pathlib import Path
 import logging
 import os
 import threading
+import re
 
 # Try to import fcntl for file locking (not available on Windows)
 try:
@@ -114,6 +115,255 @@ class HistoryManager:
         # Locks for serializing access to each session file (using RLock for reentrancy)
         self._session_locks: Dict[str, threading.RLock] = {}
         self._locks_lock = threading.Lock()  # Lock for accessing the _session_locks dict
+
+    # -----------------------------
+    # Run Ledger (iteration model)
+    # -----------------------------
+    #
+    # We keep the legacy `history[]` + `results{}` structure for backwards compatibility,
+    # but also maintain a first-class `runs[]` list and `artifacts{}` registry.
+    #
+    # A "run" is a single tool invocation (or agent invocation) in a session. Runs are
+    # append-only and versioned via parent_run_id links.
+
+    @staticmethod
+    def _now_iso() -> str:
+        return datetime.now().isoformat()
+
+    def _ensure_run_ledger_structures(self, session_data: Dict[str, Any]) -> None:
+        if not isinstance(session_data, dict):
+            return
+        session_data.setdefault("runs", [])
+        session_data.setdefault("artifacts", {})
+
+    @staticmethod
+    def _safe_str(v: Any) -> str:
+        try:
+            return str(v)
+        except Exception:
+            return ""
+
+    def _new_run_id(self) -> str:
+        return f"run_{uuid.uuid4().hex[:12]}"
+
+    def _new_artifact_id(self) -> str:
+        return f"art_{uuid.uuid4().hex[:12]}"
+
+    def register_artifact(
+        self,
+        session_id: str,
+        *,
+        run_id: str,
+        artifact_type: str,
+        title: str,
+        uri: str,
+        format: Optional[str] = None,
+        derived_from: Optional[str] = None,
+        params: Optional[Dict[str, Any]] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Register an artifact in the session-level artifact registry.
+
+        This is metadata-only. Tools may additionally write artifact files under
+        sessions/{session_id}/runs/{run_id}/... (local-only) or to S3 (cloud mode).
+        """
+        self._ensure_sessions_loaded()
+        session_lock = self._get_session_lock(session_id)
+        with session_lock:
+            session = self.sessions.get(session_id)
+            if not session:
+                # Ensure session exists, then fetch it
+                self.ensure_session_exists(session_id)
+                session = self.sessions.get(session_id)
+            if not session:
+                raise ValueError(f"Session {session_id} not found")
+
+            self._ensure_run_ledger_structures(session)
+            artifact_id = self._new_artifact_id()
+            record = {
+                "artifact_id": artifact_id,
+                "run_id": run_id,
+                "type": artifact_type,
+                "title": title,
+                "uri": uri,
+                "format": format,
+                "derived_from": derived_from,
+                "params": params or {},
+                "created_at": self._now_iso(),
+            }
+            if extra:
+                record["extra"] = extra
+            session["artifacts"][artifact_id] = record
+            session["updated_at"] = self._now_iso()
+            self._save_session(session_id)
+            return record
+
+    def list_runs(self, session_id: str) -> List[Dict[str, Any]]:
+        self._ensure_sessions_loaded()
+        session = self.get_session(session_id)
+        if not session:
+            return []
+        self._ensure_run_ledger_structures(session)
+        return list(session.get("runs", []) or [])
+
+    def get_run(self, session_id: str, run_id: str) -> Optional[Dict[str, Any]]:
+        self._ensure_sessions_loaded()
+        session = self.get_session(session_id)
+        if not session:
+            return None
+        self._ensure_run_ledger_structures(session)
+        for r in session.get("runs", []) or []:
+            if isinstance(r, dict) and r.get("run_id") == run_id:
+                return r
+        return None
+
+    def list_artifacts(self, session_id: str) -> List[Dict[str, Any]]:
+        self._ensure_sessions_loaded()
+        session = self.get_session(session_id)
+        if not session:
+            return []
+        self._ensure_run_ledger_structures(session)
+        arts = session.get("artifacts", {}) or {}
+        if not isinstance(arts, dict):
+            return []
+        return list(arts.values())
+
+    def get_artifact(self, session_id: str, artifact_id: str) -> Optional[Dict[str, Any]]:
+        self._ensure_sessions_loaded()
+        session = self.get_session(session_id)
+        if not session:
+            return None
+        self._ensure_run_ledger_structures(session)
+        arts = session.get("artifacts", {}) or {}
+        if not isinstance(arts, dict):
+            return None
+        art = arts.get(artifact_id)
+        return art if isinstance(art, dict) else None
+
+    def resolve_run_reference(self, session_id: str, ref: str) -> Optional[Dict[str, Any]]:
+        """
+        Resolve user-facing run references:
+        - "first" / "latest" / "last"
+        - "run_..." id
+        - "iteration:1" / "#1" / "1"
+        """
+        runs = self.list_runs(session_id)
+        if not runs:
+            return None
+        if not ref:
+            return runs[-1]
+
+        r = ref.strip().lower()
+        if r in {"latest", "last", "current"}:
+            return runs[-1]
+        if r in {"first", "initial"}:
+            return runs[0]
+        if r.startswith("run_"):
+            return self.get_run(session_id, ref)
+        m = re.match(r"^(?:iteration\s*[:#]\s*)?(\d+)$", r)
+        if m:
+            idx = int(m.group(1))
+            for run in runs:
+                if isinstance(run, dict) and run.get("iteration_index") == idx:
+                    return run
+        m2 = re.match(r"^#(\d+)$", r)
+        if m2:
+            idx = int(m2.group(1))
+            for run in runs:
+                if isinstance(run, dict) and run.get("iteration_index") == idx:
+                    return run
+        return None
+
+    def add_run(
+        self,
+        session_id: str,
+        *,
+        command: str,
+        tool: str,
+        result: Dict[str, Any],
+        run_id: Optional[str] = None,
+        tool_args: Optional[Dict[str, Any]] = None,
+        inputs: Optional[List[Dict[str, Any]]] = None,
+        outputs: Optional[List[Dict[str, Any]]] = None,
+        produced_artifacts: Optional[List[Dict[str, Any]]] = None,
+        parent_run_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Append a run record to session['runs'] and return the run record.
+        """
+        self._ensure_sessions_loaded()
+        session_lock = self._get_session_lock(session_id)
+        with session_lock:
+            if session_id not in self.sessions:
+                self.ensure_session_exists(session_id)
+            session = self.sessions.get(session_id)
+            if not session:
+                raise ValueError(f"Session {session_id} not found")
+
+            self._ensure_run_ledger_structures(session)
+
+            run_id = run_id or self._new_run_id()
+            iteration_index = len(session.get("runs", []) or []) + 1
+
+            # Register produced artifacts (if any) into the session-level registry.
+            # We accept a loose dict shape and normalize to:
+            # {artifact_id, run_id, type, title, uri, format?, derived_from?, params?}
+            artifacts_in: List[Dict[str, Any]] = []
+            if isinstance(produced_artifacts, list):
+                artifacts_in = [a for a in produced_artifacts if isinstance(a, dict)]
+
+            enriched_artifacts: List[Dict[str, Any]] = []
+            for a in artifacts_in:
+                a_type = a.get("type") or a.get("artifact_type") or "unknown"
+                a_title = a.get("title") or a.get("label") or a.get("name") or "artifact"
+                a_uri = a.get("uri") or a.get("url") or ""
+                if not a_uri:
+                    # Skip malformed artifact records
+                    continue
+                a_format = a.get("format") or a.get("kind")
+                a_derived = a.get("derived_from") or a.get("derived_from_artifact_id")
+                a_params = a.get("params") if isinstance(a.get("params"), dict) else {}
+                a_extra = a.get("extra") if isinstance(a.get("extra"), dict) else None
+
+                artifact_id = a.get("artifact_id") or self._new_artifact_id()
+                record = {
+                    "artifact_id": artifact_id,
+                    "run_id": run_id,
+                    "type": a_type,
+                    "title": a_title,
+                    "uri": a_uri,
+                    "format": a_format,
+                    "derived_from": a_derived,
+                    "params": a_params,
+                    "created_at": self._now_iso(),
+                }
+                if a_extra:
+                    record["extra"] = a_extra
+
+                session["artifacts"][artifact_id] = record
+                enriched_artifacts.append(record)
+
+            run = {
+                "run_id": run_id,
+                "iteration_index": iteration_index,
+                "timestamp": self._now_iso(),
+                "command": command,
+                "tool": tool,
+                "tool_args": tool_args or {},
+                "inputs": inputs or [],
+                "outputs": outputs or [],
+                "produced_artifacts": enriched_artifacts,
+                "parent_run_id": parent_run_id,
+                "result_key": None,  # filled by add_history_entry for legacy results map
+                "metadata": metadata or {},
+            }
+
+            session["runs"].append(run)
+            session["updated_at"] = self._now_iso()
+            self._save_session(session_id)
+            return run
     
     def _get_s3_client(self):
         """Get or create S3 client. Returns None if boto3 is not available or AWS credentials are missing."""
@@ -238,6 +488,8 @@ class HistoryManager:
                 "updated_at": datetime.now().isoformat(),
                 "history": [],
                 "results": {},
+                "runs": [],
+                "artifacts": {},
                 "metadata": {
                     "s3_path": s3_path,
                     "s3_bucket": self.s3_bucket_name if s3_path else None,
@@ -341,6 +593,8 @@ class HistoryManager:
                     "updated_at": datetime.now().isoformat(),
                     "history": [],
                     "results": {},
+                    "runs": [],
+                    "artifacts": {},
                     "metadata": {
                         "s3_path": s3_path,
                         "s3_bucket": self.s3_bucket_name if s3_path else None,
@@ -348,16 +602,120 @@ class HistoryManager:
                     }
                 }
                 self._save_session(session_id)
+
+            # Ensure run-ledger structures exist (back-compat for older session files)
+            self._ensure_run_ledger_structures(self.sessions[session_id])
             
             # Serialize the result to handle LangChain message objects
             serialized_result = serialize_langchain_messages(result)
+
+            # Build run record (iteration-aware).
+            tool_args = None
+            inputs = None
+            outputs = None
+            produced_artifacts = None
+            parent_run_id = None
+            pre_run_id = None
+            run_metadata = {}
+            if isinstance(metadata, dict):
+                tool_args = metadata.get("tool_args")
+                inputs = metadata.get("inputs")
+                outputs = metadata.get("outputs")
+                produced_artifacts = metadata.get("produced_artifacts") or metadata.get("artifacts")
+                parent_run_id = metadata.get("parent_run_id")
+                pre_run_id = metadata.get("run_id")
+                # store the rest
+                run_metadata = {k: v for k, v in metadata.items() if k not in {
+                    "tool_args", "inputs", "outputs", "produced_artifacts", "artifacts", "parent_run_id", "run_id"
+                }}
+
+            run_record = self.add_run(
+                session_id,
+                command=command,
+                tool=tool,
+                result=serialized_result if isinstance(serialized_result, dict) else {"value": serialized_result},
+                run_id=self._safe_str(pre_run_id) if pre_run_id else None,
+                tool_args=tool_args if isinstance(tool_args, dict) else None,
+                inputs=inputs if isinstance(inputs, list) else None,
+                outputs=outputs if isinstance(outputs, list) else None,
+                produced_artifacts=produced_artifacts if isinstance(produced_artifacts, list) else None,
+                parent_run_id=self._safe_str(parent_run_id) if parent_run_id else None,
+                metadata=run_metadata if isinstance(run_metadata, dict) else None,
+            )
+
+            # If the run produced artifacts, inject "results_viewer" payload into the *live* result dict
+            # so /execute can render plots/links immediately without reading the session file.
+            try:
+                if isinstance(result, dict):
+                    arts = run_record.get("produced_artifacts") or []
+                    if isinstance(arts, list) and len(arts) > 0:
+                        links_in = result.get("links") if isinstance(result.get("links"), list) else []
+                        visuals_in = result.get("visuals") if isinstance(result.get("visuals"), list) else []
+
+                        def _seen_urls(items):
+                            seen = set()
+                            for it in items:
+                                if isinstance(it, dict) and isinstance(it.get("url"), str):
+                                    seen.add(it["url"])
+                            return seen
+
+                        seen_link_urls = _seen_urls(links_in)
+                        seen_visual_urls = _seen_urls(visuals_in)
+
+                        new_links = []
+                        new_visuals = []
+                        for a in arts:
+                            if not isinstance(a, dict):
+                                continue
+                            artifact_id = a.get("artifact_id")
+                            if not artifact_id:
+                                continue
+                            url = f"/session/{session_id}/artifacts/{artifact_id}/download"
+                            title = a.get("title") or a.get("name") or "artifact"
+                            a_type = a.get("type") or "artifact"
+                            a_format = a.get("format")
+                            if url not in seen_link_urls:
+                                new_links.append(
+                                    {
+                                        "label": title,
+                                        "url": url,
+                                        "artifact_id": artifact_id,
+                                        "type": a_type,
+                                        "format": a_format,
+                                    }
+                                )
+                                seen_link_urls.add(url)
+
+                            # Heuristic: treat certain artifact types/formats as images for UI preview.
+                            fmt = (a_format or "").lower() if isinstance(a_format, str) else ""
+                            uri = (a.get("uri") or "")
+                            is_image = (
+                                a_type in {"plot", "image"}
+                                and (fmt in {"png", "jpg", "jpeg", "gif", "webp", "svg"} or str(uri).lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg")))
+                            )
+                            if is_image and url not in seen_visual_urls:
+                                new_visuals.append({"type": "image", "url": url, "title": title})
+                                seen_visual_urls.add(url)
+
+                        if new_links:
+                            result["links"] = links_in + new_links
+                        if new_visuals:
+                            result["visuals"] = visuals_in + new_visuals
+
+                        # Hint frontend to render a results viewer if we have visuals or links
+                        if (new_links or new_visuals) and result.get("visualization_type") != "results_viewer":
+                            result["visualization_type"] = "results_viewer"
+            except Exception:
+                pass
             
             entry = {
                 "timestamp": datetime.now().isoformat(),
                 "command": command,
                 "tool": tool,
                 "result": serialized_result,
-                "metadata": metadata or {}
+                "metadata": metadata or {},
+                "run_id": run_record.get("run_id"),
+                "iteration_index": run_record.get("iteration_index"),
             }
             
             self.sessions[session_id]["history"].append(entry)
@@ -366,6 +724,14 @@ class HistoryManager:
             # Store result with a unique key for later reference
             result_key = f"{tool}_{len(self.sessions[session_id]['history'])}"
             self.sessions[session_id]["results"][result_key] = serialized_result
+
+            # Link legacy result key back into the run record (best-effort)
+            try:
+                runs = self.sessions[session_id].get("runs", [])
+                if isinstance(runs, list) and runs:
+                    runs[-1]["result_key"] = result_key
+            except Exception:
+                pass
             
             save_start = time.time()
             self._save_session(session_id)

@@ -5,7 +5,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from langchain_core.tools import tool
 
@@ -37,6 +37,982 @@ def toolbox_inventory() -> Dict:
         "input": {},
         "output": inv,
         "plot": {},
+    }
+
+
+def _get_session_local_dir(session_id: str) -> Path:
+    """
+    Best-effort local session directory resolver.
+
+    Local-only feature (used for iterative workflows and artifacts). In cloud mode,
+    artifacts may be stored in S3 instead.
+    """
+    try:
+        from backend.history_manager import history_manager
+
+        session = history_manager.get_session(session_id) if session_id else None
+        local_path = None
+        if isinstance(session, dict):
+            local_path = (session.get("metadata") or {}).get("local_path")
+        if local_path:
+            p = Path(local_path)
+        else:
+            p = Path("sessions") / session_id
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+    except Exception:
+        p = Path("sessions") / (session_id or "unknown")
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+
+def _new_local_run_id() -> str:
+    import uuid
+
+    return f"run_{uuid.uuid4().hex[:12]}"
+
+
+@tool
+def local_demo_scatter_plot(
+    session_id: str,
+    x_scale: str = "log",
+    n_points: int = 200,
+    seed: int = 7,
+    title: str = "Demo scatter",
+) -> Dict:
+    """
+    Local-only demo tool that produces:
+    - a CSV data artifact
+    - a parameterized visualization spec
+    - (if matplotlib available) a rendered PNG
+
+    Intended to prove iterative workflows:
+    1) produce an output
+    2) modify the output (e.g., log->linear) without re-running upstream analysis
+    """
+    import json
+    import math
+    import random
+
+    run_id = _new_local_run_id()
+    session_dir = _get_session_local_dir(session_id)
+    run_dir = session_dir / "runs" / run_id
+    artifacts_dir = run_dir / "artifacts"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+    # Generate synthetic data with a heavy-tailed x distribution
+    random.seed(int(seed))
+    xs = [10 ** random.uniform(-2, 3) for _ in range(max(5, int(n_points)))]
+    ys = [math.log10(x) + random.gauss(0, 0.25) for x in xs]
+
+    data_csv_path = artifacts_dir / "demo_data.csv"
+    with open(data_csv_path, "w") as f:
+        f.write("x,y\n")
+        for x, y in zip(xs, ys):
+            f.write(f"{x},{y}\n")
+
+    viz_spec = {
+        "viz_type": "scatter",
+        "title": title,
+        "x_field": "x",
+        "y_field": "y",
+        "x_scale": (x_scale or "log").lower(),
+        "data_uri": str(data_csv_path),
+    }
+
+    viz_spec_path = artifacts_dir / "viz_spec.json"
+    with open(viz_spec_path, "w") as f:
+        json.dump(viz_spec, f, indent=2)
+
+    plot_png_path = artifacts_dir / "plot.png"
+    rendered = False
+    render_error = None
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        fig = plt.figure(figsize=(7, 4))
+        ax = fig.add_subplot(1, 1, 1)
+        ax.scatter(xs, ys, s=14, alpha=0.8)
+        ax.set_title(title)
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
+        if viz_spec["x_scale"] == "log":
+            ax.set_xscale("log")
+        fig.tight_layout()
+        fig.savefig(plot_png_path, dpi=150)
+        plt.close(fig)
+        rendered = True
+    except Exception as e:
+        render_error = str(e)
+
+    artifacts: List[Dict[str, Any]] = [
+        {
+            "type": "csv",
+            "title": "demo_data",
+            "uri": str(data_csv_path),
+            "format": "csv",
+            "params": {"n_points": int(n_points), "seed": int(seed)},
+        },
+        {
+            "type": "viz_spec",
+            "title": "demo_scatter_spec",
+            "uri": str(viz_spec_path),
+            "format": "json",
+            "params": {"x_scale": viz_spec["x_scale"]},
+        },
+    ]
+    if rendered:
+        artifacts.append(
+            {
+                "type": "plot",
+                "title": "demo_scatter",
+                "uri": str(plot_png_path),
+                "format": "png",
+                "params": {"x_scale": viz_spec["x_scale"]},
+                "extra": {"viz_spec_uri": str(viz_spec_path), "data_uri": str(data_csv_path)},
+            }
+        )
+
+    text = (
+        f"Created demo scatter plot (local). x_scale={viz_spec['x_scale']}. "
+        f"Artifacts saved under {artifacts_dir}."
+    )
+    if not rendered:
+        text += f" (PNG render skipped: {render_error})"
+
+    return {
+        "status": "success",
+        "text": text,
+        "run_id": run_id,
+        "viz_spec": viz_spec,
+        "artifacts": artifacts,
+    }
+
+
+def _apply_unified_diff(original_text: str, diff_text: str) -> str:
+    """
+    Apply a unified diff (single-file) to a text blob.
+    Supports hunks with context/add/remove lines.
+    """
+    import re
+
+    base_lines = original_text.splitlines(keepends=True)
+    diff_lines = diff_text.splitlines(keepends=True)
+
+    # Skip leading headers until first hunk
+    i = 0
+    while i < len(diff_lines) and not diff_lines[i].startswith("@@"):
+        i += 1
+
+    out: List[str] = []
+    base_idx = 0
+
+    hunk_re = re.compile(r"^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@")
+
+    while i < len(diff_lines):
+        line = diff_lines[i]
+        if not line.startswith("@@"):
+            i += 1
+            continue
+
+        m = hunk_re.match(line.rstrip("\n"))
+        if not m:
+            raise ValueError("Invalid unified diff hunk header")
+        old_start = int(m.group(1))
+
+        # Copy unchanged prefix
+        target_base_idx = max(0, old_start - 1)
+        if target_base_idx < base_idx:
+            raise ValueError("Overlapping or out-of-order hunks")
+        out.extend(base_lines[base_idx:target_base_idx])
+        base_idx = target_base_idx
+
+        i += 1
+        # Process hunk body
+        while i < len(diff_lines) and not diff_lines[i].startswith("@@"):
+            h = diff_lines[i]
+            if h.startswith("\\"):
+                # "\ No newline at end of file" – ignore
+                i += 1
+                continue
+            if not h:
+                i += 1
+                continue
+            tag = h[0]
+            content = h[1:]
+            if tag == " ":
+                if base_idx >= len(base_lines) or base_lines[base_idx] != content:
+                    raise ValueError("Context mismatch while applying diff")
+                out.append(content)
+                base_idx += 1
+            elif tag == "-":
+                if base_idx >= len(base_lines) or base_lines[base_idx] != content:
+                    raise ValueError("Delete mismatch while applying diff")
+                base_idx += 1
+            elif tag == "+":
+                out.append(content)
+            else:
+                # Unexpected line; ignore defensively
+                pass
+            i += 1
+
+    out.extend(base_lines[base_idx:])
+    return "".join(out)
+
+
+def _read_code_fence(text: str) -> Optional[str]:
+    """
+    Extract the first triple-backtick fenced block content, if present.
+    """
+    import re
+
+    m = re.search(r"```(?:python|diff)?\s*([\s\S]*?)\s*```", text or "", flags=re.IGNORECASE)
+    if not m:
+        return None
+    return m.group(1)
+
+
+@tool
+def local_demo_plot_script(
+    session_id: str,
+    x_scale: str = "log",
+    n_points: int = 200,
+    seed: int = 7,
+    title: str = "Demo scatter (script)",
+) -> Dict:
+    """
+    Local-only demo that models a data scientist workflow:
+    - write a runnable `workspace/script.py`
+    - write a patchable `workspace/viz_spec.json`
+    - execute the script (sandboxed) to produce artifacts
+    """
+    import json
+    from backend.sandbox_executor import get_sandbox_executor
+
+    run_id = _new_local_run_id()
+    session_dir = _get_session_local_dir(session_id)
+    run_dir = session_dir / "runs" / run_id
+    workspace_dir = run_dir / "workspace"
+    artifacts_dir = run_dir / "artifacts"
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+    data_csv_path = artifacts_dir / "demo_data.csv"
+    plot_png_path = artifacts_dir / "plot.png"
+    logs_path = artifacts_dir / "execution.log"
+
+    viz_spec = {
+        "viz_type": "scatter",
+        "title": title,
+        "x_field": "x",
+        "y_field": "y",
+        "x_scale": (x_scale or "log").lower(),
+        "x_label": "x",
+        "y_label": "y",
+        "data_uri": str(data_csv_path),
+        "plot_uri": str(plot_png_path),
+    }
+    viz_spec_path = workspace_dir / "viz_spec.json"
+    with open(viz_spec_path, "w") as f:
+        json.dump(viz_spec, f, indent=2)
+
+    script_path = workspace_dir / "script.py"
+    script = f"""\
+import json
+import math
+import os
+import random
+
+def main():
+    spec_path = os.environ.get("HELIX_VIZ_SPEC_PATH") or "workspace/viz_spec.json"
+    if not os.path.exists(spec_path):
+        spec_path = "workspace/viz_spec.json"
+    out_dir = os.environ.get("HELIX_OUTPUT_DIR") or ""
+    if not out_dir or not os.path.isdir(out_dir):
+        out_dir = os.environ.get("HELIX_OUTPUT_DIR_HOST") or "."
+
+    with open(spec_path, "r") as f:
+        spec = json.load(f)
+
+    n_points = int(os.environ.get("HELIX_N_POINTS", "{int(n_points)}"))
+    seed = int(os.environ.get("HELIX_SEED", "{int(seed)}"))
+    random.seed(seed)
+    xs = [10 ** random.uniform(-2, 3) for _ in range(max(5, n_points))]
+    ys = [math.log10(x) + random.gauss(0, 0.25) for x in xs]
+
+    data_path = os.path.join(out_dir, "demo_data.csv")
+    with open(data_path, "w") as f:
+        f.write("x,y\\n")
+        for x, y in zip(xs, ys):
+            f.write(f"{{x}},{{y}}\\n")
+
+    # Render plot if matplotlib is available
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        fig = plt.figure(figsize=(7, 4))
+        ax = fig.add_subplot(1, 1, 1)
+        ax.scatter(xs, ys, s=14, alpha=0.8)
+        ax.set_title(spec.get("title") or "Demo plot")
+        ax.set_xlabel(spec.get("x_label") or spec.get("x_field") or "x")
+        ax.set_ylabel(spec.get("y_label") or spec.get("y_field") or "y")
+        if (spec.get("x_scale") or "").lower() == "log":
+            ax.set_xscale("log")
+        fig.tight_layout()
+        fig.savefig(os.path.join(out_dir, "plot.png"), dpi=150)
+        plt.close(fig)
+        print("PLOT_OK")
+    except Exception as e:
+        print("PLOT_SKIPPED:", str(e))
+
+if __name__ == "__main__":
+    main()
+"""
+    with open(script_path, "w") as f:
+        f.write(script)
+
+    exec_env = {
+        "HELIX_VIZ_SPEC_PATH": "/sandbox/work/workspace/viz_spec.json",
+        "HELIX_OUTPUT_DIR": "/sandbox/output",
+        "HELIX_OUTPUT_DIR_HOST": str(artifacts_dir),
+        "HELIX_N_POINTS": str(int(n_points)),
+        "HELIX_SEED": str(int(seed)),
+    }
+
+    executor = get_sandbox_executor()
+    res = executor.execute_command(
+        ["python3", "workspace/script.py"],
+        working_dir=str(run_dir),
+        output_dir=str(artifacts_dir),
+        timeout=120,
+        env_vars=exec_env,
+    )
+
+    with open(logs_path, "w") as f:
+        f.write("STDOUT:\n")
+        f.write(res.stdout or "")
+        f.write("\n\nSTDERR:\n")
+        f.write(res.stderr or "")
+
+    artifacts: List[Dict[str, Any]] = [
+        {"type": "code", "title": "script", "uri": str(script_path), "format": "py"},
+        {"type": "viz_spec", "title": "viz_spec", "uri": str(viz_spec_path), "format": "json", "params": {"x_scale": viz_spec["x_scale"]}},
+        {"type": "log", "title": "execution_log", "uri": str(logs_path), "format": "text"},
+        {"type": "csv", "title": "demo_data", "uri": str(data_csv_path), "format": "csv"},
+    ]
+    if plot_png_path.exists():
+        artifacts.append({"type": "plot", "title": "demo_scatter", "uri": str(plot_png_path), "format": "png"})
+
+    status = "success" if res.success else "error"
+    text = f"Created demo plot script and executed it. exit_code={res.exit_code}."
+    if not res.success:
+        text += " (Script execution failed; see execution_log.)"
+
+    return {
+        "status": status,
+        "text": text,
+        "run_id": run_id,
+        "artifacts": artifacts,
+        "viz_spec": viz_spec,
+        "execution": {
+            "success": res.success,
+            "exit_code": res.exit_code,
+            "execution_time": res.execution_time,
+        },
+    }
+
+
+@tool
+def local_edit_and_rerun_script(
+    session_id: str,
+    target_run: str = "latest",
+    code_patch: Optional[str] = None,
+    new_code: Optional[str] = None,
+) -> Dict:
+    """
+    Local-only: edit a prior run's `workspace/script.py` (diff or replacement) and re-run it.
+    """
+    import json
+    from backend.history_manager import history_manager
+    from backend.sandbox_executor import get_sandbox_executor
+
+    session = history_manager.get_session(session_id)
+    if not session:
+        return {"status": "error", "text": f"Session not found: {session_id}", "error": "SESSION_NOT_FOUND"}
+
+    # Resolve a script-producing run (prefer those with code/viz_spec artifacts)
+    target = None
+    if (target_run or "").strip().lower() in {"latest", "last", "current"}:
+        runs = history_manager.list_runs(session_id)
+        for r in reversed(runs):
+            if not isinstance(r, dict):
+                continue
+            arts = r.get("produced_artifacts") or []
+            # For script edits, require a prior run that actually produced code.
+            if any(isinstance(a, dict) and a.get("type") == "code" for a in arts):
+                target = r
+                break
+        if target is None:
+            target = history_manager.resolve_run_reference(session_id, target_run)
+    else:
+        target = history_manager.resolve_run_reference(session_id, target_run)
+    if not target:
+        return {"status": "error", "text": "No prior runs in session.", "error": "NO_RUNS"}
+
+    parent_run_id = target.get("run_id")
+    if not parent_run_id:
+        return {"status": "error", "text": "Target run missing run_id.", "error": "RUN_ID_MISSING"}
+
+    script_uri = None
+    spec_uri = None
+    for art in (target.get("produced_artifacts") or []):
+        if not isinstance(art, dict):
+            continue
+        if art.get("type") == "code" and isinstance(art.get("uri"), str) and art["uri"].endswith(".py"):
+            script_uri = art["uri"]
+        if art.get("type") == "viz_spec" and isinstance(art.get("uri"), str) and art["uri"].endswith(".json"):
+            spec_uri = art["uri"]
+
+    if not script_uri:
+        session_dir = _get_session_local_dir(session_id)
+        cand = session_dir / "runs" / parent_run_id / "workspace" / "script.py"
+        if cand.exists():
+            script_uri = str(cand)
+    if not spec_uri:
+        session_dir = _get_session_local_dir(session_id)
+        cand = session_dir / "runs" / parent_run_id / "workspace" / "viz_spec.json"
+        if cand.exists():
+            spec_uri = str(cand)
+
+    if not script_uri:
+        return {"status": "error", "text": "Could not locate a script to edit.", "error": "SCRIPT_NOT_FOUND"}
+
+    # Allow code input as fenced block in the string
+    if isinstance(new_code, str):
+        fenced = _read_code_fence(new_code)
+        if fenced:
+            new_code = fenced
+    if isinstance(code_patch, str):
+        fenced = _read_code_fence(code_patch)
+        if fenced:
+            code_patch = fenced
+
+    if not (new_code or code_patch):
+        return {"status": "error", "text": "Provide either new_code or code_patch.", "error": "NO_EDIT_PROVIDED"}
+
+    with open(script_uri, "r") as f:
+        base_code = f.read()
+
+    updated_code = base_code
+    if new_code:
+        updated_code = new_code
+    elif code_patch:
+        try:
+            updated_code = _apply_unified_diff(base_code, code_patch)
+        except Exception as e:
+            return {"status": "error", "text": f"Failed to apply patch: {e}", "error": "PATCH_APPLY_FAILED"}
+
+    new_run_id = _new_local_run_id()
+    session_dir = _get_session_local_dir(session_id)
+    run_dir = session_dir / "runs" / new_run_id
+    workspace_dir = run_dir / "workspace"
+    artifacts_dir = run_dir / "artifacts"
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+    # Copy viz_spec forward (best-effort)
+    viz_spec = None
+    if spec_uri:
+        try:
+            with open(spec_uri, "r") as f:
+                viz_spec = json.load(f)
+            with open(workspace_dir / "viz_spec.json", "w") as f:
+                json.dump(viz_spec, f, indent=2)
+        except Exception:
+            viz_spec = None
+
+    new_script_path = workspace_dir / "script.py"
+    with open(new_script_path, "w") as f:
+        f.write(updated_code)
+
+    logs_path = artifacts_dir / "execution.log"
+    data_csv_path = artifacts_dir / "demo_data.csv"
+    plot_png_path = artifacts_dir / "plot.png"
+
+    exec_env = {
+        "HELIX_VIZ_SPEC_PATH": "/sandbox/work/workspace/viz_spec.json",
+        "HELIX_OUTPUT_DIR": "/sandbox/output",
+        "HELIX_OUTPUT_DIR_HOST": str(artifacts_dir),
+    }
+
+    executor = get_sandbox_executor()
+    res = executor.execute_command(
+        ["python3", "workspace/script.py"],
+        working_dir=str(run_dir),
+        output_dir=str(artifacts_dir),
+        timeout=120,
+        env_vars=exec_env,
+    )
+
+    with open(logs_path, "w") as f:
+        f.write("STDOUT:\n")
+        f.write(res.stdout or "")
+        f.write("\n\nSTDERR:\n")
+        f.write(res.stderr or "")
+
+    artifacts: List[Dict[str, Any]] = [
+        {"type": "code", "title": "script", "uri": str(new_script_path), "format": "py"},
+        {"type": "log", "title": "execution_log", "uri": str(logs_path), "format": "text"},
+    ]
+    if (workspace_dir / "viz_spec.json").exists():
+        artifacts.append({"type": "viz_spec", "title": "viz_spec", "uri": str(workspace_dir / "viz_spec.json"), "format": "json"})
+    if data_csv_path.exists():
+        artifacts.append({"type": "csv", "title": "demo_data", "uri": str(data_csv_path), "format": "csv"})
+    if plot_png_path.exists():
+        artifacts.append({"type": "plot", "title": "demo_scatter", "uri": str(plot_png_path), "format": "png"})
+
+    status = "success" if res.success else "error"
+    text = f"Edited script and re-ran it. exit_code={res.exit_code}."
+    if not res.success:
+        text += " (Execution failed; see execution_log.)"
+
+    return {
+        "status": status,
+        "text": text,
+        "run_id": new_run_id,
+        "parent_run_id": parent_run_id,
+        "artifacts": artifacts,
+        "viz_spec": viz_spec,
+        "execution": {
+            "success": res.success,
+            "exit_code": res.exit_code,
+            "execution_time": res.execution_time,
+        },
+    }
+
+
+@tool
+def local_update_scatter_x_scale(
+    session_id: str,
+    x_scale: str,
+    target_run: str = "latest",
+) -> Dict:
+    """
+    Local-only: update the latest demo scatter plot's x-axis scale (log <-> linear)
+    and re-render a new artifact without regenerating upstream data.
+    """
+    import json
+
+    from backend.history_manager import history_manager
+
+    session = history_manager.get_session(session_id)
+    if not session:
+        return {"status": "error", "text": f"Session not found: {session_id}", "error": "SESSION_NOT_FOUND"}
+
+    # Find target run (by run_id, "first", "latest", or iteration index).
+    # For "latest", prefer the most recent run that actually produced a viz spec/plot,
+    # not necessarily the most recent run overall (which might be a Q&A query).
+    target = None
+    if (target_run or "").strip().lower() in {"latest", "last", "current"}:
+        runs = history_manager.list_runs(session_id)
+        for r in reversed(runs):
+            if not isinstance(r, dict):
+                continue
+            arts = r.get("produced_artifacts") or []
+            if any(isinstance(a, dict) and a.get("type") in {"viz_spec", "plot"} for a in arts):
+                target = r
+                break
+        if target is None:
+            target = history_manager.resolve_run_reference(session_id, target_run)
+    else:
+        target = history_manager.resolve_run_reference(session_id, target_run)
+    if not target:
+        return {"status": "error", "text": "No prior runs in session.", "error": "NO_RUNS"}
+
+    parent_run_id = target.get("run_id")
+    # Find a viz spec URI (prefer artifact registry from produced_artifacts)
+    spec_uri = None
+    data_uri = None
+    for art in (target.get("produced_artifacts") or []):
+        if not isinstance(art, dict):
+            continue
+        if art.get("type") == "viz_spec" and isinstance(art.get("uri"), str):
+            spec_uri = art["uri"]
+        if art.get("type") == "csv" and isinstance(art.get("uri"), str) and "demo_data" in art["uri"]:
+            data_uri = art["uri"]
+    # Fallback: try to locate spec file under the run directory
+    if not spec_uri and parent_run_id:
+        session_dir = _get_session_local_dir(session_id)
+        cand = session_dir / "runs" / parent_run_id / "artifacts" / "viz_spec.json"
+        if cand.exists():
+            spec_uri = str(cand)
+
+    if not spec_uri:
+        return {
+            "status": "error",
+            "text": "Could not locate a visualization spec to update.",
+            "error": "VIZ_SPEC_NOT_FOUND",
+            "parent_run_id": parent_run_id,
+        }
+
+    # Load spec + data
+    with open(spec_uri, "r") as f:
+        viz_spec = json.load(f)
+
+    if not data_uri:
+        data_uri = viz_spec.get("data_uri")
+    if not data_uri:
+        return {"status": "error", "text": "Could not locate data for visualization.", "error": "DATA_NOT_FOUND"}
+
+    # Read CSV (simple parser; avoid pandas dependency)
+    xs: List[float] = []
+    ys: List[float] = []
+    with open(str(data_uri), "r") as f:
+        header = f.readline()
+        for line in f:
+            parts = line.strip().split(",")
+            if len(parts) != 2:
+                continue
+            try:
+                xs.append(float(parts[0]))
+                ys.append(float(parts[1]))
+            except Exception:
+                continue
+
+    new_run_id = _new_local_run_id()
+    session_dir = _get_session_local_dir(session_id)
+    run_dir = session_dir / "runs" / new_run_id
+    artifacts_dir = run_dir / "artifacts"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+    new_spec = dict(viz_spec)
+    new_spec["x_scale"] = (x_scale or "linear").lower()
+    new_spec["derived_from_run_id"] = parent_run_id
+    new_spec["derived_from_spec_uri"] = spec_uri
+
+    new_spec_path = artifacts_dir / "viz_spec.json"
+    with open(new_spec_path, "w") as f:
+        json.dump(new_spec, f, indent=2)
+
+    plot_png_path = artifacts_dir / "plot.png"
+    rendered = False
+    render_error = None
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        fig = plt.figure(figsize=(7, 4))
+        ax = fig.add_subplot(1, 1, 1)
+        ax.scatter(xs, ys, s=14, alpha=0.8)
+        ax.set_title(new_spec.get("title") or "Demo scatter")
+        ax.set_xlabel(new_spec.get("x_field") or "x")
+        ax.set_ylabel(new_spec.get("y_field") or "y")
+        if new_spec["x_scale"] == "log":
+            ax.set_xscale("log")
+        fig.tight_layout()
+        fig.savefig(plot_png_path, dpi=150)
+        plt.close(fig)
+        rendered = True
+    except Exception as e:
+        render_error = str(e)
+
+    artifacts: List[Dict[str, Any]] = [
+        {
+            "type": "viz_spec",
+            "title": "demo_scatter_spec",
+            "uri": str(new_spec_path),
+            "format": "json",
+            "params": {"x_scale": new_spec["x_scale"]},
+            "derived_from": None,
+        }
+    ]
+    if rendered:
+        artifacts.append(
+            {
+                "type": "plot",
+                "title": "demo_scatter",
+                "uri": str(plot_png_path),
+                "format": "png",
+                "params": {"x_scale": new_spec["x_scale"]},
+                "extra": {"viz_spec_uri": str(new_spec_path), "data_uri": str(data_uri)},
+            }
+        )
+
+    text = f"Updated demo scatter x_scale to {new_spec['x_scale']} (local)."
+    if not rendered:
+        text += f" (PNG render skipped: {render_error})"
+
+    return {
+        "status": "success",
+        "text": text,
+        "run_id": new_run_id,
+        "parent_run_id": parent_run_id,
+        "viz_spec": new_spec,
+        "artifacts": artifacts,
+    }
+
+
+def _resolve_latest_viz_run(session_id: str, target_run: str) -> Optional[Dict[str, Any]]:
+    from backend.history_manager import history_manager
+
+    if (target_run or "").strip().lower() in {"latest", "last", "current"}:
+        runs = history_manager.list_runs(session_id)
+        for r in reversed(runs):
+            if not isinstance(r, dict):
+                continue
+            arts = r.get("produced_artifacts") or []
+            if any(isinstance(a, dict) and a.get("type") in {"viz_spec", "plot", "image"} for a in arts):
+                return r
+        return history_manager.resolve_run_reference(session_id, target_run)
+    return history_manager.resolve_run_reference(session_id, target_run)
+
+
+def _deep_merge(base: Dict[str, Any], patch: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(base)
+    for k, v in patch.items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = _deep_merge(out[k], v)  # type: ignore[arg-type]
+        else:
+            out[k] = v
+    return out
+
+
+def _render_viz_if_possible(viz_spec: Dict[str, Any], xs: Optional[List[float]], ys: Optional[List[float]], out_png_path) -> Tuple[bool, Optional[str]]:
+    """
+    Best-effort local renderer. Supports the demo scatter spec today.
+    Returns (rendered, error).
+    """
+    try:
+        viz_type = (viz_spec.get("viz_type") or "scatter").lower()
+        if viz_type not in {"scatter"}:
+            return False, f"Unsupported viz_type for local render: {viz_type}"
+
+        if xs is None or ys is None:
+            return False, "Missing data for rendering"
+
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        fig = plt.figure(figsize=(7, 4))
+        ax = fig.add_subplot(1, 1, 1)
+        ax.scatter(xs, ys, s=14, alpha=0.8)
+        ax.set_title(viz_spec.get("title") or "Visualization")
+        ax.set_xlabel(viz_spec.get("x_label") or viz_spec.get("x_field") or "x")
+        ax.set_ylabel(viz_spec.get("y_label") or viz_spec.get("y_field") or "y")
+        if (viz_spec.get("x_scale") or "").lower() == "log":
+            ax.set_xscale("log")
+        fig.tight_layout()
+        fig.savefig(out_png_path, dpi=150)
+        plt.close(fig)
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
+
+@tool
+def local_edit_visualization(
+    session_id: str,
+    patch: Any,
+    target_run: str = "latest",
+    allow_data_uri_change: bool = False,
+) -> Dict:
+    """
+    Local-only generalized visualization edit tool.
+
+    Applies a patch (dict or JSON string) to a prior run's viz_spec.json, writes a new viz_spec,
+    optionally re-renders a PNG (when supported), and creates a new run linked via parent_run_id.
+    """
+    import json
+    from pathlib import Path
+
+    from backend.history_manager import history_manager
+
+    session = history_manager.get_session(session_id)
+    if not session:
+        return {"status": "error", "text": f"Session not found: {session_id}", "error": "SESSION_NOT_FOUND"}
+
+    target = _resolve_latest_viz_run(session_id, target_run)
+    if not target:
+        return {"status": "error", "text": "No prior visualization runs in session.", "error": "NO_RUNS"}
+
+    parent_run_id = target.get("run_id")
+    if not parent_run_id:
+        return {"status": "error", "text": "Target run missing run_id.", "error": "RUN_ID_MISSING"}
+
+    # Parse patch
+    patch_obj: Dict[str, Any]
+    if isinstance(patch, str):
+        try:
+            patch_obj = json.loads(patch)
+        except Exception:
+            return {"status": "error", "text": "Patch must be valid JSON when provided as a string.", "error": "INVALID_PATCH_JSON"}
+    elif isinstance(patch, dict):
+        patch_obj = patch
+    else:
+        return {"status": "error", "text": "Patch must be an object (dict) or JSON string.", "error": "INVALID_PATCH_TYPE"}
+
+    # Locate viz spec + (optional) csv data
+    spec_uri = None
+    data_uri = None
+    spec_artifact_id = None
+    for art in (target.get("produced_artifacts") or []):
+        if not isinstance(art, dict):
+            continue
+        if art.get("type") == "viz_spec" and isinstance(art.get("uri"), str):
+            spec_uri = art["uri"]
+            spec_artifact_id = art.get("artifact_id")
+        if art.get("type") == "csv" and isinstance(art.get("uri"), str) and "demo_data" in art["uri"]:
+            data_uri = art["uri"]
+
+    if not spec_uri:
+        session_dir = _get_session_local_dir(session_id)
+        cand = session_dir / "runs" / parent_run_id / "artifacts" / "viz_spec.json"
+        if cand.exists():
+            spec_uri = str(cand)
+
+    if not spec_uri:
+        return {"status": "error", "text": "Could not locate a visualization spec to update.", "error": "VIZ_SPEC_NOT_FOUND", "parent_run_id": parent_run_id}
+
+    with open(spec_uri, "r") as f:
+        viz_spec = json.load(f)
+
+    # Guard against arbitrary file reads by patching data_uri unless explicitly allowed.
+    if not allow_data_uri_change and "data_uri" in patch_obj:
+        patch_obj = dict(patch_obj)
+        patch_obj.pop("data_uri", None)
+
+    # Determine data uri (allow spec default)
+    if not data_uri:
+        data_uri = viz_spec.get("data_uri")
+
+    # If data_uri exists, ensure it's within the session directory when present.
+    xs: Optional[List[float]] = None
+    ys: Optional[List[float]] = None
+    if isinstance(data_uri, str) and data_uri:
+        try:
+            session_root = _get_session_local_dir(session_id).resolve()
+            data_path = Path(data_uri).resolve()
+            if session_root not in data_path.parents and data_path != session_root:
+                return {"status": "error", "text": "Data URI is outside the session directory.", "error": "DATA_URI_OUT_OF_BOUNDS"}
+
+            # Read CSV (simple parser; avoid pandas dependency)
+            xs = []
+            ys = []
+            with open(str(data_path), "r") as f:
+                _ = f.readline()
+                for line in f:
+                    parts = line.strip().split(",")
+                    if len(parts) != 2:
+                        continue
+                    try:
+                        xs.append(float(parts[0]))
+                        ys.append(float(parts[1]))
+                    except Exception:
+                        continue
+        except Exception:
+            xs, ys = None, None
+
+    new_run_id = _new_local_run_id()
+    session_dir = _get_session_local_dir(session_id)
+    run_dir = session_dir / "runs" / new_run_id
+    artifacts_dir = run_dir / "artifacts"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+    new_spec = _deep_merge(viz_spec if isinstance(viz_spec, dict) else {}, patch_obj)
+    new_spec["derived_from_run_id"] = parent_run_id
+    new_spec["derived_from_spec_uri"] = spec_uri
+    if spec_artifact_id:
+        new_spec["derived_from_spec_artifact_id"] = spec_artifact_id
+
+    new_spec_path = artifacts_dir / "viz_spec.json"
+    with open(new_spec_path, "w") as f:
+        json.dump(new_spec, f, indent=2)
+
+    plot_png_path = artifacts_dir / "plot.png"
+    rendered, render_error = _render_viz_if_possible(new_spec, xs, ys, plot_png_path)
+
+    artifacts: List[Dict[str, Any]] = [
+        {
+            "type": "viz_spec",
+            "title": (new_spec.get("title") or "viz_spec"),
+            "uri": str(new_spec_path),
+            "format": "json",
+            "params": {"patch_keys": sorted(list(patch_obj.keys()))},
+            "derived_from": spec_artifact_id,
+        }
+    ]
+    if rendered:
+        artifacts.append(
+            {
+                "type": "plot",
+                "title": (new_spec.get("title") or "visualization"),
+                "uri": str(plot_png_path),
+                "format": "png",
+                "params": {"patch_keys": sorted(list(patch_obj.keys()))},
+                "extra": {"viz_spec_uri": str(new_spec_path), "data_uri": str(data_uri) if data_uri else None},
+            }
+        )
+
+    text = f"Updated visualization (local). Applied patch keys: {', '.join(sorted(patch_obj.keys())) or '(none)'}."
+    if not rendered and render_error:
+        text += f" (PNG render skipped: {render_error})"
+
+    return {
+        "status": "success",
+        "text": text,
+        "run_id": new_run_id,
+        "parent_run_id": parent_run_id,
+        "viz_spec": new_spec,
+        "artifacts": artifacts,
+    }
+
+
+@tool
+def session_run_io_summary(session_id: str, run_ref: str = "first") -> Dict:
+    """
+    Deterministic, read-only helper for iterative Q&A:
+    "What were the inputs/outputs of the first run?"
+    """
+    from backend.history_manager import history_manager
+
+    run = history_manager.resolve_run_reference(session_id, run_ref)
+    if not run:
+        return {"status": "error", "text": "No runs found.", "error": "NO_RUNS"}
+
+    artifacts = run.get("produced_artifacts") or []
+    lines = []
+    lines.append("### Run summary")
+    lines.append(f"- **iteration_index**: {run.get('iteration_index')}")
+    lines.append(f"- **run_id**: `{run.get('run_id')}`")
+    lines.append(f"- **tool**: `{run.get('tool')}`")
+    lines.append("")
+    lines.append("### Inputs")
+    inps = run.get("inputs") or []
+    if inps:
+        for i in inps:
+            if isinstance(i, dict):
+                lines.append(f"- `{i.get('uri')}`")
+    else:
+        lines.append("- (no structured inputs recorded)")
+    lines.append("")
+    lines.append("### Outputs / Artifacts")
+    if artifacts:
+        for a in artifacts:
+            if isinstance(a, dict):
+                lines.append(f"- **{a.get('type')}** `{a.get('uri')}`")
+    else:
+        lines.append("- (no artifacts recorded)")
+
+    return {
+        "status": "success",
+        "text": "\n".join(lines),
+        "run": run,
     }
 
 

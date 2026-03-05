@@ -95,6 +95,111 @@ class CommandRouter:
             print("🔧 Command router: Matched 'toolbox inventory' -> toolbox_inventory")
             return "toolbox_inventory", {}
 
+        # ── LOCAL ITERATION DEMO (HIGHEST PRIORITY in dev/mock) ────────────────
+        # Deterministic tools to prove iterative workflows locally.
+        # IMPORTANT: keep these routes limited to mock mode so production deployments
+        # do not attempt to run local-only demo tools (which may require Docker).
+        if os.getenv("HELIX_MOCK_MODE") == "1":
+            if any(p in command_lower for p in ["demo plot", "demo scatter", "local demo plot", "create demo plot", "generate demo plot"]):
+                print("🔧 Command router: Matched 'local demo plot' -> local_demo_plot_script")
+                # Extract x-scale if present
+                x_scale = "log" if ("log" in command_lower and "linear" not in command_lower) else ("linear" if "linear" in command_lower else "log")
+                return "local_demo_plot_script", {"x_scale": x_scale}
+
+            # Script edit + rerun (explicit deterministic syntax for mock mode)
+            if "apply code patch" in command_lower or "apply patch" in command_lower:
+                # Prefer fenced diff block; else take everything after the marker.
+                m = re.search(r"```(?:diff)?\s*([\s\S]*?)\s*```", command, flags=re.IGNORECASE)
+                patch_text = None
+                if m and m.group(1).strip():
+                    patch_text = m.group(1).strip() + "\n"
+                else:
+                    m2 = re.search(r"apply (?:code )?patch\\s*:\\s*([\\s\\S]+)$", command, flags=re.IGNORECASE)
+                    if m2 and m2.group(1).strip():
+                        patch_text = m2.group(1).strip() + "\n"
+                if patch_text:
+                    print("🔧 Command router: Matched 'apply code patch' -> local_edit_and_rerun_script")
+                    return "local_edit_and_rerun_script", {"code_patch": patch_text, "target_run": "latest"}
+
+            if "replace script with" in command_lower or "replace the script with" in command_lower:
+                m = re.search(r"```(?:python)?\s*([\s\S]*?)\s*```", command, flags=re.IGNORECASE)
+                new_code = None
+                if m and m.group(1).strip():
+                    new_code = m.group(1).strip() + "\n"
+                else:
+                    m2 = re.search(r"replace (?:the )?script with\\s*:\\s*([\\s\\S]+)$", command, flags=re.IGNORECASE)
+                    if m2 and m2.group(1).strip():
+                        new_code = m2.group(1).strip() + "\n"
+                if new_code:
+                    print("🔧 Command router: Matched 'replace script' -> local_edit_and_rerun_script")
+                    return "local_edit_and_rerun_script", {"new_code": new_code, "target_run": "latest"}
+
+        # Update plot axis scale (log <-> linear)
+        if (
+            ("x axis" in command_lower or "x-axis" in command_lower or "xaxis" in command_lower) and
+            any(w in command_lower for w in ["linear", "log", "scale"])
+        ) or any(p in command_lower for p in ["change x axis", "change x-axis", "set x axis", "set x-axis", "update x axis", "update x-axis"]):
+            x_scale = "linear" if "linear" in command_lower else ("log" if "log" in command_lower else "linear")
+            print(f"🔧 Command router: Matched 'update x axis' -> local_edit_visualization (x_scale={x_scale})")
+            return "local_edit_visualization", {"patch": {"x_scale": x_scale}, "target_run": "latest"}
+
+        # Rename / retitle plot (example of generalized viz edit)
+        if any(p in command_lower for p in ["rename plot", "rename the plot", "retitle plot", "set plot title", "change plot title", "update plot title"]) or (
+            "rename" in command_lower and "plot" in command_lower
+        ):
+            # Prefer quoted title, else take substring after "to "
+            title = None
+            m = re.search(r"\"([^\"]+)\"", command)
+            if m and m.group(1).strip():
+                title = m.group(1).strip()
+            else:
+                m2 = re.search(r"\bto\s+(.+)$", command, flags=re.IGNORECASE)
+                if m2 and m2.group(1).strip():
+                    title = m2.group(1).strip()
+            if title:
+                print(f"🔧 Command router: Matched 'rename plot' -> local_edit_visualization (title={title})")
+                return "local_edit_visualization", {"patch": {"title": title}, "target_run": "latest"}
+
+        # Rename / set axis labels (example of generalized viz edit)
+        if any(p in command_lower for p in ["y axis label", "y-axis label", "label y axis", "label the y axis", "rename y axis", "rename the y axis", "set y axis", "set y-axis"]) and (
+            "label" in command_lower or "rename" in command_lower
+        ):
+            y_label = None
+            m = re.search(r"\"([^\"]+)\"", command)
+            if m and m.group(1).strip():
+                y_label = m.group(1).strip()
+            else:
+                m2 = re.search(r"\bto\s+(.+)$", command, flags=re.IGNORECASE)
+                if m2 and m2.group(1).strip():
+                    y_label = m2.group(1).strip()
+            if y_label:
+                print(f"🔧 Command router: Matched 'y axis label' -> local_edit_visualization (y_label={y_label})")
+                return "local_edit_visualization", {"patch": {"y_label": y_label}, "target_run": "latest"}
+
+        if any(p in command_lower for p in ["x axis label", "x-axis label", "label x axis", "label the x axis", "rename x axis", "rename the x axis", "set x axis", "set x-axis"]) and (
+            "label" in command_lower or "rename" in command_lower
+        ):
+            x_label = None
+            m = re.search(r"\"([^\"]+)\"", command)
+            if m and m.group(1).strip():
+                x_label = m.group(1).strip()
+            else:
+                m2 = re.search(r"\bto\s+(.+)$", command, flags=re.IGNORECASE)
+                if m2 and m2.group(1).strip():
+                    x_label = m2.group(1).strip()
+            if x_label:
+                print(f"🔧 Command router: Matched 'x axis label' -> local_edit_visualization (x_label={x_label})")
+                return "local_edit_visualization", {"patch": {"x_label": x_label}, "target_run": "latest"}
+
+        # Deterministic Q&A over run ledger (no LLM required in mock mode)
+        if any(p in command_lower for p in ["inputs/outputs of the first run", "inputs and outputs of the first run", "what were the inputs", "what were the outputs"]) and "run" in command_lower:
+            run_ref = "first"
+            m = re.search(r"(?:run|iteration)\s*#?\s*(\d+)", command_lower)
+            if m:
+                run_ref = m.group(1)
+            print(f"🔧 Command router: Matched 'run io summary' -> session_run_io_summary ({run_ref})")
+            return "session_run_io_summary", {"run_ref": run_ref}
+
         # Priority-based matching to avoid conflicts
         # Check for specific phrases first, then general keywords
 

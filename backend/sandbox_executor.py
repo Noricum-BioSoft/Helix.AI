@@ -86,8 +86,13 @@ class SandboxExecutor:
             image: Docker image to use (defaults to BIOTOOLS_IMAGE)
         """
         self.image = image or self.BIOTOOLS_IMAGE
-        self._check_docker_available()
-        self._check_image_available()
+        # Unit tests / local dev may explicitly opt out of Docker dependency.
+        # When enabled, we will prefer host execution and skip Docker checks.
+        if os.getenv("HELIX_SANDBOX_HOST_FALLBACK") == "1":
+            logger.warning("HELIX_SANDBOX_HOST_FALLBACK=1: skipping Docker availability checks")
+        else:
+            self._check_docker_available()
+            self._check_image_available()
     
     def _check_docker_available(self):
         """Check if Docker is available."""
@@ -279,6 +284,249 @@ class SandboxExecutor:
         
         finally:
             # Cleanup temporary directories
+            if cleanup_work_dir and work_path.exists():
+                subprocess.run(["rm", "-rf", str(work_path)], check=False)
+            if cleanup_output_dir and output_path.exists():
+                subprocess.run(["rm", "-rf", str(output_path)], check=False)
+
+    def execute_command(
+        self,
+        cmd: List[str],
+        *,
+        working_dir: Optional[str] = None,
+        output_dir: Optional[str] = None,
+        max_memory: str = "4g",
+        max_cpus: int = 2,
+        timeout: int = 300,
+        env_vars: Optional[Dict[str, str]] = None,
+        allow_host_fallback: Optional[bool] = None,
+    ) -> ExecutionResult:
+        """
+        Execute an arbitrary command in the sandboxed Docker container.
+
+        This is used for script-based iterative workflows (e.g. running `python script.py`).
+
+        Host fallback is **disabled by default**. To enable it (typically in unit tests),
+        set `allow_host_fallback=True` or env var `HELIX_SANDBOX_HOST_FALLBACK=1`.
+        """
+        if not isinstance(cmd, list) or not cmd or not all(isinstance(x, str) and x for x in cmd):
+            raise ValueError("cmd must be a non-empty list of strings")
+
+        cleanup_work_dir = False
+        cleanup_output_dir = False
+
+        if working_dir is None:
+            working_dir = tempfile.mkdtemp(prefix="helix-sandbox-work-")
+            cleanup_work_dir = True
+        if output_dir is None:
+            output_dir = tempfile.mkdtemp(prefix="helix-sandbox-output-")
+            cleanup_output_dir = True
+
+        work_path = Path(working_dir)
+        output_path = Path(output_dir)
+        work_path.mkdir(parents=True, exist_ok=True)
+        output_path.mkdir(parents=True, exist_ok=True)
+
+        if allow_host_fallback is None:
+            allow_host_fallback = os.getenv("HELIX_SANDBOX_HOST_FALLBACK") == "1"
+
+        start_time = time.time()
+
+        def _collect_outputs() -> List[str]:
+            try:
+                return [
+                    str(f.relative_to(output_path))
+                    for f in output_path.rglob("*")
+                    if f.is_file()
+                ]
+            except Exception:
+                return []
+
+        # If host fallback is enabled, prefer running on host immediately to avoid
+        # flakiness/hangs when Docker Desktop is unavailable.
+        if allow_host_fallback:
+            try:
+                import sys as _sys
+
+                host_cmd = list(cmd)
+                if host_cmd[0] in {"python", "python3"}:
+                    host_cmd = [_sys.executable, "-I"] + host_cmd[1:]
+
+                env = os.environ.copy()
+                if env_vars:
+                    env.update({str(k): str(v) for k, v in env_vars.items()})
+
+                logger.warning(f"⚠️  HELIX_SANDBOX_HOST_FALLBACK=1: running on host: {' '.join(host_cmd)}")
+                result = subprocess.run(
+                    host_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    cwd=str(work_path),
+                    env=env,
+                )
+                exec_time = time.time() - start_time
+                output_files = _collect_outputs()
+                success = result.returncode == 0
+                return ExecutionResult(
+                    success=success,
+                    exit_code=result.returncode,
+                    stdout=result.stdout,
+                    stderr=result.stderr,
+                    execution_time=exec_time,
+                    output_files=output_files,
+                    error_message=result.stderr if not success else None,
+                )
+            except subprocess.TimeoutExpired:
+                exec_time = time.time() - start_time
+                return ExecutionResult(
+                    success=False,
+                    exit_code=-1,
+                    stdout="",
+                    stderr=f"Execution timed out after {timeout} seconds (host fallback)",
+                    execution_time=exec_time,
+                    output_files=_collect_outputs(),
+                    error_message=f"Timeout after {timeout}s (host fallback)",
+                )
+            except Exception as host_err:
+                exec_time = time.time() - start_time
+                return ExecutionResult(
+                    success=False,
+                    exit_code=-1,
+                    stdout="",
+                    stderr=str(host_err),
+                    execution_time=exec_time,
+                    output_files=_collect_outputs(),
+                    error_message=str(host_err),
+                )
+
+        try:
+            docker_cmd = [
+                "docker",
+                "run",
+                "--rm",
+                "--network",
+                "none",
+                "--memory",
+                max_memory,
+                "--cpus",
+                str(max_cpus),
+                "--user",
+                f"{os.getuid()}:{os.getgid()}",
+                "-v",
+                f"{work_path.absolute()}:/sandbox/work:rw",
+                "-v",
+                f"{output_path.absolute()}:/sandbox/output:rw",
+                "-w",
+                "/sandbox/work",
+            ]
+
+            if env_vars:
+                for key, value in env_vars.items():
+                    docker_cmd.extend(["-e", f"{key}={value}"])
+
+            docker_cmd.append(self.image)
+            docker_cmd.extend(cmd)
+
+            logger.info(f"🐳 Running command in Docker sandbox: {' '.join(cmd)}")
+            result = subprocess.run(
+                docker_cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+            exec_time = time.time() - start_time
+            output_files = _collect_outputs()
+            success = result.returncode == 0
+            return ExecutionResult(
+                success=success,
+                exit_code=result.returncode,
+                stdout=result.stdout,
+                stderr=result.stderr,
+                execution_time=exec_time,
+                output_files=output_files,
+                error_message=result.stderr if not success else None,
+            )
+        except subprocess.TimeoutExpired:
+            exec_time = time.time() - start_time
+            return ExecutionResult(
+                success=False,
+                exit_code=-1,
+                stdout="",
+                stderr=f"Execution timed out after {timeout} seconds",
+                execution_time=exec_time,
+                output_files=_collect_outputs(),
+                error_message=f"Timeout after {timeout}s",
+            )
+        except Exception as e:
+            if not allow_host_fallback:
+                exec_time = time.time() - start_time
+                return ExecutionResult(
+                    success=False,
+                    exit_code=-1,
+                    stdout="",
+                    stderr=str(e),
+                    execution_time=exec_time,
+                    output_files=_collect_outputs(),
+                    error_message=str(e),
+                )
+
+            # Host fallback (intended for unit tests / dev without Docker).
+            try:
+                import sys as _sys
+
+                host_cmd = list(cmd)
+                if host_cmd[0] in {"python", "python3"}:
+                    host_cmd = [_sys.executable, "-I"] + host_cmd[1:]
+
+                env = os.environ.copy()
+                if env_vars:
+                    env.update({str(k): str(v) for k, v in env_vars.items()})
+
+                logger.warning(f"⚠️  Docker sandbox unavailable; running on host: {' '.join(host_cmd)}")
+                result = subprocess.run(
+                    host_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    cwd=str(work_path),
+                    env=env,
+                )
+                exec_time = time.time() - start_time
+                output_files = _collect_outputs()
+                success = result.returncode == 0
+                return ExecutionResult(
+                    success=success,
+                    exit_code=result.returncode,
+                    stdout=result.stdout,
+                    stderr=result.stderr,
+                    execution_time=exec_time,
+                    output_files=output_files,
+                    error_message=result.stderr if not success else None,
+                )
+            except subprocess.TimeoutExpired:
+                exec_time = time.time() - start_time
+                return ExecutionResult(
+                    success=False,
+                    exit_code=-1,
+                    stdout="",
+                    stderr=f"Execution timed out after {timeout} seconds (host fallback)",
+                    execution_time=exec_time,
+                    output_files=_collect_outputs(),
+                    error_message=f"Timeout after {timeout}s (host fallback)",
+                )
+            except Exception as host_err:
+                exec_time = time.time() - start_time
+                return ExecutionResult(
+                    success=False,
+                    exit_code=-1,
+                    stdout="",
+                    stderr=str(host_err),
+                    execution_time=exec_time,
+                    output_files=_collect_outputs(),
+                    error_message=str(host_err),
+                )
+        finally:
             if cleanup_work_dir and work_path.exists():
                 subprocess.run(["rm", "-rf", str(work_path)], check=False)
             if cleanup_output_dir and output_path.exists():

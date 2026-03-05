@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { MSAView } from 'react-msaview';
 import Plot from 'react-plotly.js';
-import { mcpApi } from './services/mcpApi';
+import { API_BASE_URL, mcpApi } from './services/mcpApi';
 import { CommandParser, ParsedCommand } from './utils/commandParser';
 import { PlasmidDataVisualizer, PlasmidRepresentativesVisualizer } from './components/PlasmidVisualizer';
 import { PhylogeneticTree } from './components/PhylogeneticTree';
@@ -1357,8 +1357,26 @@ function App() {
     }
 
     // Results viewer (S3 / FastQC HTML)
-    const resultsLinks = agentOutput?.data?.links || actualResult?.links || rawResult?.links || [];
-    const resultsVisuals = agentOutput?.data?.visuals || actualResult?.visuals || rawResult?.visuals || [];
+    const normalizeAssetUrl = (url?: string) => {
+      const u = (url || '').trim();
+      if (!u) return u;
+      // Absolute URLs (S3 presigned, external) should remain untouched
+      if (/^https?:\/\//i.test(u)) return u;
+      // Relative API paths (e.g. /session/.../download) should go to the backend in dev
+      if (u.startsWith('/')) return `${API_BASE_URL}${u}`;
+      return u;
+    };
+
+    const resultsLinksRaw = agentOutput?.data?.links || actualResult?.links || rawResult?.links || [];
+    const resultsVisualsRaw = agentOutput?.data?.visuals || actualResult?.visuals || rawResult?.visuals || [];
+
+    const resultsLinks = Array.isArray(resultsLinksRaw)
+      ? resultsLinksRaw.map((l: any) => (l && typeof l === 'object' ? { ...l, url: normalizeAssetUrl(l.url) } : l))
+      : [];
+
+    const resultsVisuals = Array.isArray(resultsVisualsRaw)
+      ? resultsVisualsRaw.map((v: any) => (v && typeof v === 'object' ? { ...v, url: normalizeAssetUrl(v.url) } : v))
+      : [];
     const mainResultsIframe = Array.isArray(resultsVisuals)
       ? resultsVisuals.find((v: any) => v && v.type === 'iframe' && typeof v.url === 'string' && v.url.length > 0)
       : null;

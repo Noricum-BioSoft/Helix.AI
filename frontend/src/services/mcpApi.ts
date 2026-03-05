@@ -10,7 +10,7 @@ const normalizeBaseUrl = (value?: string) => {
 // - Explicit build-time override via VITE_API_BASE_URL (for separate API domains)
 // - Production default: same-origin (CloudFront can route API paths to the backend)
 // - Dev default: local backend
-const API_BASE_URL =
+export const API_BASE_URL =
   normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL as string | undefined) ??
   (import.meta.env.PROD ? '' : 'http://localhost:8001');
 

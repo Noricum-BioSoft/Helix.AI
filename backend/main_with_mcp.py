@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel
 from typing import Dict, Any, Optional, List
 import asyncio
@@ -617,6 +617,119 @@ async def get_session_info(session_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.get("/session/{session_id}/runs")
+async def list_session_runs(session_id: str):
+    """List run ledger entries (iterations) for a session."""
+    try:
+        session = history_manager.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        runs = history_manager.list_runs(session_id)
+        # Return thin list by default (runs can contain large result blobs in metadata)
+        thin = []
+        for r in runs:
+            if not isinstance(r, dict):
+                continue
+            thin.append(
+                {
+                    "run_id": r.get("run_id"),
+                    "iteration_index": r.get("iteration_index"),
+                    "timestamp": r.get("timestamp"),
+                    "tool": r.get("tool"),
+                    "command": (r.get("command") or "")[:200],
+                    "parent_run_id": r.get("parent_run_id"),
+                    "result_key": r.get("result_key"),
+                    "produced_artifacts": r.get("produced_artifacts") or [],
+                }
+            )
+        return {"success": True, "session_id": session_id, "runs": thin, "total_runs": len(thin)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/session/{session_id}/runs/{run_id}")
+async def get_session_run(session_id: str, run_id: str):
+    """Get full details for a specific run_id in a session."""
+    try:
+        session = history_manager.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        run = history_manager.get_run(session_id, run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="Run not found")
+        return {"success": True, "session_id": session_id, "run": run}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/session/{session_id}/artifacts")
+async def list_session_artifacts(session_id: str):
+    """List all registered artifacts for a session."""
+    try:
+        session = history_manager.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        artifacts = history_manager.list_artifacts(session_id)
+        return {"success": True, "session_id": session_id, "artifacts": artifacts, "total_artifacts": len(artifacts)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/session/{session_id}/artifacts/{artifact_id}")
+async def get_session_artifact(session_id: str, artifact_id: str):
+    """Get artifact metadata by artifact_id."""
+    try:
+        session = history_manager.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        art = history_manager.get_artifact(session_id, artifact_id)
+        if not art:
+            raise HTTPException(status_code=404, detail="Artifact not found")
+        return {"success": True, "session_id": session_id, "artifact": art}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/session/{session_id}/artifacts/{artifact_id}/download")
+async def download_session_artifact(session_id: str, artifact_id: str):
+    """
+    Local-only convenience endpoint to download a registered artifact from disk.
+    Refuses to serve paths outside the session directory.
+    """
+    try:
+        session = history_manager.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        art = history_manager.get_artifact(session_id, artifact_id)
+        if not art:
+            raise HTTPException(status_code=404, detail="Artifact not found")
+        uri = art.get("uri") or ""
+        p = Path(str(uri)).expanduser()
+        # Ensure artifact is within the session local directory
+        local_root = Path((session.get("metadata") or {}).get("local_path") or (Path("sessions") / session_id)).expanduser().resolve()
+        try:
+            resolved = p.resolve()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid artifact path")
+        if local_root not in resolved.parents and resolved != local_root:
+            raise HTTPException(status_code=403, detail="Artifact path not within session directory")
+        if not resolved.exists() or not resolved.is_file():
+            raise HTTPException(status_code=404, detail="Artifact file not found on disk")
+        return FileResponse(path=str(resolved), filename=resolved.name)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 class DatasetFileInfo(BaseModel):
     filename: str
     size: int
@@ -1054,12 +1167,26 @@ async def execute(req: CommandRequest, request: Request):
         # rather than returning another plan document.
         if req.execute_plan:
             from backend.agent import handle_command
-            agent_result = await handle_command(
-                req.command,
-                session_id=req.session_id,
-                session_context=session_context,
-                execute_plan=True,
-            )
+            try:
+                import asyncio
+
+                agent_timeout_s = int(os.getenv("HELIX_AGENT_TIMEOUT_S", "25"))
+                agent_result = await asyncio.wait_for(
+                    handle_command(
+                        req.command,
+                        session_id=req.session_id,
+                        session_context=session_context,
+                        execute_plan=True,
+                    ),
+                    timeout=agent_timeout_s,
+                )
+            except Exception as e:
+                agent_result = {
+                    "status": "error",
+                    "success": False,
+                    "error": "AGENT_TIMEOUT" if e.__class__.__name__ == "TimeoutError" else "AGENT_ERROR",
+                    "text": f"Agent execution timed out or failed: {e}",
+                }
             # Run through build_standard_response so the frontend can use the same
             # rendering path as regular agent responses (clean markdown, no debug pane).
             standard = build_standard_response(
@@ -1075,6 +1202,9 @@ async def execute(req: CommandRequest, request: Request):
         # Phase 3: detect multi-step workflows and execute as a Plan IR (sync/async broker handles routing)
         def _looks_like_workflow(cmd: str) -> bool:
             c = (cmd or "").lower()
+            # Explicit code-edit commands may contain newlines/code fences but are single actions.
+            if any(tok in c for tok in ["apply code patch", "apply patch:", "replace script with", "replace the script with"]) or "```" in c:
+                return False
             return any(tok in c for tok in [" and then ", " then ", "->", "→", "\n", ";"]) and len(c) > 20
 
         # Primary path: let BioAgent (with agent.md prompt) plan/execute
@@ -1091,7 +1221,21 @@ async def execute(req: CommandRequest, request: Request):
             # keeping lightweight endpoints like /health and /mcp/tools fast and allowing the service
             # to work in sandbox/CI environments where LLM dependencies may not be installed.
             from backend.agent import handle_command
-            agent_result = await handle_command(req.command, session_id=req.session_id, session_context=session_context)
+            try:
+                import asyncio
+
+                agent_timeout_s = int(os.getenv("HELIX_AGENT_TIMEOUT_S", "25"))
+                agent_result = await asyncio.wait_for(
+                    handle_command(req.command, session_id=req.session_id, session_context=session_context),
+                    timeout=agent_timeout_s,
+                )
+            except Exception as e:
+                agent_result = {
+                    "status": "error",
+                    "success": False,
+                    "error": "AGENT_TIMEOUT" if e.__class__.__name__ == "TimeoutError" else "AGENT_ERROR",
+                    "text": f"Agent execution timed out or failed: {e}",
+                }
             
             agent_done_time = time.time()
             agent_duration = agent_done_time - agent_start_time
@@ -1145,7 +1289,17 @@ async def execute(req: CommandRequest, request: Request):
                     req.session_id,
                     req.command,
                     tool_name,
-                    result
+                    result,
+                    metadata={
+                        "tool_args": parameters,
+                        "inputs": result.get("inputs") if isinstance(result, dict) else None,
+                        "outputs": [],
+                        "produced_artifacts": result.get("artifacts") if isinstance(result, dict) else None,
+                        "job_id": (result.get("result", {}) or {}).get("job_id") if isinstance(result, dict) else None,
+                        "run_id": (result.get("result", {}) or {}).get("run_id") if isinstance(result, dict) else None,
+                        "parent_run_id": (result.get("result", {}) or {}).get("parent_run_id") if isinstance(result, dict) else None,
+                        "mcp_route": "/execute",
+                    },
                 )
                 
                 history_done_time = time.time()
@@ -1172,6 +1326,13 @@ async def execute(req: CommandRequest, request: Request):
                     req.command,
                     "agent",
                     agent_result,
+                    metadata={
+                        "tool_args": {"execute_plan": bool(req.execute_plan)},
+                        "inputs": [],
+                        "outputs": [],
+                        "produced_artifacts": (agent_result.get("artifacts") if isinstance(agent_result, dict) else None) or [],
+                        "mcp_route": "/execute",
+                    },
                 )
                 
                 history_done_time = time.time()
@@ -1214,6 +1375,51 @@ async def execute(req: CommandRequest, request: Request):
             from backend.intent_classifier import classify_intent
             intent = classify_intent(req.command)
             if intent.intent != "execute":
+                # Allowlist: deterministic read-only tools that answer questions from
+                # local session state (no tool generation, no cloud side effects).
+                try:
+                    from backend.command_router import CommandRouter
+
+                    _router = CommandRouter()
+                    _tool_name, _params = _router.route_command(req.command, session_context)
+                    if _tool_name in {"session_run_io_summary"}:
+                        broker = _get_execution_broker()
+                        result = await broker.execute_tool(
+                            ExecutionRequest(
+                                tool_name=_tool_name,
+                                arguments=_params or {},
+                                session_id=req.session_id,
+                                original_command=req.command,
+                                session_context=session_context,
+                            )
+                        )
+                        history_manager.add_history_entry(
+                            req.session_id,
+                            req.command,
+                            _tool_name,
+                            result,
+                            metadata={
+                                "tool_args": _params or {},
+                                "inputs": result.get("inputs") if isinstance(result, dict) else None,
+                                "outputs": [],
+                                "produced_artifacts": result.get("artifacts") if isinstance(result, dict) else None,
+                                "run_id": (result.get("result", {}) or {}).get("run_id") if isinstance(result, dict) else None,
+                                "parent_run_id": (result.get("result", {}) or {}).get("parent_run_id") if isinstance(result, dict) else None,
+                                "mcp_route": "/execute",
+                            },
+                        )
+                        standard_response = build_standard_response(
+                            prompt=req.command,
+                            tool=_tool_name,
+                            result=result,
+                            session_id=req.session_id,
+                            mcp_route="/execute",
+                            success=True if not isinstance(result, dict) else result.get("status", "success") != "error",
+                        )
+                        return CustomJSONResponse(standard_response)
+                except Exception:
+                    pass
+
                 standard_response = build_standard_response(
                     prompt=req.command,
                     tool="handle_natural_command",
@@ -1255,6 +1461,16 @@ async def execute(req: CommandRequest, request: Request):
                     req.command,
                     "__plan__",
                     result,
+                    metadata={
+                        "tool_args": {"plan": plan, "session_id": req.session_id},
+                        "inputs": result.get("inputs") if isinstance(result, dict) else None,
+                        "outputs": [],
+                        "produced_artifacts": result.get("artifacts") if isinstance(result, dict) else None,
+                        "job_id": (result.get("result", {}) or {}).get("job_id") if isinstance(result, dict) else None,
+                        "run_id": (result.get("result", {}) or {}).get("run_id") if isinstance(result, dict) else None,
+                        "parent_run_id": (result.get("result", {}) or {}).get("parent_run_id") if isinstance(result, dict) else None,
+                        "mcp_route": "/execute",
+                    },
                 )
 
                 standard_response = build_standard_response(
@@ -1306,7 +1522,17 @@ async def execute(req: CommandRequest, request: Request):
                 req.session_id,
                 req.command,
                 tool_name,
-                result
+                result,
+                metadata={
+                    "tool_args": parameters,
+                    "inputs": result.get("inputs") if isinstance(result, dict) else None,
+                    "outputs": [],
+                    "produced_artifacts": result.get("artifacts") if isinstance(result, dict) else None,
+                    "job_id": (result.get("result", {}) or {}).get("job_id") if isinstance(result, dict) else None,
+                    "run_id": (result.get("result", {}) or {}).get("run_id") if isinstance(result, dict) else None,
+                    "parent_run_id": (result.get("result", {}) or {}).get("parent_run_id") if isinstance(result, dict) else None,
+                    "mcp_route": "/execute",
+                }
             )
             
             history_done_time = time.time()
@@ -2301,6 +2527,29 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
             "result": inv,
         }
 
+    # ── Local iteration demo tools (no AWS required) ─────────────────────────
+    if tool_name in {
+        "local_demo_scatter_plot",
+        "local_demo_plot_script",
+        "local_update_scatter_x_scale",
+        "local_edit_visualization",
+        "local_edit_and_rerun_script",
+        "session_run_io_summary",
+    }:
+        from backend import agent_tools as _agent_tools
+
+        tool_obj = getattr(_agent_tools, tool_name, None)
+        if tool_obj is None:
+            raise ValueError(f"Unknown tool: {tool_name}")
+        # LangChain StructuredTool (@tool) supports invoke()
+        if hasattr(tool_obj, "invoke"):
+            return tool_obj.invoke(arguments)
+        if hasattr(tool_obj, "func"):
+            return tool_obj.func(**arguments)
+        if callable(tool_obj):
+            return tool_obj(**arguments)
+        raise ValueError(f"Tool not callable: {tool_name}")
+
     if tool_name == "sequence_alignment":
         import alignment
         return alignment.run_alignment(arguments.get("sequences", ""))
@@ -2460,18 +2709,25 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
     elif tool_name == "read_merging":
         # Directly use the existing read_merging implementation
         # The execution broker already handles routing decisions (EMR vs local) before calling this
-        forward_reads = arguments.get("forward_reads", "")
-        reverse_reads = arguments.get("reverse_reads", "")
-        output = arguments.get("output")
-        min_overlap = arguments.get("min_overlap", 12)
+        forward_reads = arguments.get("forward_reads") or ""
+        reverse_reads = arguments.get("reverse_reads") or ""
+        output = arguments.get("output") or None
+        min_overlap = arguments.get("min_overlap") or 12
+
+        if not forward_reads and not reverse_reads:
+            return {
+                "status": "error",
+                "error": "Missing required parameters: forward_reads and reverse_reads",
+                "text": "Please provide forward_reads and reverse_reads paths or FASTQ content.",
+            }
 
         # Demo-mode: if inputs are S3 demo paths return simulated merging results
         _demo_buckets_merge = ("helix-test", "demo", "sample-data", "example")
         _is_s3_demo_merge = any(
-            db in (forward_reads or "").lower() or db in (reverse_reads or "").lower()
+            db in forward_reads.lower() or db in reverse_reads.lower()
             for db in _demo_buckets_merge
         ) and (
-            (forward_reads or "").startswith("s3://") or (reverse_reads or "").startswith("s3://")
+            forward_reads.startswith("s3://") or reverse_reads.startswith("s3://")
         )
         if os.getenv("HELIX_DEMO_MODE", "0") == "1" or _is_s3_demo_merge:
             import random as _rnd
@@ -2501,10 +2757,10 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
             }
 
         import read_merging
-        
+
         # Check if inputs are S3 paths
         is_s3_path = (forward_reads.startswith("s3://") or reverse_reads.startswith("s3://"))
-        
+
         # Check if it looks like FASTQ content (starts with @ or contains newlines with @)
         is_fastq_content = (forward_reads.startswith("@") or reverse_reads.startswith("@") or
                            "\n@" in forward_reads or "\n@" in reverse_reads)

@@ -96,8 +96,8 @@ def run_read_merging_raw(
 
 def _parse_s3_path(s3_path: str) -> Tuple[str, str]:
     """Parse S3 path into bucket and key."""
-    if not s3_path.startswith("s3://"):
-        raise ValueError(f"Invalid S3 path: {s3_path}")
+    if not s3_path or not s3_path.startswith("s3://"):
+        raise ValueError(f"Invalid S3 path: {s3_path!r}")
     path_without_prefix = s3_path[5:]
     parts = path_without_prefix.split("/", 1)
     bucket = parts[0]
