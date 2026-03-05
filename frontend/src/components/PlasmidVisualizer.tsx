@@ -37,6 +37,36 @@ function convertFeaturesToAnnotations(features: PlasmidFeature[]) {
 
 // Component for displaying plasmid data directly (used in command results)
 export const PlasmidDataVisualizer: React.FC<PlasmidDataVisualizerProps> = ({ data }) => {
+  // Validate data before rendering
+  if (!data) {
+    return (
+      <div className="alert alert-warning">
+        <p>No plasmid data provided.</p>
+      </div>
+    );
+  }
+  
+  // Validate sequence - SeqViz requires a non-empty string
+  const sequence = data.sequence;
+  if (!sequence || typeof sequence !== 'string' || sequence.length === 0) {
+    return (
+      <Card>
+        <Card.Header>
+          <h6>{data.name || 'Plasmid'} - {data.description || 'No description'}</h6>
+        </Card.Header>
+        <Card.Body>
+          <div className="alert alert-warning">
+            <p><strong>Invalid sequence data:</strong> Sequence is missing or invalid.</p>
+            <details>
+              <summary>Debug Info</summary>
+              <pre>{JSON.stringify(data, null, 2)}</pre>
+            </details>
+          </div>
+        </Card.Body>
+      </Card>
+    );
+  }
+  
   const features = data.features || [];
   const annotations = convertFeaturesToAnnotations(features);
   const [viewerType, setViewerType] = React.useState<'circular' | 'linear' | 'both'>('circular');
@@ -44,21 +74,23 @@ export const PlasmidDataVisualizer: React.FC<PlasmidDataVisualizerProps> = ({ da
   return (
     <Card>
       <Card.Header>
-        <h6>{data.name} - {data.description}</h6>
+        <h6>{data.name || 'Plasmid'} - {data.description || 'No description'}</h6>
       </Card.Header>
       <Card.Body>
         <div style={{ marginBottom: 20 }}>
-          <strong>Name:</strong> {data.name}<br />
-          <strong>Size:</strong> {data.size} bp<br />
-          <strong>Sequence:</strong> {data.sequence}<br />
+          <strong>Name:</strong> {data.name || 'N/A'}<br />
+          <strong>Size:</strong> {data.size || sequence.length} bp<br />
+          <strong>Sequence Length:</strong> {sequence.length} bp<br />
           <strong>Features:</strong> {features.length}
-          <ul>
-            {features.map((feature, idx) => (
-              <li key={idx}>
-                <strong>{feature.name}</strong> ({feature.type}): {feature.description || ''} [<span>start: {feature.start}, end: {feature.end}</span>]
-              </li>
-            ))}
-          </ul>
+          {features.length > 0 && (
+            <ul>
+              {features.map((feature, idx) => (
+                <li key={idx}>
+                  <strong>{feature.name}</strong> ({feature.type}): {feature.description || ''} [<span>start: {feature.start}, end: {feature.end}</span>]
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
         
         {/* Viewer Type Selector */}
@@ -81,8 +113,9 @@ export const PlasmidDataVisualizer: React.FC<PlasmidDataVisualizerProps> = ({ da
         
         <div style={{ height: '500px', border: '1px solid #ccc', borderRadius: '8px', overflow: 'hidden' }}>
           <SeqViz
-            name={data.name}
-            seq={data.sequence}
+            name={data.name || 'Plasmid'}
+            seq={sequence}
+            seqType="dna"
             annotations={annotations}
             viewer={viewerType}
             style={{ width: '100%', height: '100%' }}
@@ -151,20 +184,35 @@ export const PlasmidRepresentativesVisualizer: React.FC<{
       </div>
       
       {/* Selected Plasmid Visualization */}
-      {plasmidResults[selectedPlasmid] && (
-        <div>
-          <h6>Plasmid: {plasmidResults[selectedPlasmid].representative_name}</h6>
-          <div style={{ height: '500px', border: '1px solid #ccc', borderRadius: '8px', overflow: 'hidden' }}>
-            <SeqViz
-              name={plasmidResults[selectedPlasmid].plasmid_data.name}
-              seq={plasmidResults[selectedPlasmid].plasmid_data.sequence}
-              annotations={convertFeaturesToAnnotations(plasmidResults[selectedPlasmid].plasmid_data.features)}
-              viewer={viewerType}
-              style={{ width: '100%', height: '100%' }}
-            />
+      {plasmidResults[selectedPlasmid] && (() => {
+        const selectedResult = plasmidResults[selectedPlasmid];
+        const sequence = selectedResult?.plasmid_data?.sequence;
+        const isValidSequence = sequence && typeof sequence === 'string' && sequence.length > 0;
+        
+        if (!isValidSequence) {
+          return (
+            <div className="alert alert-warning">
+              <p><strong>Invalid sequence data:</strong> Sequence is missing or invalid for {selectedResult.representative_name}.</p>
+            </div>
+          );
+        }
+        
+        return (
+          <div>
+            <h6>Plasmid: {selectedResult.representative_name}</h6>
+            <div style={{ height: '500px', border: '1px solid #ccc', borderRadius: '8px', overflow: 'hidden' }}>
+              <SeqViz
+                name={selectedResult.plasmid_data.name}
+                seq={sequence}
+                seqType="dna"
+                annotations={convertFeaturesToAnnotations(selectedResult.plasmid_data.features || [])}
+                viewer={viewerType}
+                style={{ width: '100%', height: '100%' }}
+              />
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
       
       {/* Summary Table */}
       <div className="mt-3">

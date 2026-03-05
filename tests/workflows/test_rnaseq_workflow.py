@@ -384,8 +384,7 @@ def main():
         sys.exit(1)
     
     # Load FASTQ files
-    # Go up from tests/workflows to project root
-    base_dir = Path(__file__).parent.parent.parent
+    base_dir = Path(__file__).parent.parent.parent  # Go up to project root
     r1_file = base_dir / "data" / "rnaseq_demo" / "sample_R1_realistic.fastq"
     r2_file = base_dir / "data" / "rnaseq_demo" / "sample_R2_realistic.fastq"
     

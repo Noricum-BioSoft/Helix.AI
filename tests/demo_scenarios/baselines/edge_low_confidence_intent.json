@@ -1,0 +1,49 @@
+{
+  "scenario_id": "edge_low_confidence_intent",
+  "timestamp": "2026-01-17T17:15:20.407973",
+  "agent_sequence": [
+    "IntentDetector",
+    "BioinformaticsGuru"
+  ],
+  "contracts": [
+    {
+      "agent": "IntentDetector",
+      "contract_type": "IntentResult",
+      "data": {
+        "intent": "ask",
+        "confidence": 0.35,
+        "clarifying_questions": [
+          "Could you provide more details about what you want to do?",
+          "What type of data are you working with?"
+        ],
+        "rationale": "Mock classification for: Do something with my sequencing data"
+      }
+    },
+    {
+      "agent": "BioinformaticsGuru",
+      "contract_type": "Answer",
+      "data": {
+        "text": "Mock answer to: Do something with my sequencing data. This is a simulated response covering RNA sequencing DNA analysis transcriptome and related bioinformatics concepts with sufficient detail for validation.",
+        "citations": [],
+        "followups": [],
+        "suggested_next_actions": []
+      }
+    }
+  ],
+  "validation_result": {
+    "passed": true,
+    "issues": [],
+    "summary": "All validations passed \u2713"
+  },
+  "duration_ms": 0,
+  "errors": [],
+  "metadata": {
+    "category": "edge",
+    "tags": [
+      "edge-case",
+      "low-confidence",
+      "clarification"
+    ],
+    "mock_mode": true
+  }
+}

@@ -1,0 +1,60 @@
+# The manifest for the "backend" service.
+# Read the full specification for the "Load Balanced Web Service" type at:
+#  https://aws.github.io/copilot-cli/docs/manifest/lb-web-service/
+
+# Your service name will be used in naming your resources like log groups, ECS services, etc.
+name: backend
+type: Load Balanced Web Service
+
+# Distribute traffic to your service.
+http:
+  # Requests to this path will be forwarded to your service.
+  # To match all requests you can use the "/" path.
+  path: '/'
+  # Health check path for the backend service
+  healthcheck: '/health'
+
+# Configuration for your containers and service.
+image:
+  # Docker build arguments. For additional overrides: https://aws.github.io/copilot-cli/docs/manifest/lb-web-service/#image-build
+  build:
+    dockerfile: backend/Dockerfile
+    context: .
+  # Port exposed through your container to route traffic to it.
+  port: 8001
+
+cpu: 1024      # Number of CPU units for the task (1 vCPU).
+memory: 2048   # Amount of memory in MiB used by the task (2GB).
+platform: linux/x86_64  # See https://aws.github.io/copilot-cli/docs/manifest/lb-web-service/#platform
+count: 1       # Number of tasks that should be running in your service.
+exec: true     # Enable running commands in your container.
+network:
+  connect: true # Enable Service Connect for intra-environment traffic between services.
+
+# storage:
+  # readonly_fs: true       # Limit to read-only access to mounted root filesystems.
+
+# Optional fields for more advanced use-cases.
+#
+variables:                    # Pass environment variables as key value pairs.
+  PYTHONUNBUFFERED: "1"
+
+secrets:                      # Pass secrets from AWS Secrets Manager or SSM Parameter Store
+  # Using full ARN to force Secrets Manager (avoids SSM lookup)
+  OPENAI_API_KEY: arn:aws:secretsmanager:us-west-1:794270057041:secret:helix-ai-production-OPENAI_API_KEY-ihfdwn
+  DEEPSEEK_API_KEY: arn:aws:secretsmanager:us-west-1:794270057041:secret:helix-ai-production-DEEPSEEK_API_KEY-PieE0i
+  # 
+  # To store keys, run:
+  #   ./scripts/aws/setup-copilot-api-keys.sh
+  # Or manually:
+  #   aws secretsmanager create-secret \
+  #     --name helix-ai-production-OPENAI_API_KEY \
+  #     --secret-string "your-key-here" \
+  #     --region us-west-1
+
+# You can override any of the values defined above by environment.
+#environments:
+#  test:
+#    count: 2               # Number of tasks to run for the "test" environment.
+#    deployment:            # The deployment strategy for the "test" environment.
+#       rolling: 'recreate' # Stops existing tasks before new ones are started for faster deployments.

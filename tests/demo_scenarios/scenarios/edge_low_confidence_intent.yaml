@@ -1,0 +1,34 @@
+metadata:
+  id: edge_low_confidence_intent
+  category: edge
+  description: "Ambiguous request resulting in low intent confidence"
+  tags: [edge-case, low-confidence, clarification]
+  requires_mock: true
+
+input:
+  user_prompt: "Do something with my sequencing data"
+  session_context:
+    uploaded_files:
+      - "s3://helix-data/demo/sample.fastq"
+
+expected_behavior:
+  # System should still classify intent but with low confidence
+  agent_sequence:
+    - IntentDetector
+    - BioinformaticsGuru
+  
+  intent:
+    type: "ask"
+    confidence_min: 0.3  # Lower threshold for edge case
+  
+  contracts:
+    - agent: IntentDetector
+      output_type: IntentResult
+      validations:
+        - field: confidence
+          less_than: 0.7  # Expect low confidence
+        - field: clarifying_questions
+          not_empty: true  # Should ask for clarification
+  
+  policy_checks:
+    - strict_role_separation

@@ -30,7 +30,13 @@ echo "Ensuring ECR repository ${REPO_NAME} exists..."
 aws ecr describe-repositories --repository-names "${REPO_NAME}" --region "$REGION" >/dev/null 2>&1 || \
   aws ecr create-repository --repository-name "${REPO_NAME}" --region "$REGION" >/dev/null
 
+# Get the script directory and project root
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+
 echo "Building backend image..."
+# Change to project root to ensure Docker build context is correct
+cd "${PROJECT_ROOT}"
 docker build -f backend/Dockerfile -t "${REPO_NAME}:${IMAGE_TAG}" .
 
 echo "Tagging image..."

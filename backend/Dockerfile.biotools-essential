@@ -1,0 +1,146 @@
+# syntax=docker/dockerfile:1.7
+# =============================================================================
+# Helix.AI Essential Biotools Docker Image
+# =============================================================================
+# This image contains only the essential tools needed for RNA-seq workflow:
+# - FastQC: Quality assessment
+# - Trimmomatic: Read trimming
+# - STAR: RNA-seq alignment
+# - featureCounts: Read counting
+# - R with DESeq2: Differential expression analysis
+# - Python bioinformatics libraries
+# =============================================================================
+
+FROM python:3.11-slim
+
+# ------------------------------
+# Base System Dependencies
+# ------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    ca-certificates \
+    wget \
+    unzip \
+    bzip2 \
+    gzip \
+    git \
+    default-jre \
+    perl \
+    libz-dev \
+    libbz2-dev \
+    liblzma-dev \
+    libcurl4-openssl-dev \
+    libncurses5-dev \
+    libxml2-dev \
+    libfontconfig1-dev \
+    libharfbuzz-dev \
+    libfribidi-dev \
+    libfreetype6-dev \
+    libpng-dev \
+    libtiff5-dev \
+    libjpeg-dev \
+    r-base \
+    r-base-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# ------------------------------
+# FastQC (Quality Control)
+# ------------------------------
+RUN FASTQC_VERSION="0.12.1" && \
+    wget https://www.bioinformatics.babraham.ac.uk/projects/fastqc/fastqc_v${FASTQC_VERSION}.zip -O /tmp/fastqc.zip && \
+    unzip /tmp/fastqc.zip -d /opt/ && \
+    chmod +x /opt/FastQC/fastqc && \
+    ln -s /opt/FastQC/fastqc /usr/local/bin/fastqc && \
+    rm /tmp/fastqc.zip
+
+# ------------------------------
+# Trimmomatic (Read Trimming)
+# ------------------------------
+RUN TRIMMOMATIC_VERSION="0.39" && \
+    wget http://www.usadellab.org/cms/uploads/supplementary/Trimmomatic/Trimmomatic-${TRIMMOMATIC_VERSION}.zip -O /tmp/trimmomatic.zip && \
+    unzip /tmp/trimmomatic.zip -d /opt/ && \
+    ln -s /opt/Trimmomatic-${TRIMMOMATIC_VERSION}/trimmomatic-${TRIMMOMATIC_VERSION}.jar /opt/trimmomatic.jar && \
+    echo '#!/bin/bash\njava -jar /opt/trimmomatic.jar "$@"' > /usr/local/bin/trimmomatic && \
+    chmod +x /usr/local/bin/trimmomatic && \
+    rm /tmp/trimmomatic.zip
+
+# ------------------------------
+# SAMtools (SAM/BAM manipulation)
+# ------------------------------
+RUN SAMTOOLS_VERSION="1.19.2" && \
+    wget https://github.com/samtools/samtools/releases/download/${SAMTOOLS_VERSION}/samtools-${SAMTOOLS_VERSION}.tar.bz2 -O /tmp/samtools.tar.bz2 && \
+    tar -xjf /tmp/samtools.tar.bz2 -C /tmp/ && \
+    cd /tmp/samtools-${SAMTOOLS_VERSION} && \
+    ./configure --prefix=/usr/local && \
+    make && make install && \
+    cd / && rm -rf /tmp/samtools*
+
+# ------------------------------
+# STAR (RNA-seq Aligner) - CRITICAL!
+# ------------------------------
+RUN STAR_VERSION="2.7.11b" && \
+    wget https://github.com/alexdobin/STAR/archive/refs/tags/${STAR_VERSION}.tar.gz -O /tmp/star.tar.gz && \
+    tar -xzf /tmp/star.tar.gz -C /tmp/ && \
+    cp /tmp/STAR-${STAR_VERSION}/bin/Linux_x86_64/STAR /usr/local/bin/ && \
+    rm -rf /tmp/star* /tmp/STAR*
+
+# ------------------------------
+# Subread (featureCounts) - CRITICAL!
+# ------------------------------
+RUN SUBREAD_VERSION="2.0.6" && \
+    wget https://sourceforge.net/projects/subread/files/subread-${SUBREAD_VERSION}/subread-${SUBREAD_VERSION}-Linux-x86_64.tar.gz/download -O /tmp/subread.tar.gz && \
+    tar -xzf /tmp/subread.tar.gz -C /opt/ && \
+    ln -s /opt/subread-${SUBREAD_VERSION}-Linux-x86_64/bin/* /usr/local/bin/ && \
+    rm /tmp/subread.tar.gz
+
+# ------------------------------
+# R Bioconductor Packages
+# ------------------------------
+RUN R -e "install.packages(c('BiocManager', 'tidyverse', 'ggplot2', 'pheatmap'), repos='https://cloud.r-project.org/')" && \
+    R -e "BiocManager::install(c('DESeq2', 'edgeR', 'limma'))"
+
+# ------------------------------
+# Python Requirements
+# ------------------------------
+COPY backend/requirements.txt /app/backend/requirements.txt
+RUN pip install --upgrade pip && pip install -r /app/backend/requirements.txt
+
+# ------------------------------
+# Python Bioinformatics Libraries
+# ------------------------------
+RUN pip install --no-cache-dir \
+    biopython \
+    pysam \
+    HTSeq
+
+# ------------------------------
+# Application Files
+# ------------------------------
+COPY backend /app/backend
+COPY agents /app/agents
+COPY tools /app/tools
+COPY shared /app/shared
+
+# ------------------------------
+# Environment
+# ------------------------------
+ENV PYTHONPATH=/app:$PYTHONPATH
+ENV PATH=/usr/local/bin:$PATH
+
+# Verify installations
+RUN echo "=== Verifying tool installations ===" && \
+    fastqc --version || echo "FastQC not found" && \
+    trimmomatic -version || echo "Trimmomatic not found" && \
+    samtools --version || echo "SAMtools not found" && \
+    STAR --version || echo "STAR not found" && \
+    featureCounts -v || echo "featureCounts not found" && \
+    R --version || echo "R not found" && \
+    python --version
+
+WORKDIR /app
+
+# Default command
+CMD ["python", "-m", "backend.main_with_mcp"]

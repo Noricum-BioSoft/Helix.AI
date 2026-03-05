@@ -1,0 +1,52 @@
+metadata:
+  id: real_fastqc_small
+  category: execute
+  description: "Real FastQC execution on small dataset (should run locally)"
+  tags: [real-execution, fastqc, small-dataset, demo, local, slow]
+  author: "Demo System"
+  requires_mock: false  # This will execute real workflow
+  # Note: Marked as 'slow' - run separately with: pytest -m slow
+
+input:
+  user_prompt: "Run FastQC quality control on my test sequencing samples"
+  session_context:
+    uploaded_files:
+      # Actual small test dataset - structured format expected by backend
+      - name: "test_mate_R1.fq"
+        uri: "s3://noricum-ngs-data/datasets/GRCh38.p12.MafHi/test/test_mate_R1.fq"
+        size: "10MB"
+        format: "fastq"
+      - name: "test_mate_R2.fq"
+        uri: "s3://noricum-ngs-data/datasets/GRCh38.p12.MafHi/test/test_mate_R2.fq"
+        size: "10MB"
+        format: "fastq"
+    dataset_info:
+      reference_genome: "GRCh38.p12"
+      sequencing_platform: "Illumina"
+      read_type: "paired_end"
+      format: "fastq"
+  environment_vars:
+    AWS_REGION: "us-west-2"
+
+expected_behavior:
+  # Backend uses tool mapping mode - validates tool identification only
+  # Full workflow execution (InfraExpert, ExecutionBroker, Visualizer) happens separately
+  agent_sequence:
+    - BioinformaticsExecutor
+  
+  intent:
+    type: "execute"
+    confidence_min: 0.8
+  
+  contracts:
+    - agent: BioinformaticsExecutor
+      output_type: ToolMapping
+      validations:
+        - field: tool_name
+          equals: "fastqc_quality_analysis"
+
+  policy_checks: []  # Tool mapping mode skips policy checks (enforced at execution time)
+  
+  # Real execution timing
+  min_duration_ms: 0          # Tool mapping is fast
+  max_duration_ms: 30000      # Max 30 seconds for LLM call

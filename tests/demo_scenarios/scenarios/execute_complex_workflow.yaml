@@ -1,0 +1,61 @@
+metadata:
+  id: execute_complex_workflow
+  category: execute
+  description: "Complex multi-step workflow with multiple tools"
+  tags: [execute, complex, multi-step]
+  requires_mock: true
+
+input:
+  user_prompt: "Run a complete RNA-seq analysis: quality control, alignment, and differential expression"
+  session_context:
+    uploaded_files:
+      - "s3://helix-data/demo/sample1_R1.fastq"
+      - "s3://helix-data/demo/sample1_R2.fastq"
+      - "s3://helix-data/demo/sample2_R1.fastq"
+      - "s3://helix-data/demo/sample2_R2.fastq"
+    metadata:
+      condition1: ["sample1"]
+      condition2: ["sample2"]
+
+expected_behavior:
+  agent_sequence:
+    - IntentDetector
+    - BioinformaticsExecutor
+    - InfrastructureExpert
+    - ExecutionBroker
+    - DataVisualizer
+  
+  intent:
+    type: "execute"
+    confidence_min: 0.8
+  
+  contracts:
+    - agent: IntentDetector
+      output_type: IntentResult
+      validations:
+        - field: intent
+          equals: "execute"
+        - field: confidence
+          greater_than: 0.8
+    
+    - agent: BioinformaticsExecutor
+      output_type: WorkflowPlan
+      validations:
+        - field: steps
+          min_length: 3  # QC, alignment, DE - at least 3 steps
+        - field: metadata.scale
+          not_empty: true
+    
+    - agent: InfrastructureExpert
+      output_type: InfraDecisionContract
+      validations:
+        - field: recommended_environment
+          not_empty: true
+        - field: confidence_score
+          greater_than: 0.6
+
+  policy_checks:
+    - strict_role_separation
+    - confidence_thresholds
+  
+  max_duration_ms: 15000

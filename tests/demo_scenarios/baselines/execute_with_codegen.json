@@ -1,0 +1,117 @@
+{
+  "scenario_id": "execute_with_codegen",
+  "timestamp": "2026-01-17T17:15:20.413332",
+  "agent_sequence": [
+    "IntentDetector",
+    "BioinformaticsExecutor",
+    "InfrastructureExpert",
+    "CodeGenerator",
+    "ExecutionBroker",
+    "DataVisualizer"
+  ],
+  "contracts": [
+    {
+      "agent": "IntentDetector",
+      "contract_type": "IntentResult",
+      "data": {
+        "intent": "execute",
+        "confidence": 0.8,
+        "clarifying_questions": [],
+        "rationale": "Mock classification for: Perform read merging on my paired-end reads using a custom quality threshold of 30"
+      }
+    },
+    {
+      "agent": "BioinformaticsExecutor",
+      "contract_type": "WorkflowPlan",
+      "data": {
+        "version": "v1",
+        "metadata": {
+          "scale": "medium",
+          "parallelism": "none",
+          "reproducibility": "medium",
+          "expected_outputs": [],
+          "risk_flags": [],
+          "missing_info": []
+        },
+        "inputs": [],
+        "steps": [
+          {
+            "tool": "mock_tool",
+            "args": {}
+          }
+        ]
+      }
+    },
+    {
+      "agent": "InfrastructureExpert",
+      "contract_type": "InfraDecisionContract",
+      "data": {
+        "recommended_environment": "EMR",
+        "confidence_score": 0.85,
+        "decision_summary": "Mock infrastructure decision for EMR execution",
+        "constraints": [],
+        "cost_analysis": null,
+        "alternatives": [],
+        "warnings": [],
+        "assumptions": []
+      }
+    },
+    {
+      "agent": "CodeGenerator",
+      "contract_type": "ExecutionSpec",
+      "data": {
+        "target": "emr",
+        "container_image": null,
+        "entrypoint": null,
+        "command": [
+          "mock",
+          "command"
+        ],
+        "env": {},
+        "inputs": [],
+        "outputs": [],
+        "resources": {},
+        "retry_strategy": {},
+        "notes": []
+      }
+    },
+    {
+      "agent": "ExecutionBroker",
+      "contract_type": "ExecutionResult",
+      "data": {
+        "status": "succeeded",
+        "job_id": "mock_job_123",
+        "environment": null,
+        "logs_uri": null,
+        "artifacts": [],
+        "metrics": {},
+        "error": null
+      }
+    },
+    {
+      "agent": "DataVisualizer",
+      "contract_type": "VisualizationArtifacts",
+      "data": {
+        "summary": "Mock visualization created successfully",
+        "artifacts": [],
+        "warnings": []
+      }
+    }
+  ],
+  "validation_result": {
+    "passed": true,
+    "issues": [],
+    "summary": "All validations passed \u2713"
+  },
+  "duration_ms": 0,
+  "errors": [],
+  "metadata": {
+    "category": "execute",
+    "tags": [
+      "execute",
+      "codegen",
+      "custom-tools"
+    ],
+    "mock_mode": true
+  }
+}

@@ -1,0 +1,24 @@
+{"id":"bio.intent.qa.fastqc_interpretation","tags":["intent","qa","fastqc"],"input":{"text":"How do I interpret the FastQC per-base sequence quality plot?"},"expect":{"intent":"qa"}}
+{"id":"bio.intent.qa.read_trimming_vs_filtering","tags":["intent","qa","trimming"],"input":{"text":"What is the difference between adapter trimming and quality filtering?"},"expect":{"intent":"qa"}}
+{"id":"bio.intent.qa.read_merging_when","tags":["intent","qa","read_merging"],"input":{"text":"How do I decide whether to merge paired-end reads instead of keeping them separate?"},"expect":{"intent":"qa"}}
+{"id":"bio.intent.qa.alignment_method_choice","tags":["intent","qa","alignment"],"input":{"text":"Which multiple sequence alignment tool should I use for ~200 protein sequences and why?"},"expect":{"intent":"qa"}}
+{"id":"bio.intent.qa.phylogeny_bootstrap","tags":["intent","qa","phylogeny"],"input":{"text":"Why do we use bootstrap support in phylogenetic trees?"},"expect":{"intent":"qa"}}
+{"id":"bio.intent.qa.bulk_rnaseq_basic","tags":["intent","qa","rnaseq"],"input":{"text":"What does a log2 fold-change mean in RNA-seq differential expression?"},"expect":{"intent":"qa"}}
+{"id":"bio.intent.qa.single_cell_qc","tags":["intent","qa","single_cell"],"input":{"text":"How do I decide mitochondrial percent thresholds in single-cell QC?"},"expect":{"intent":"qa"}}
+{"id":"bio.intent.qa.go_term_meaning","tags":["intent","qa","ontology"],"input":{"text":"What does GO:0008150 represent?"},"expect":{"intent":"qa"}}
+{"id":"bio.intent.qa.uniprot_entry","tags":["intent","qa","uniprot"],"input":{"text":"What information is typically contained in a UniProt entry?"},"expect":{"intent":"qa"}}
+{"id":"bio.intent.qa.ncbi_accession","tags":["intent","qa","ncbi"],"input":{"text":"How are RefSeq accession numbers formatted?"},"expect":{"intent":"qa"}}
+
+{"id":"bio.intent.execute.fastqc_s3","tags":["intent","execute","fastqc","s3"],"input":{"text":"Run FastQC on s3://my-bucket/run42/sample_R1.fastq.gz and s3://my-bucket/run42/sample_R2.fastq.gz"},"expect":{"intent":"execute"}}
+{"id":"bio.intent.execute.trim_fastq","tags":["intent","execute","trimming"],"input":{"text":"Trim adapters from reads.fastq and remove low-quality bases"},"expect":{"intent":"execute"}}
+{"id":"bio.intent.execute.merge_fastq_paths","tags":["intent","execute","read_merging","paths"],"input":{"text":"Merge paired-end reads from /data/sample_R1.fq and /data/sample_R2.fq with minimum overlap 15"},"expect":{"intent":"execute"}}
+{"id":"bio.intent.execute.align_inline_fasta","tags":["intent","execute","alignment"],"input":{"text":"Align these sequences:\n>seq1\nATGC\n>seq2\nATGA"},"expect":{"intent":"execute"}}
+{"id":"bio.intent.execute.phylogeny_from_fasta","tags":["intent","execute","phylogeny"],"input":{"text":"Build a phylogenetic tree from /tmp/aligned.fasta"},"expect":{"intent":"execute"}}
+{"id":"bio.intent.execute.bulk_rnaseq_csv","tags":["intent","execute","rnaseq"],"input":{"text":"Run bulk RNA-seq analysis using counts.csv and samples.csv with design ~condition"},"expect":{"intent":"execute"}}
+{"id":"bio.intent.execute.rnaseq_factorial_no_paths","tags":["intent","execute","rnaseq","factorial"],"input":{"text":"You are analyzing an RNA-seq transcriptome dataset from a mouse study. This is a 2x2 factorial design (infection x time). Perform differential expression using DESeq2. Include PCA, clustering, and sample distance heatmap."},"expect":{"intent":"execute"}}
+{"id":"bio.intent.execute.rnaseq_deseq2_design","tags":["intent","execute","rnaseq"],"input":{"text":"Analyze RNA-seq data with a two-factor factorial design: infection status x time point (11 dpi, 33 dpi). Fit a model with interaction term using DESeq2."},"expect":{"intent":"execute"}}
+{"id":"bio.intent.qa.rnaseq_factorial_question","tags":["intent","qa","rnaseq","factorial"],"input":{"text":"How do I model a 2x2 factorial RNA-seq experiment with infection status and time point as factors in DESeq2?"},"expect":{"intent":"qa"}}
+{"id":"bio.intent.execute.single_cell_file","tags":["intent","execute","single_cell"],"input":{"text":"Run single cell analysis on input: pbmc.h5 and annotate cell types"},"expect":{"intent":"execute"}}
+{"id":"bio.intent.execute.fetch_ncbi_accession","tags":["intent","execute","ncbi"],"input":{"text":"Fetch sequence for NM_000546"},"expect":{"intent":"execute"}}
+{"id":"bio.intent.execute.query_uniprot","tags":["intent","execute","uniprot"],"input":{"text":"Query UniProt P04637 and return FASTA"},"expect":{"intent":"execute"}}
+{"id":"bio.intent.execute.lookup_go","tags":["intent","execute","ontology"],"input":{"text":"Fetch details for GO:0008150"},"expect":{"intent":"execute"}}

@@ -1,0 +1,62 @@
+metadata:
+  id: execute_single_cell_analysis
+  category: execute
+  description: "Single-cell RNA-seq analysis workflow"
+  tags: [execute, single-cell, analysis]
+  requires_mock: true
+
+input:
+  user_prompt: "Perform single-cell clustering and marker gene identification on my 10X data"
+  session_context:
+    uploaded_files:
+      - "s3://helix-data/demo/10x_matrix.mtx"
+      - "s3://helix-data/demo/10x_barcodes.tsv"
+      - "s3://helix-data/demo/10x_genes.tsv"
+
+expected_behavior:
+  agent_sequence:
+    - IntentDetector
+    - BioinformaticsExecutor
+    - InfrastructureExpert
+    - ExecutionBroker
+    - DataVisualizer
+  
+  intent:
+    type: "execute"
+    confidence_min: 0.75
+  
+  contracts:
+    - agent: IntentDetector
+      output_type: IntentResult
+      validations:
+        - field: intent
+          equals: "execute"
+    
+    - agent: BioinformaticsExecutor
+      output_type: WorkflowPlan
+      validations:
+        - field: steps
+          not_empty: true
+        - field: version
+          equals: "v1"
+    
+    - agent: InfrastructureExpert
+      output_type: InfraDecisionContract
+      validations:
+        - field: recommended_environment
+          not_empty: true
+    
+    - agent: ExecutionBroker
+      output_type: ExecutionResult
+      validations:
+        - field: status
+          not_empty: true
+    
+    - agent: DataVisualizer
+      output_type: VisualizationArtifacts
+      validations:
+        - field: summary
+          not_empty: true
+
+  policy_checks:
+    - strict_role_separation

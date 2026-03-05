@@ -2,35 +2,75 @@ name: Deploy to AWS (ECR + S3/CloudFront)
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "version_2.0" ]
   workflow_dispatch:
 
 permissions:
   contents: read
-  id-token: write   # for AWS OIDC
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
   AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
-  ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }} # e.g., helix-backend
+  ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
   S3_BUCKET: ${{ secrets.S3_BUCKET }} # e.g., helix-frontend-bucket
   CLOUDFRONT_DISTRIBUTION_ID: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} # optional
   IMAGE_TAG: latest
 
 jobs:
+  preflight:
+    name: Preflight (secrets/config check)
+    runs-on: ubuntu-latest
+    outputs:
+      deploy_backend: ${{ steps.flags.outputs.deploy_backend }}
+      deploy_frontend: ${{ steps.flags.outputs.deploy_frontend }}
+    steps:
+      - name: Determine whether deploy is enabled
+        id: flags
+        env:
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+        run: |
+          set -euo pipefail
+
+          backend_ok=false
+          if [ -n "${AWS_REGION:-}" ] && [ -n "${AWS_ACCESS_KEY_ID:-}" ] && [ -n "${AWS_SECRET_ACCESS_KEY:-}" ] && [ -n "${ECR_REPOSITORY:-}" ]; then
+            backend_ok=true
+          fi
+
+          frontend_ok=false
+          if [ "${backend_ok}" = "true" ] && [ -n "${S3_BUCKET:-}" ]; then
+            frontend_ok=true
+          fi
+
+          echo "deploy_backend=${backend_ok}" >> "${GITHUB_OUTPUT}"
+          echo "deploy_frontend=${frontend_ok}" >> "${GITHUB_OUTPUT}"
+
+          if [ "${backend_ok}" != "true" ]; then
+            echo "Deploy disabled: missing required AWS/ECR secrets."
+          fi
+
   backend:
     name: Build and Push Backend Image
     runs-on: ubuntu-latest
+    needs: preflight
+    if: ${{ needs.preflight.outputs.deploy_backend == 'true' }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure AWS credentials (OIDC)
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Login to Amazon ECR
         id: login-ecr
@@ -40,16 +80,66 @@ jobs:
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
-          echo "Building backend Docker image..."
-          docker build -f backend/Dockerfile -t ${ECR_REPOSITORY}:${IMAGE_TAG} .
-          docker tag ${ECR_REPOSITORY}:${IMAGE_TAG} ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
-          echo "Pushing image to ECR..."
-          docker push ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
+          echo "Building and pushing backend Docker image for linux/amd64..."
+          docker buildx build --platform linux/amd64 -f backend/Dockerfile -t ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG} --push .
+          echo "Image pushed: ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+
+      - name: Update ECS Service
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECS_CLUSTER_NAME: ${{ secrets.ECS_CLUSTER_NAME }}
+          ECS_SERVICE_NAME: ${{ secrets.ECS_SERVICE_NAME }}
+          ECS_TASK_DEFINITION_FAMILY: ${{ secrets.ECS_TASK_DEFINITION_FAMILY }}
+        run: |
+          # Skip if ECS secrets are not configured
+          if [ -z "$ECS_CLUSTER_NAME" ] || [ -z "$ECS_SERVICE_NAME" ] || [ -z "$ECS_TASK_DEFINITION_FAMILY" ]; then
+            echo "ECS configuration not complete, skipping ECS service update"
+            exit 0
+          fi
+          echo "Updating ECS service with new image..."
+          # Get current task definition
+          TASK_DEF=$(aws ecs describe-task-definition \
+            --task-definition "$ECS_TASK_DEFINITION_FAMILY" \
+            --query 'taskDefinition' \
+            --region "${{ env.AWS_REGION }}" \
+            --output json)
+          
+          # Create new task definition with updated image
+          NEW_TASK_DEF=$(echo "$TASK_DEF" | jq --arg IMAGE "${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}" \
+            '.containerDefinitions[0].image = $IMAGE | del(.taskDefinitionArn) | del(.revision) | del(.status) | del(.requiresAttributes) | del(.compatibilities) | del(.registeredAt) | del(.registeredBy)')
+          
+          # Register new task definition
+          NEW_TASK_DEF_ARN=$(aws ecs register-task-definition \
+            --cli-input-json "$NEW_TASK_DEF" \
+            --region "${{ env.AWS_REGION }}" \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+          
+          echo "New task definition registered: ${NEW_TASK_DEF_ARN}"
+          
+          # Update ECS service
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER_NAME" \
+            --service "$ECS_SERVICE_NAME" \
+            --task-definition "${NEW_TASK_DEF_ARN}" \
+            --force-new-deployment \
+            --region "${{ env.AWS_REGION }}"
+          
+          echo "ECS service update initiated. Waiting for deployment to stabilize..."
+          
+          # Wait for service to stabilize (optional - uncomment if desired)
+          # aws ecs wait services-stable \
+          #   --cluster "$ECS_CLUSTER_NAME" \
+          #   --services "$ECS_SERVICE_NAME" \
+          #   --region "${{ env.AWS_REGION }}"
+          
+          echo "ECS service update complete!"
 
   frontend:
     name: Build and Deploy Frontend to S3/CloudFront
     runs-on: ubuntu-latest
-    needs: backend
+    needs: [preflight, backend]
+    if: ${{ needs.preflight.outputs.deploy_frontend == 'true' }}
 
     steps:
       - name: Checkout
@@ -70,22 +160,33 @@ jobs:
         working-directory: frontend
         env:
           VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
-        run: npm run build
+        run: |
+          # Frontend has a fallback to http://localhost:8001 if VITE_API_BASE_URL is not set
+          npm run build
 
-      - name: Configure AWS credentials (OIDC)
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Sync to S3 (static assets)
         run: |
-          aws s3 sync frontend/dist s3://${S3_BUCKET} --delete --acl public-read --cache-control "public,max-age=31536000,immutable"
-          # Ensure index.html is not cached aggressively
-          aws s3 cp frontend/dist/index.html s3://${S3_BUCKET}/index.html --acl public-read --cache-control "no-cache, no-store, must-revalidate" --content-type "text/html"
+          # Trim any whitespace from bucket name (GitHub secrets sometimes have trailing spaces)
+          BUCKET=$(echo "${S3_BUCKET}" | xargs)
+          echo "Syncing files to S3 bucket: ${BUCKET}"
+          aws s3 sync frontend/dist "s3://${BUCKET}" --delete --cache-control "public,max-age=31536000,immutable"
+          
+      - name: Upload index.html with no-cache headers
+        run: |
+          # Trim any whitespace from bucket name
+          BUCKET=$(echo "${S3_BUCKET}" | xargs)
+          echo "Uploading index.html to S3 bucket: ${BUCKET}"
+          aws s3 cp frontend/dist/index.html "s3://${BUCKET}/index.html" --cache-control "no-cache" --content-type "text/html"
 
       - name: Invalidate CloudFront (optional)
-        if: ${{ env.CLOUDFRONT_DISTRIBUTION_ID != '' }}
+        if: ${{ env.CLOUDFRONT_DISTRIBUTION_ID }}
         run: |
           aws cloudfront create-invalidation --distribution-id ${CLOUDFRONT_DISTRIBUTION_ID} --paths "/*"
 

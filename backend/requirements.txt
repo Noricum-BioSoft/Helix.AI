@@ -6,25 +6,34 @@ python-dotenv
 # Data processing
 pandas
 numpy
-requests
+requests>=2.31.0
+scikit-learn
+matplotlib
 
 # Bioinformatics
-biopython
+biopython>=1.81
 plotly
 ete3
 seaborn
+pydeseq2
 
 # LangChain (for agent functionality)
-langchain
-langchain-community
-langchain-openai
-langchain-deepseek
-langgraph
+# Pin exact versions to ensure reproducible builds across CI/CD environments.
+langchain==0.3.27
+langchain-core==0.3.75
+langchain-community==0.3.29
+langchain-openai==0.3.32
+langchain-deepseek==0.1.4
+langgraph==0.6.7
 
 # Utilities
 markdownify
 tabulate
+boto3
+paramiko  # For SSH/EC2 execution
 
 # Testing
 pytest
 pytest-asyncio
+playwright>=1.40.0
+pytest-playwright>=0.4.3

@@ -431,7 +431,16 @@ def main():
                 actual_result = result.get("result", result)
                 
                 if entry.get("tool") == "mutate_sequence":
+                    # Try multiple paths to find variants
                     variants = actual_result.get("variants", [])
+                    if not variants and "statistics" in actual_result:
+                        stats = actual_result["statistics"]
+                        if isinstance(stats, dict):
+                            variants = stats.get("variants", [])
+                    if not variants and "output" in actual_result:
+                        output = actual_result["output"]
+                        if isinstance(output, dict):
+                            variants = output.get("variants", [])
                     print(f"    Input: DNA sequence")
                     print(f"    Output: {len(variants) if isinstance(variants, list) else 0} variants generated")
                 

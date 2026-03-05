@@ -41,19 +41,8 @@ def _parse_fastq(content: str) -> List[FastqRecord]:
 
 def _quality_trim(sequence: str, quality: str, threshold: int) -> Tuple[str, str]:
     """Trim low-quality bases from the end of a read."""
-    # Ensure quality and sequence have the same length
-    min_length = min(len(sequence), len(quality))
-    if min_length == 0:
-        return "", ""
-    
-    # Trim both to the same length if they differ
-    sequence = sequence[:min_length]
-    quality = quality[:min_length]
-    
-    trim_index = min_length
-    for idx in range(min_length - 1, -1, -1):
-        if idx >= len(quality):
-            break
+    trim_index = len(sequence)
+    for idx in range(len(sequence) - 1, -1, -1):
         q_score = ord(quality[idx]) - PHRED_OFFSET
         if q_score >= threshold:
             break
@@ -62,26 +51,59 @@ def _quality_trim(sequence: str, quality: str, threshold: int) -> Tuple[str, str
 
 
 def _adapter_trim(sequence: str, adapter: str) -> str:
-    """Remove adapter sequence from the end of the sequence."""
+    """
+    Remove adapter sequence from read.
+    Tries multiple strategies:
+    1. Exact match anywhere in sequence
+    2. Adapter at the start (prefix match) - common in reverse reads
+    3. Adapter at the end (suffix match) - common in forward reads
+    4. Partial match at start (first N bases matching adapter start)
+    5. Partial match at end (last N bases matching adapter start)
+    """
     if not adapter:
         return sequence
     
-    # Check if adapter is present (exact match)
+    adapter_len = len(adapter)
+    
+    # Strategy 1: Exact match anywhere
     if adapter in sequence:
-        return sequence.replace(adapter, "")
+        return sequence.replace(adapter, "", 1)  # Replace only first occurrence
     
-    # Also check for adapter at the end (common case)
-    # This handles cases where adapter might be partially present
+    # Strategy 2: Adapter at the start (prefix) - common in reverse reads
+    if sequence.startswith(adapter):
+        return sequence[adapter_len:]
+    
+    # Strategy 3: Adapter at the end (suffix) - common in forward reads
     if sequence.endswith(adapter):
-        return sequence[:-len(adapter)]
+        return sequence[:-adapter_len]
     
-    # Check if sequence ends with a prefix of the adapter (partial adapter contamination)
-    # Remove the longest matching suffix
-    for i in range(len(adapter), 0, -1):
-        if sequence.endswith(adapter[:i]):
-            return sequence[:-i]
+    # Strategy 4: Partial match at start - check if first part of sequence matches start of adapter
+    # This handles cases where the adapter is partially sequenced at the beginning
+    for overlap_len in range(min(adapter_len, len(sequence)), max(3, adapter_len // 2), -1):
+        sequence_prefix = sequence[:overlap_len]
+        adapter_prefix = adapter[:overlap_len]
+        # Allow 1-2 mismatches for quality issues
+        if _sequences_match(sequence_prefix, adapter_prefix, max_mismatches=2):
+            return sequence[overlap_len:]
+    
+    # Strategy 5: Partial match at end - check if last part of sequence matches start of adapter
+    # This handles cases where the adapter is partially sequenced at the end
+    for overlap_len in range(min(adapter_len, len(sequence)), max(3, adapter_len // 2), -1):
+        sequence_suffix = sequence[-overlap_len:]
+        adapter_prefix = adapter[:overlap_len]
+        # Allow 1-2 mismatches for quality issues
+        if _sequences_match(sequence_suffix, adapter_prefix, max_mismatches=2):
+            return sequence[:-overlap_len]
     
     return sequence
+
+
+def _sequences_match(seq1: str, seq2: str, max_mismatches: int = 0) -> bool:
+    """Check if two sequences match with allowed mismatches."""
+    if len(seq1) != len(seq2):
+        return False
+    mismatches = sum(1 for a, b in zip(seq1, seq2) if a != b)
+    return mismatches <= max_mismatches
 
 
 def run_read_trimming_raw(
@@ -106,29 +128,29 @@ def run_read_trimming_raw(
     trimmed_records: List[FastqRecord] = []
     total_bases = 0
     trimmed_bases = 0
+    adapter_bases_removed = 0
 
     for record in records:
-        total_bases += len(record.sequence)
-        seq = _adapter_trim(record.sequence, adapter)
-        # Ensure quality string matches sequence length
-        # If adapter was removed, we need to adjust quality accordingly
-        if len(seq) < len(record.sequence):
-            # Adapter was removed, take quality corresponding to remaining sequence
-            # This assumes adapter was at the end (most common case)
-            qual = record.quality[:len(seq)]
-        else:
-            qual = record.quality[:len(seq)]
+        original_len = len(record.sequence)
+        total_bases += original_len
         
-        # Ensure quality and sequence are same length before quality trimming
-        min_len = min(len(seq), len(qual))
-        seq = seq[:min_len]
-        qual = qual[:min_len]
+        # First remove adapter
+        seq_after_adapter = _adapter_trim(record.sequence, adapter)
+        adapter_removed = original_len - len(seq_after_adapter)
+        adapter_bases_removed += adapter_removed
         
-        seq, qual = _quality_trim(seq, qual, quality_threshold)
-        trimmed_bases += len(record.sequence) - len(seq)
+        # Then trim quality
+        qual = record.quality[: len(seq_after_adapter)]
+        seq, qual = _quality_trim(seq_after_adapter, qual, quality_threshold)
+        
+        # Total trimmed bases = adapter removal + quality trimming
+        trimmed_bases += original_len - len(seq)
+        
         trimmed_records.append(
             FastqRecord(record.header, seq, record.separator, qual)
         )
+    
+    print(f"🔧 [DEBUG] Adapter removal stats: {adapter_bases_removed} bases removed from {len(records)} reads")
 
     trimmed_fastq = "\n".join(rec.to_fastq() for rec in trimmed_records)
     summary = {

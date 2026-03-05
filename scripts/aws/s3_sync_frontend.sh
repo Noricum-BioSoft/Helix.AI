@@ -27,10 +27,10 @@ npm run build
 popd >/dev/null
 
 echo "Syncing to s3://${BUCKET} ..."
-aws s3 sync frontend/dist "s3://${BUCKET}" --region "$REGION" --delete --acl public-read --cache-control "public,max-age=31536000,immutable"
+aws s3 sync frontend/dist "s3://${BUCKET}" --region "$REGION" --delete --cache-control "public,max-age=31536000,immutable"
 
 # Ensure index.html is not cached aggressively
-aws s3 cp "frontend/dist/index.html" "s3://${BUCKET}/index.html" --region "$REGION" --acl public-read --cache-control "no-cache, no-store, must-revalidate" --content-type "text/html"
+aws s3 cp "frontend/dist/index.html" "s3://${BUCKET}/index.html" --region "$REGION" --cache-control "no-cache, no-store, must-revalidate" --content-type "text/html"
 
 if [[ -n "$CLOUDFRONT_ID" ]]; then
   echo "Creating CloudFront invalidation..."

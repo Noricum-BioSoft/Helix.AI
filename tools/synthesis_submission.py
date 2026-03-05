@@ -271,7 +271,7 @@ def run_synthesis_submission_raw(sequences: str,
     # Generate synthesis quote
     return generate_synthesis_quote(parsed_sequences, vendor_preference, quantity, delivery_time)
 
-from langchain.agents import tool
+from langchain_core.tools import tool
 
 @tool
 def run_synthesis_submission(sequences: str, vendor_preference: str = None, quantity: str = "standard", delivery_time: str = "standard"):

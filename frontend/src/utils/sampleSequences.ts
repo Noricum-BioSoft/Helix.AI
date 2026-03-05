@@ -1,6 +1,33 @@
 // Sample DNA sequences for examples and testing
 // These are realistic DNA sequences that can be used in example commands
 
+// Helper function to generate random DNA sequences
+function generateRandomSequence(length: number): string {
+  const bases = ['A', 'T', 'G', 'C'];
+  let sequence = '';
+  for (let i = 0; i < length; i++) {
+    sequence += bases[Math.floor(Math.random() * bases.length)];
+  }
+  return sequence;
+}
+
+// Generate random sequences for alignment examples (similar but not identical lengths)
+const generateAlignmentSequences = () => {
+  // Generate sequences with lengths around 100 bases (95-105) to show variation
+  const seq1Length = 95 + Math.floor(Math.random() * 11);
+  const seq2Length = 95 + Math.floor(Math.random() * 11);
+  const seq3Length = 95 + Math.floor(Math.random() * 11);
+  
+  return {
+    seq1: generateRandomSequence(seq1Length),
+    seq2: generateRandomSequence(seq2Length),
+    seq3: generateRandomSequence(seq3Length),
+  };
+};
+
+// Generate sequences once at module load time for consistency
+const alignmentSeqs = generateAlignmentSequences();
+
 export const sampleSequences = {
   // Short sequences for quick examples
   short: {
@@ -24,11 +51,11 @@ ATGCGATCGATCGATCGATCGATCGATCGATCGATCGATCG
 ATGCGATCGATCGATCGATCGATCGATCGATCGATCGATCG`,
     
     threeSequences: `>seq1
-ATGCGATCGATCGATCGATCGATCGATCGATCGATCGATCG
+${alignmentSeqs.seq1}
 >seq2
-ATGCGATCGATCGATCGATCGATCGATCGATCGATCGATCG
+${alignmentSeqs.seq2}
 >seq3
-ATGCGATCGATCGATCGATCGATCGATCGATCGATCGATCG`,
+${alignmentSeqs.seq3}`,
     
     // Longer sequences for phylogenetic tree
     phylogenetic: `>Sequence_01
@@ -95,4 +122,3 @@ export const getExampleWithSequences = (baseCommand: string, sequenceType: keyof
   // (they'll use sequences from previous steps or uploaded files)
   return baseCommand;
 };
-

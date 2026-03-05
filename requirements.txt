@@ -40,3 +40,6 @@ aiohttp==3.9.1
 
 # Environment management
 python-dotenv==1.0.0 
+
+# Optional: SSH/EC2 execution support (used by backend EC2 executor via paramiko)
+paramiko==4.0.0

@@ -1,0 +1,18 @@
+{
+  "_comment": "Mock file catalog for testing FileMetadataInspector",
+  "_version": "1.0",
+  "_last_updated": "2026-01-17",
+  
+  "s3://helix-test-bucket/small_file.fq": 5000000,
+  "s3://helix-test-bucket/medium_file_R1.fq": 50000000,
+  "s3://helix-test-bucket/medium_file_R2.fq": 48000000,
+  "s3://helix-test-bucket/large_file.bam": 500000000,
+  "s3://helix-test-bucket/huge_file.bam": 5000000000,
+  
+  "/local/data/test_R1.fq": 10000000,
+  "/local/data/test_R2.fq": 9500000,
+  "/local/data/reference.fa": 3000000000,
+  
+  "s3://helix-demo-bucket/sample_R1_realistic.fastq": 250000000,
+  "s3://helix-demo-bucket/sample_R2_realistic.fastq": 240000000
+}

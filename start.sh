@@ -171,21 +171,19 @@ else
     fi
 fi
 
+# Verify critical optional deps that affect execution paths.
+print_status "Verifying backend dependencies (paramiko for EC2 execution)..."
+python -c "import paramiko; print(f'✅ paramiko {paramiko.__version__}')" || {
+    print_error "paramiko is not importable in the backend runtime environment."
+    print_error "Fix: reinstall backend deps (backend/requirements.txt) in the same Python environment used to run the backend."
+    exit 1
+}
+
 # Check for environment variables
 print_status "Checking environment configuration..."
 if [ ! -f "../.env" ] && [ ! -f ".env" ]; then
-    print_warning "No .env file found. Creating example configuration..."
-    cat > .env.example << EOF
-# Helix.AI Environment Configuration
-# Copy this file to .env and fill in your API keys
-
-# OpenAI API Key (required for fallback and some features)
-OPENAI_API_KEY=your_openai_api_key_here
-
-# DeepSeek API Key (optional - if not provided, will fallback to OpenAI)
-DEEPSEEK_API_KEY=your_deepseek_api_key_here
-EOF
-    print_warning "Please create a .env file with your API keys. See ENVIRONMENT_SETUP.md for details."
+    print_warning "No .env file found."
+    print_warning "Copy backend/.env.example to .env (repo root) and set at least one API key."
 fi
 
 # Check if at least one API key is available
@@ -213,8 +211,8 @@ cd ..
 
 # Start backend server
 print_status "Starting backend server..."
-cd backend
-export PYTHONPATH="../tools:$PYTHONPATH"
+# Run backend as a package module to keep imports clean (`from backend...`).
+export PYTHONPATH="$(pwd)/tools:$PYTHONPATH"
 
 # Set environment variables
 if [ "$USE_REDIS" = true ]; then
@@ -225,9 +223,8 @@ else
 fi
 
 # Start the enhanced MCP backend
-python main_with_mcp.py &
+python -m backend.main_with_mcp &
 BACKEND_PID=$!
-cd ..
 
 # Wait for backend
 if wait_for_service "http://localhost:$BACKEND_PORT/health" "Backend server"; then

@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import OverlayTrigger from 'react-bootstrap/OverlayTrigger';
 import Tooltip from 'react-bootstrap/Tooltip';
 import Button from 'react-bootstrap/Button';
+import { getRecommendedButton } from '../../utils/buttonRecommendation';
 
 interface PromptInputProps {
   command: string;
@@ -38,6 +39,9 @@ export const PromptInput: React.FC<PromptInputProps> = ({
       onSubmit();
     }
   };
+
+  // Determine which button to recommend based on command
+  const recommendedButton = useMemo(() => getRecommendedButton(command), [command]);
 
   return (
     <div className="prompt-shell">
@@ -77,61 +81,23 @@ export const PromptInput: React.FC<PromptInputProps> = ({
           <OverlayTrigger
             placement="top"
             overlay={
-              <Tooltip id="prompt-agent-tooltip">
-                Ask the smart Helix.AI agent to interpret your request, suggest workflows, and call tools automatically.
-              </Tooltip>
-            }
-          >
-            <span className="d-inline-flex">
-              <Button
-                variant="outline-secondary"
-                className="prompt-agent-button"
-                onClick={onAgentSubmit}
-                disabled={agentLoading || loading || !command.trim()}
-                aria-label={agentLoading ? 'Contacting agent' : 'Send to agent'}
-              >
-                {agentLoading ? (
-                  <span className="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
-                ) : (
-                  <span aria-hidden="true">🤖</span>
-                )}
-              </Button>
-            </span>
-          </OverlayTrigger>
-          <OverlayTrigger
-            placement="top"
-            overlay={
-              <Tooltip id="prompt-submit-tooltip">
-                Send this prompt directly to the configured workflow without additional agent reasoning.
+              <Tooltip id="prompt-primary-tooltip">
+                Run with Helix agent (single-button UX)
               </Tooltip>
             }
           >
             <span className="d-inline-flex">
               <Button
                 variant="primary"
-                className="prompt-submit-button"
-                onClick={onSubmit}
+                className="prompt-primary-button"
+                onClick={onAgentSubmit}
                 disabled={loading || agentLoading || !command.trim()}
-                aria-label={loading ? 'Processing' : 'Send command'}
+                aria-label={loading || agentLoading ? 'Processing' : 'Run'}
               >
-                {loading ? (
-                  <>
-                    <span className="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
-                  </>
+                {(loading || agentLoading) ? (
+                  <span className="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
                 ) : (
-                  <svg
-                    className="prompt-submit-icon"
-                    width="20"
-                    height="20"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    xmlns="http://www.w3.org/2000/svg"
-                    aria-hidden="true"
-                  >
-                    <circle cx="12" cy="12" r="10.5" stroke="currentColor" strokeWidth="1.5" />
-                    <path d="M12 6V16" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-                    <path d="M8 10L12 6L16 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
+                  <span aria-hidden="true">🤖</span>
                 )}
               </Button>
             </span>

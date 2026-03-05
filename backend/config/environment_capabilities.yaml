@@ -1,0 +1,156 @@
+# Environment Capabilities Catalog
+# Static configuration of execution environment capabilities
+# Version: 1.0
+# Last updated: 2026-01-17
+
+environments:
+  - name: Local
+    startup_time_seconds: 0.0
+    startup_overhead: None
+    max_cpu_cores: null  # Depends on machine
+    max_memory_gb: null  # Depends on machine
+    max_runtime_minutes: null
+    supports_distributed: false
+    supports_gpu: false
+    pre_installed_tools: []
+    container_support: false
+    s3_native: false
+    data_transfer_required: true
+    reproducibility: Low
+    debuggability: High
+    failure_blast_radius: Low
+    cost_class: Free
+    cost_model: "No cloud costs"
+    available: true
+    availability_notes: null
+    description: "Local execution on current machine"
+    best_for:
+      - "Small files (<100MB)"
+      - "Quick prototyping"
+      - "Development"
+    avoid_for:
+      - "Large files (>1GB)"
+      - "Distributed operations"
+      - "Production workloads"
+
+  - name: EC2
+    startup_time_seconds: 2.0
+    startup_overhead: Low
+    max_cpu_cores: null  # Depends on instance type
+    max_memory_gb: null  # Depends on instance type
+    max_runtime_minutes: null
+    supports_distributed: false
+    supports_gpu: true
+    pre_installed_tools:
+      - bbtools
+      - samtools
+      - bcftools
+      - bwa
+      - bowtie2
+      - fastqc
+    container_support: false
+    s3_native: false
+    data_transfer_required: true
+    reproducibility: Medium
+    debuggability: High
+    failure_blast_radius: Low
+    cost_class: Low
+    cost_model: "EC2 instance hours (t3.medium ~$0.04/hr, m5.xlarge ~$0.19/hr)"
+    available: false  # Set by HELIX_USE_EC2 env var at runtime
+    availability_notes: "Requires HELIX_USE_EC2=true"
+    description: "EC2 instance with pre-installed bioinformatics tools"
+    best_for:
+      - "Medium files (10-100MB)"
+      - "Tools requiring installation"
+      - "SSH access for debugging"
+    avoid_for:
+      - "Very large files (>10GB)"
+      - "Distributed operations"
+      - "Long-running jobs (>1hr)"
+
+  - name: EMR
+    startup_time_seconds: 180.0  # 3min cluster startup
+    startup_overhead: High
+    max_cpu_cores: null  # Scalable
+    max_memory_gb: null  # Scalable
+    max_runtime_minutes: null
+    supports_distributed: true
+    supports_gpu: false
+    pre_installed_tools: []
+    container_support: true
+    s3_native: true
+    data_transfer_required: false
+    reproducibility: High
+    debuggability: Medium
+    failure_blast_radius: Medium
+    cost_class: Medium
+    cost_model: "EMR cluster hours (m5.xlarge ~$0.27/hr with EMR markup)"
+    available: true
+    availability_notes: null
+    description: "AWS EMR for distributed processing of large S3 datasets"
+    best_for:
+      - "Large S3 files (>100MB)"
+      - "Distributed operations"
+      - "Spark workflows"
+    avoid_for:
+      - "Small files (<100MB)"
+      - "Local files"
+      - "Quick prototyping"
+
+  - name: Batch
+    startup_time_seconds: 60.0  # Container pull + startup
+    startup_overhead: Medium
+    max_cpu_cores: null  # Depends on job definition
+    max_memory_gb: null  # Depends on job definition
+    max_runtime_minutes: null
+    supports_distributed: false
+    supports_gpu: true
+    pre_installed_tools: []
+    container_support: true
+    s3_native: false
+    data_transfer_required: true
+    reproducibility: High
+    debuggability: Medium
+    failure_blast_radius: Low
+    cost_class: Low
+    cost_model: "EC2 instance hours (pay for underlying compute)"
+    available: false  # Not fully implemented yet
+    availability_notes: "Batch routing not yet implemented"
+    description: "AWS Batch for containerized, medium-sized jobs"
+    best_for:
+      - "Containerized tools"
+      - "Medium jobs (10-100MB)"
+      - "Reproducible workflows"
+    avoid_for:
+      - "Very large files (>10GB)"
+      - "Quick prototyping"
+      - "Tools requiring custom setup"
+
+  - name: Lambda
+    startup_time_seconds: 1.0  # Cold start
+    startup_overhead: Low
+    max_cpu_cores: 6
+    max_memory_gb: 10.0
+    max_runtime_minutes: 15.0  # Hard limit
+    supports_distributed: false
+    supports_gpu: false
+    pre_installed_tools: []
+    container_support: true
+    s3_native: true
+    data_transfer_required: false
+    reproducibility: High
+    debuggability: Low
+    failure_blast_radius: Low
+    cost_class: Low
+    cost_model: "Invocation + compute time (first 1M requests free)"
+    available: false  # Not implemented yet
+    availability_notes: "Lambda routing not yet implemented"
+    description: "AWS Lambda for lightweight, event-driven preprocessing"
+    best_for:
+      - "Lightweight preprocessing (<15min)"
+      - "Event-driven workflows"
+      - "Serverless"
+    avoid_for:
+      - "Complex bioinformatics tools"
+      - "Long-running jobs (>15min)"
+      - "Large datasets"
