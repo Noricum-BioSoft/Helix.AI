@@ -2354,3 +2354,181 @@ def fastqc_quality_analysis(
             "error": str(e)
         }
 
+
+# ── Data Science Pipeline tools ───────────────────────────────────────────────
+
+@tool
+def ds_run_analysis(
+    session_id: str,
+    data_path: str,
+    target_col: str = "",
+    task_type: str = "auto",
+    objective: str = "Analyze dataset",
+    hypothesis: str = "",
+    changes: str = "Initial run",
+    random_seed: int = 42,
+    time_col: str = "",
+    entity_col: str = "",
+) -> Dict:
+    """
+    Run the full iterative data science pipeline on a CSV dataset.
+
+    Executes the plan→execute→evaluate→review loop:
+      data audit → cleaning → EDA → baseline model → evaluation → report → next-step planning
+
+    Parameters
+    ----------
+    session_id  : Helix.AI session for artifact tracking
+    data_path   : path to the CSV file
+    target_col  : target/label column name (empty = EDA-only, no model)
+    task_type   : "auto" | "classification" | "regression"
+    objective   : what you are trying to achieve this iteration
+    hypothesis  : what you expect to find / change
+    changes     : what is different from the previous run
+    random_seed : for reproducibility
+    time_col    : optional time column name (triggers temporal-split warnings)
+    entity_col  : optional entity-ID column (triggers entity-leakage warnings)
+    """
+    from backend.ds_pipeline.orchestrator import DataScienceOrchestrator, DSRunConfig
+    from backend.ds_pipeline.reviewer import review as make_review
+
+    session_dir = _get_session_local_dir(session_id) if session_id else Path(".")
+    config = DSRunConfig(
+        data_path=data_path,
+        target_col=target_col or None,
+        task_type=task_type,
+        objective=objective,
+        hypothesis=hypothesis,
+        changes=changes,
+        random_seed=random_seed,
+        time_col=time_col or None,
+        entity_col=entity_col or None,
+    )
+
+    orch = DataScienceOrchestrator(base_dir=session_dir, session_id=session_id)
+    run_data = orch.run(config)
+
+    summary = make_review(run_data)
+    return {
+        "status": "success",
+        "text": summary,
+        "run_id": run_data["run_id"],
+        "metrics": run_data.get("metrics"),
+        "decision": run_data.get("decision"),
+        "next_steps": run_data.get("next_steps"),
+        "artifacts": run_data.get("artifacts"),
+        "visualization_type": "ds_report",
+        "report_md": run_data.get("artifacts", {}).get("report_md"),
+    }
+
+
+@tool
+def ds_reproduce_run(
+    session_id: str,
+    run_id: str,
+) -> Dict:
+    """
+    Re-run a prior data science iteration using its exact recorded configuration.
+
+    Verifies that the data hash matches and produces a new run_id for traceability.
+    """
+    from backend.ds_pipeline.orchestrator import DataScienceOrchestrator
+    from backend.ds_pipeline.reviewer import review as make_review
+
+    session_dir = _get_session_local_dir(session_id) if session_id else Path(".")
+    orch = DataScienceOrchestrator(base_dir=session_dir, session_id=session_id)
+    run_data = orch.reproduce(run_id)
+
+    summary = make_review(run_data)
+    return {
+        "status": "success",
+        "text": summary,
+        "run_id": run_data["run_id"],
+        "parent_run_id": run_id,
+        "metrics": run_data.get("metrics"),
+        "decision": run_data.get("decision"),
+        "visualization_type": "ds_report",
+        "report_md": run_data.get("artifacts", {}).get("report_md"),
+    }
+
+
+@tool
+def ds_diff_runs(
+    session_id: str,
+    run_id_a: str,
+    run_id_b: str,
+) -> Dict:
+    """
+    Compare two data science runs: configs, metrics, and next-step suggestions.
+    """
+    from backend.ds_pipeline.orchestrator import DataScienceOrchestrator
+
+    session_dir = _get_session_local_dir(session_id) if session_id else Path(".")
+    orch = DataScienceOrchestrator(base_dir=session_dir, session_id=session_id)
+    diff = orch.diff(run_id_a, run_id_b)
+
+    lines = [f"## Run Diff: {run_id_a} vs {run_id_b}\n"]
+    if diff["config_diff"]:
+        lines.append("### Config Changes")
+        for k, v in diff["config_diff"].items():
+            lines.append(f"- **{k}**: `{v['a']}` → `{v['b']}`")
+    else:
+        lines.append("Config is identical.")
+    if diff["metric_diff"]:
+        lines.append("\n### Metric Changes")
+        for k, v in diff["metric_diff"].items():
+            try:
+                delta = float(v["b"]) - float(v["a"])
+                lines.append(f"- **{k}**: {v['a']} → {v['b']} (Δ {delta:+.4f})")
+            except (TypeError, ValueError):
+                lines.append(f"- **{k}**: {v['a']} → {v['b']}")
+    else:
+        lines.append("\nMetrics are identical.")
+
+    return {
+        "status": "success",
+        "text": "\n".join(lines),
+        "diff": diff,
+        "visualization_type": "markdown",
+    }
+
+
+@tool
+def ds_list_runs(session_id: str) -> Dict:
+    """
+    List all data science runs in the current session with their key metrics and decisions.
+    """
+    from backend.ds_pipeline.run_store import RunStore
+
+    session_dir = _get_session_local_dir(session_id) if session_id else Path(".")
+    store = RunStore(base_dir=session_dir)
+    log = store.read_experiment_log()
+
+    if not log:
+        return {
+            "status": "success",
+            "text": "No data science runs found in this session.",
+            "runs": [],
+        }
+
+    lines = ["## Data Science Run History\n", "| Run ID | Timestamp | Objective | Decision | Key Metric |",
+             "|---|---|---|---|---|"]
+    for row in log:
+        metric_str = ""
+        for k in ["metric_roc_auc", "metric_f1", "metric_accuracy", "metric_r2", "metric_rmse"]:
+            if row.get(k):
+                name = k.replace("metric_", "")
+                metric_str = f"{name}={float(row[k]):.4f}"
+                break
+        lines.append(
+            f"| {row.get('run_id','')} | {row.get('timestamp','')[:16]} "
+            f"| {row.get('objective','')[:40]} | {row.get('decision','')} | {metric_str} |"
+        )
+
+    return {
+        "status": "success",
+        "text": "\n".join(lines),
+        "runs": log,
+        "visualization_type": "markdown",
+    }
+

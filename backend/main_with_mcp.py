@@ -2527,6 +2527,21 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
             "result": inv,
         }
 
+    # ── Data science pipeline tools ───────────────────────────────────────────
+    if tool_name in {"ds_run_analysis", "ds_reproduce_run", "ds_diff_runs", "ds_list_runs"}:
+        from backend import agent_tools as _agent_tools
+
+        tool_obj = getattr(_agent_tools, tool_name, None)
+        if tool_obj is None:
+            raise ValueError(f"Unknown DS tool: {tool_name}")
+        if hasattr(tool_obj, "invoke"):
+            return tool_obj.invoke(arguments)
+        if hasattr(tool_obj, "func"):
+            return tool_obj.func(**arguments)
+        if callable(tool_obj):
+            return tool_obj(**arguments)
+        raise ValueError(f"DS Tool not callable: {tool_name}")
+
     # ── Local iteration demo tools (no AWS required) ─────────────────────────
     if tool_name in {
         "local_demo_scatter_plot",
@@ -3943,6 +3958,161 @@ async def backfill_job_directories(job_ids: Optional[List[str]] = None):
     except Exception as e:
         logger.error(f"Error backfilling job directories: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+# ── Data Science Pipeline endpoints ──────────────────────────────────────────
+
+class DSRunRequest(BaseModel):
+    data_path: str
+    target_col: Optional[str] = None
+    task_type: str = "auto"
+    objective: str = "Analyze dataset"
+    hypothesis: str = ""
+    changes: str = "Initial run"
+    random_seed: int = 42
+    time_col: Optional[str] = None
+    entity_col: Optional[str] = None
+    session_id: Optional[str] = None
+    feedback: Optional[str] = None
+    parent_run_id: Optional[str] = None
+
+
+class DSReproduceRequest(BaseModel):
+    run_id: str
+    session_id: Optional[str] = None
+
+
+class DSDiffRequest(BaseModel):
+    run_id_a: str
+    run_id_b: str
+    session_id: Optional[str] = None
+
+
+@app.post("/ds/run")
+async def ds_run(req: DSRunRequest):
+    """
+    Run the full iterative data science pipeline on a CSV dataset.
+
+    Executes: data audit → cleaning → EDA → baseline model → evaluation → report → planning
+    """
+    try:
+        from backend.ds_pipeline.orchestrator import DataScienceOrchestrator, DSRunConfig
+        from backend.ds_pipeline.reviewer import review as make_review
+
+        if not req.session_id:
+            req.session_id = history_manager.create_session()
+        else:
+            history_manager.ensure_session_exists(req.session_id)
+
+        from backend.agent_tools import _get_session_local_dir
+        session_dir = _get_session_local_dir(req.session_id)
+
+        config = DSRunConfig(
+            data_path=req.data_path,
+            target_col=req.target_col,
+            task_type=req.task_type,
+            objective=req.objective,
+            hypothesis=req.hypothesis,
+            changes=req.changes,
+            random_seed=req.random_seed,
+            time_col=req.time_col,
+            entity_col=req.entity_col,
+        )
+        orch = DataScienceOrchestrator(base_dir=session_dir, session_id=req.session_id)
+        run_data = orch.run(config, feedback=req.feedback, parent_run_id=req.parent_run_id)
+
+        return {
+            "success": True,
+            "session_id": req.session_id,
+            "run_id": run_data["run_id"],
+            "decision": run_data.get("decision"),
+            "metrics": run_data.get("metrics"),
+            "next_steps": run_data.get("next_steps"),
+            "summary": make_review(run_data),
+            "artifacts": run_data.get("artifacts"),
+            "steps_run": run_data.get("steps_run"),
+        }
+    except Exception as e:
+        logger.error(f"DS run failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/ds/reproduce")
+async def ds_reproduce(req: DSReproduceRequest):
+    """Re-run a prior data science iteration using its exact recorded configuration."""
+    try:
+        from backend.ds_pipeline.orchestrator import DataScienceOrchestrator
+        from backend.ds_pipeline.reviewer import review as make_review
+
+        if not req.session_id:
+            req.session_id = history_manager.create_session()
+
+        from backend.agent_tools import _get_session_local_dir
+        session_dir = _get_session_local_dir(req.session_id)
+
+        orch = DataScienceOrchestrator(base_dir=session_dir, session_id=req.session_id)
+        run_data = orch.reproduce(req.run_id)
+        return {
+            "success": True,
+            "session_id": req.session_id,
+            "run_id": run_data["run_id"],
+            "parent_run_id": req.run_id,
+            "decision": run_data.get("decision"),
+            "metrics": run_data.get("metrics"),
+            "summary": make_review(run_data),
+        }
+    except Exception as e:
+        logger.error(f"DS reproduce failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/ds/diff")
+async def ds_diff(req: DSDiffRequest):
+    """Compare two data science runs: configs, metrics, and decisions."""
+    try:
+        from backend.ds_pipeline.orchestrator import DataScienceOrchestrator
+
+        session_id = req.session_id or history_manager.create_session()
+        from backend.agent_tools import _get_session_local_dir
+        session_dir = _get_session_local_dir(session_id)
+
+        orch = DataScienceOrchestrator(base_dir=session_dir, session_id=session_id)
+        diff = orch.diff(req.run_id_a, req.run_id_b)
+        return {"success": True, "diff": diff}
+    except Exception as e:
+        logger.error(f"DS diff failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/ds/runs")
+async def ds_list_runs(session_id: str):
+    """List all data science runs in the given session."""
+    try:
+        from backend.ds_pipeline.run_store import RunStore
+        from backend.agent_tools import _get_session_local_dir
+        session_dir = _get_session_local_dir(session_id)
+        store = RunStore(base_dir=session_dir)
+        return {"success": True, "runs": store.read_experiment_log(), "run_ids": store.list_runs()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/ds/runs/{run_id}")
+async def ds_get_run(run_id: str, session_id: str):
+    """Retrieve the full run.json for a given run_id."""
+    try:
+        from backend.ds_pipeline.run_store import RunStore
+        from backend.agent_tools import _get_session_local_dir
+        session_dir = _get_session_local_dir(session_id)
+        store = RunStore(base_dir=session_dir)
+        run = store.load_run(run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+        return {"success": True, "run": run}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/health")
 async def health_check():

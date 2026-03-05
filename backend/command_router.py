@@ -326,6 +326,30 @@ class CommandRouter:
             print(f"🔧 Command router: Matched 'read trimming' -> read_trimming")
             return 'read_trimming', self._extract_parameters(command, 'read_trimming', session_context)
         
+        # ── DATA SCIENCE PIPELINE ─────────────────────────────────────────────
+        # Route data analysis requests to the ds_pipeline orchestrator.
+        # Must come before alignment fallback to avoid sequence-related false matches.
+        if self._is_ds_run_command(command_lower):
+            print("🔧 Command router: Matched 'data science run' -> ds_run_analysis")
+            return "ds_run_analysis", self._extract_ds_run_params(command, session_context)
+
+        if any(p in command_lower for p in ["list runs", "show runs", "run history", "experiment log", "list experiments"]):
+            print("🔧 Command router: Matched 'list ds runs' -> ds_list_runs")
+            return "ds_list_runs", {"session_id": session_context.get("session_id", "")}
+
+        if any(p in command_lower for p in ["diff run", "compare run", "diff experiment"]):
+            print("🔧 Command router: Matched 'diff runs' -> ds_diff_runs")
+            return "ds_diff_runs", self._extract_ds_diff_params(command, session_context)
+
+        if any(p in command_lower for p in ["reproduce run", "rerun", "re-run"]):
+            print("🔧 Command router: Matched 'reproduce run' -> ds_reproduce_run")
+            m = re.search(r"run[_\s](\w+)", command_lower)
+            run_id = m.group(0).replace(" ", "_") if m else "latest"
+            return "ds_reproduce_run", {
+                "session_id": session_context.get("session_id", ""),
+                "run_id": run_id,
+            }
+
         # Default fallback - try to route to sequence_alignment for alignment-like commands
         if any(phrase in command_lower for phrase in ['align', 'alignment', 'sequences']):
             print(f"🔧 Command router: Defaulting to sequence_alignment for alignment command")
@@ -1412,4 +1436,62 @@ class CommandRouter:
             return params
         
         else:
-            return {"command": command} 
+            return {"command": command}
+
+    # ── Data science routing helpers ──────────────────────────────────────────
+
+    _DS_PHRASES = (
+        "analyze my data", "analyse my data",
+        "run eda", "exploratory data analysis",
+        "run analysis", "analyze dataset", "analyse dataset",
+        "train model", "fit model", "baseline model",
+        "data analysis", "run pipeline", "run ds pipeline",
+        "analyze csv", "analyse csv",
+        "data science run", "start analysis",
+    )
+
+    def _is_ds_run_command(self, command_lower: str) -> bool:
+        return any(phrase in command_lower for phrase in self._DS_PHRASES)
+
+    def _extract_ds_run_params(self, command: str, session_context: Dict[str, Any]) -> Dict[str, Any]:
+        command_lower = command.lower()
+        session_id = session_context.get("session_id", "")
+
+        # Data file path
+        data_path = ""
+        path_match = re.search(r'[\w./\\-]+\.csv', command, re.IGNORECASE)
+        if path_match:
+            data_path = path_match.group(0)
+
+        # Target column
+        target_col = ""
+        target_match = re.search(r'target[:\s]+["\']?(\w+)["\']?', command, re.IGNORECASE)
+        if target_match:
+            target_col = target_match.group(1)
+        elif re.search(r'predict[:\s]+["\']?(\w+)["\']?', command, re.IGNORECASE):
+            m2 = re.search(r'predict[:\s]+["\']?(\w+)["\']?', command, re.IGNORECASE)
+            if m2:
+                target_col = m2.group(1)
+
+        # Objective
+        objective = "Analyze dataset"
+        obj_match = re.search(r'objective[:\s]+"?([^".\n]+)"?', command, re.IGNORECASE)
+        if obj_match:
+            objective = obj_match.group(1).strip()
+
+        return {
+            "session_id": session_id,
+            "data_path": data_path,
+            "target_col": target_col,
+            "task_type": "auto",
+            "objective": objective,
+        }
+
+    def _extract_ds_diff_params(self, command: str, session_context: Dict[str, Any]) -> Dict[str, Any]:
+        session_id = session_context.get("session_id", "")
+        run_ids = re.findall(r"run_\w+", command)
+        return {
+            "session_id": session_id,
+            "run_id_a": run_ids[0] if len(run_ids) > 0 else "",
+            "run_id_b": run_ids[1] if len(run_ids) > 1 else "",
+        }
