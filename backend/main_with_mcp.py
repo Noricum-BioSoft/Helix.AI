@@ -1199,6 +1199,54 @@ async def execute(req: CommandRequest, request: Request):
             )
             return CustomJSONResponse(standard)
 
+        # Phase 2c: pre-agent command-router fast path.
+        # Run the keyword/regex router BEFORE invoking the LLM agent.  For
+        # well-known bioinformatics patterns (bulk_rnaseq, single_cell, fastqc …)
+        # the router gives a deterministic, sub-second answer without any LLM
+        # latency, avoiding multi-hop agent pipelines that can exceed 90 s for
+        # long structured prompts.
+        # Call call_mcp_tool directly (not the full broker) so we skip the
+        # infrastructure-decision-agent path entirely for recognised patterns.
+        try:
+            import time as _t
+            from backend.command_router import CommandRouter as _PreRouter
+            _pre_router = _PreRouter()
+            _pre_tool, _pre_params = _pre_router.route_command(req.command, session_context)
+            logger.info(f"[Phase2c] route_command → tool='{_pre_tool}'")
+            if _pre_tool != "handle_natural_command":
+                _pre_start = _t.time()
+                if _pre_params is None:
+                    _pre_params = {}
+                _pre_params.setdefault("session_id", req.session_id)
+                # Direct tool call — bypasses broker & infra-decision-agent
+                _pre_result = await call_mcp_tool(_pre_tool, _pre_params)
+                logger.info(f"[Phase2c] '{_pre_tool}' done in {_t.time()-_pre_start:.2f}s")
+                # call_mcp_tool returns the raw tool dict (not broker-wrapped).
+                # Extract run-linkage fields from both the top level and the
+                # optional nested "result" sub-dict so we cover all tool shapes.
+                _pre_inner = (_pre_result.get("result") or {}) if isinstance(_pre_result, dict) else {}
+                history_manager.add_history_entry(
+                    req.session_id, req.command, _pre_tool, _pre_result,
+                    metadata={
+                        "tool_args": _pre_params,
+                        "inputs": _pre_result.get("inputs") if isinstance(_pre_result, dict) else None,
+                        "outputs": [],
+                        "produced_artifacts": (_pre_result.get("artifacts") or _pre_inner.get("artifacts")) if isinstance(_pre_result, dict) else None,
+                        "job_id": _pre_result.get("job_id") or _pre_inner.get("job_id"),
+                        "run_id": _pre_result.get("run_id") or _pre_inner.get("run_id"),
+                        "parent_run_id": _pre_result.get("parent_run_id") or _pre_inner.get("parent_run_id"),
+                        "mcp_route": "/execute",
+                    },
+                )
+                _pre_std = build_standard_response(
+                    prompt=req.command, tool=_pre_tool, result=_pre_result,
+                    session_id=req.session_id, mcp_route="/execute",
+                    success=True if not isinstance(_pre_result, dict) else _pre_result.get("status", "success") != "error",
+                )
+                return CustomJSONResponse(_pre_std)
+        except Exception as _pre_err:
+            logger.warning(f"[Phase2c] fast path raised exception ({_pre_err}), falling through to agent")
+
         # Phase 3: detect multi-step workflows and execute as a Plan IR (sync/async broker handles routing)
         def _looks_like_workflow(cmd: str) -> bool:
             c = (cmd or "").lower()
