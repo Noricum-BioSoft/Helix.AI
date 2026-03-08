@@ -650,7 +650,7 @@ class CommandProcessor:
     # Helper: extract explicitly-numbered pipeline steps from the prompt
     # ------------------------------------------------------------------
     @staticmethod
-    def _extract_inline_pipeline_plan(command: str) -> Dict | None:
+    def _extract_inline_pipeline_plan(command: str) -> Optional[Dict]:
         """
         If the user's prompt contains a numbered list of pipeline steps
         (e.g. "1. Run FastQC ...  2. Trim adapter sequences ..."),
@@ -1306,6 +1306,12 @@ class CommandProcessor:
                 "lookup_go_term",
                 "bulk_rnaseq_analysis",
                 "single_cell_analysis",
+                # Iterative workflow tools
+                "patch_and_rerun",
+                "bio_rerun",
+                "bio_diff_runs",
+                "local_edit_visualization",
+                "local_update_scatter_x_scale",
             }
             
             if tool_name and tool_name in safe_tools:

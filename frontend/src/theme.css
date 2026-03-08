@@ -608,4 +608,50 @@ pre {
   text-decoration: underline;
 }
 
+/* ── GFM table styles ────────────────────────────────────────────────── */
+.agent-response-markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0;
+  font-size: 0.88rem;
+  overflow-x: auto;
+  display: block;
+}
+
+.agent-response-markdown thead tr {
+  background: #F1F5F9;
+}
+
+.agent-response-markdown th,
+.agent-response-markdown td {
+  border: 1px solid #E2E8F0;
+  padding: 0.45rem 0.75rem;
+  text-align: left;
+  vertical-align: top;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.agent-response-markdown th {
+  font-weight: 600;
+  color: #1E293B;
+  background: #F1F5F9;
+}
+
+.agent-response-markdown tbody tr:nth-child(even) {
+  background: #F8FAFC;
+}
+
+.agent-response-markdown tbody tr:hover {
+  background: #EFF6FF;
+}
+
+/* ── GFM strikethrough / task-list extras ───────────────────────────── */
+.agent-response-markdown del {
+  opacity: 0.6;
+}
+
+.agent-response-markdown input[type='checkbox'] {
+  margin-right: 0.4rem;
+}
 

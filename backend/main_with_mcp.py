@@ -284,6 +284,130 @@ def _validate_prompt_length(prompt: str) -> None:
     return
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Dispatch helpers — shared by every branch of execute()
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _is_success(result: Any) -> bool:
+    """Return True unless the result carries an explicit error/failed status."""
+    if not isinstance(result, dict):
+        return True
+    if "success" in result:
+        return bool(result["success"])
+    return result.get("status", "success") not in ("error", "failed", "workflow_failed")
+
+
+def _extract_metadata(result: Any, tool_args: Optional[dict] = None) -> dict:
+    """
+    Extract run-linkage fields from a tool result dict.
+
+    Checks both the top-level result dict and the optional nested ``result``
+    sub-dict so we handle all tool shapes (direct returns and broker-wrapped).
+    """
+    if not isinstance(result, dict):
+        return {
+            "tool_args": tool_args,
+            "inputs": None,
+            "outputs": [],
+            "produced_artifacts": None,
+            "mcp_route": "/execute",
+        }
+    inner: dict = (result.get("result") or {}) if isinstance(result.get("result"), dict) else {}
+    return {
+        "tool_args": tool_args,
+        "inputs": result.get("inputs"),
+        "outputs": [],
+        "produced_artifacts": (
+            result.get("produced_artifacts")
+            or inner.get("produced_artifacts")
+            or result.get("artifacts")
+            or inner.get("artifacts")
+        ),
+        "job_id":       result.get("job_id")       or inner.get("job_id"),
+        "run_id":       result.get("run_id")       or inner.get("run_id"),
+        "parent_run_id": result.get("parent_run_id") or inner.get("parent_run_id"),
+        "mcp_route": "/execute",
+    }
+
+
+async def _dispatch_result(
+    req: "CommandRequest",
+    tool: str,
+    result: Any,
+    *,
+    tool_args: Optional[dict] = None,
+    record_history: bool = True,
+) -> "CustomJSONResponse":
+    """
+    Single exit point shared by every dispatch branch.
+
+    Optionally records a history entry, then builds and returns the standard
+    JSON response.  Pass ``record_history=False`` for paths (e.g. S3 browse)
+    that intentionally skip the run ledger.
+    """
+    if record_history:
+        history_manager.add_history_entry(
+            req.session_id,
+            req.command,
+            tool,
+            result,
+            metadata=_extract_metadata(result, tool_args=tool_args),
+        )
+    std = build_standard_response(
+        prompt=req.command,
+        tool=tool,
+        result=result,
+        session_id=req.session_id,
+        mcp_route="/execute",
+        success=_is_success(result),
+    )
+    return CustomJSONResponse(std)
+
+
+def _apply_session_context_side_effects(
+    session_id: str, tool_name: str, result: Any
+) -> None:
+    """
+    Persist mutation / alignment outputs into the in-memory session dict so
+    downstream tool calls (e.g. variant_selection, sequence_alignment) can
+    read them back via session_context.
+    """
+    if not isinstance(result, dict):
+        return
+    if not (hasattr(history_manager, "sessions") and session_id in history_manager.sessions):
+        return
+
+    if tool_name == "mutate_sequence":
+        variants = (
+            (result.get("statistics") or {}).get("variants")
+            or result.get("variants")
+            or (result.get("output") or {}).get("variants")
+        )
+        if variants:
+            history_manager.sessions[session_id]["mutated_sequences"] = variants
+            history_manager.sessions[session_id]["mutation_results"] = variants
+            print(
+                f"🔧 [DEBUG] After mutation via /execute - Session {session_id} "
+                f"mutated_sequences: {len(variants)} items"
+            )
+
+    if tool_name == "sequence_alignment":
+        aligned_seqs = result.get("alignment") if isinstance(result.get("alignment"), list) else None
+        if aligned_seqs is None and isinstance(result.get("output"), list):
+            aligned_seqs = result["output"]
+        if aligned_seqs:
+            fasta_lines: list = []
+            for seq in aligned_seqs:
+                if isinstance(seq, dict):
+                    fasta_lines.append(f">{seq.get('name', 'sequence')}")
+                    fasta_lines.append(seq.get("sequence", ""))
+            history_manager.sessions[session_id]["aligned_sequences"] = "\n".join(fasta_lines)
+            print(
+                f"🔧 [DEBUG] After alignment via /execute - Stored "
+                f"{len(aligned_seqs)} aligned sequences in session context"
+            )
+
+
 def _determine_visualization_type(tool: str, result: Any, prompt: str) -> str:
     """
     Intelligently determine the appropriate visualization type based on:
@@ -469,35 +593,76 @@ def build_standard_response(
     # This ensures tree_newick is available whether it's in raw_result or at top level
     tree_data = {}
     if isinstance(truncated_result, dict):
-        print(f"🔍 [build_standard_response] Checking truncated_result for tree data...")
-        print(f"🔍 [build_standard_response] truncated_result keys: {list(truncated_result.keys())}")
-        print(f"🔍 [build_standard_response] truncated_result.get('tree_newick'): {bool(truncated_result.get('tree_newick'))}")
         if truncated_result.get("tree_newick"):
             tree_data["tree_newick"] = truncated_result["tree_newick"]
-            print(f"🔍 [build_standard_response] Added tree_newick to tree_data ({len(truncated_result['tree_newick'])} chars)")
         if truncated_result.get("ete_visualization"):
             tree_data["ete_visualization"] = truncated_result["ete_visualization"]
-            print(f"🔍 [build_standard_response] Added ete_visualization to tree_data")
         if truncated_result.get("clustering_result"):
             tree_data["clustering_result"] = truncated_result["clustering_result"]
-            print(f"🔍 [build_standard_response] Added clustering_result to tree_data")
         if truncated_result.get("clustered_visualization"):
             tree_data["clustered_visualization"] = truncated_result["clustered_visualization"]
-            print(f"🔍 [build_standard_response] Added clustered_visualization to tree_data")
-    else:
-        print(f"🔍 [build_standard_response] truncated_result is not a dict: {type(truncated_result)}")
-    
-    print(f"🔍 [build_standard_response] tree_data keys: {list(tree_data.keys())}")
     
     # Promote execute_ready flag so the frontend can show the "Execute Pipeline" button
     execute_ready = bool(
         isinstance(truncated_result, dict) and truncated_result.get("execute_ready")
     )
 
+    # Unwrap ExecutionBroker envelope (type == "execution_result") so that
+    # patch_and_rerun / iteration tools' inner fields (run_id, script_path, links …)
+    # are reachable at the top level of the result we inspect below.
+    _inner_result: Dict = truncated_result if isinstance(truncated_result, dict) else {}
+    if _inner_result.get("type") == "execution_result" and isinstance(_inner_result.get("result"), dict):
+        _inner_result = _inner_result["result"]
+
+    # Inject analysis.py download link when the result carries a script_path.
+    # Works for both patch_and_rerun responses (explicit script_path) and
+    # BioOrchestrator runs (script saved under sessions/<sid>/runs/<run_id>/).
+    _script_path_str: Optional[str] = _inner_result.get("script_path") or None
+    _run_id_hint: Optional[str] = (
+        _inner_result.get("run_id")
+        or (isinstance(truncated_result, dict) and truncated_result.get("run_id"))
+        or None
+    )
+    if not _script_path_str and _run_id_hint and session_id:
+        # BioOrchestrator saves scripts under sessions/<sid>/runs/<run_id>/
+        _candidate = (
+            Path(__file__).parent.parent
+            / "sessions" / session_id / "runs" / _run_id_hint / "analysis.py"
+        )
+        if _candidate.exists():
+            _script_path_str = str(_candidate)
+
+    if _script_path_str:
+        _script_url = f"/download/script?path={_script_path_str}"
+        _bundle_url = (
+            f"/download/bundle?session_id={session_id}"
+            + (f"&run_id={_run_id_hint}" if _run_id_hint else "")
+        )
+        # Start from data.links, then merge any links from the inner result
+        _existing_links: List[Dict] = list(data.get("links") or [])
+        for _lnk in (_inner_result.get("links") or []):
+            if isinstance(_lnk, dict) and _lnk not in _existing_links:
+                _existing_links.append(_lnk)
+
+        # Ensure analysis.py and bundle.zip are always present
+        if not any(
+            isinstance(lnk, dict) and "analysis.py" in (lnk.get("label") or "")
+            for lnk in _existing_links
+        ):
+            _existing_links.append({"label": "analysis.py", "url": _script_url})
+        if not any(
+            isinstance(lnk, dict) and "bundle" in (lnk.get("label") or "").lower()
+            for lnk in _existing_links
+        ):
+            _existing_links.append({"label": "bundle.zip", "url": _bundle_url})
+        data["links"] = _existing_links
+
     response = {
         "version": "1.0",
         "success": success,
         "session_id": session_id,
+        # Promote run_id to top-level so the frontend can read it without unwrapping envelopes
+        "run_id": _run_id_hint or None,
         "prompt": prompt,
         "tool": tool,
         "status": status,
@@ -517,11 +682,9 @@ def build_standard_response(
         "raw_result": truncated_result,  # Truncated to prevent large sequences in JSON
         "timestamp": now
     }
-    
+
     # Add tree data to top level for frontend
     response.update(tree_data)
-    print(f"🔍 [build_standard_response] Final response keys after update: {list(response.keys())}")
-    print(f"🔍 [build_standard_response] response.get('tree_newick'): {bool(response.get('tree_newick'))}")
     
     return response
 
@@ -697,6 +860,76 @@ async def get_session_artifact(session_id: str, artifact_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/download/bundle")
+async def download_bundle(session_id: str, run_id: Optional[str] = None):
+    """Build and stream a reproducibility ZIP for a session run.
+
+    The bundle contains:
+    - ``README.md``           human-readable walkthrough (prompts, I/O, steps)
+    - ``run_manifest.json``   machine-readable metadata for the full run chain
+    - ``analysis.py``         re-runnable script for the target (latest) run
+    - ``plots/``              PNG plots (≤ 5 MB each)
+    - ``tables/``             JSON / CSV tables (≤ 5 MB each)
+    - ``iteration_history/``  scripts + params for every ancestor run
+    - ``large_files.txt``     references for files that exceeded the size limit
+
+    Parameters
+    ----------
+    session_id : str
+        Active session ID.
+    run_id : str, optional
+        Specific run to package.  Defaults to the most recent scriptable run.
+    """
+    try:
+        from backend.bundle_generator import build_bundle
+        buf, filename = build_bundle(session_id=session_id, run_id=run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Bundle generation failed: {exc}")
+
+    from fastapi.responses import StreamingResponse
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/download/script")
+async def download_script(path: str):
+    """Serve any analysis.py (or other text artifact) that lives under the sessions/ tree.
+
+    The ``path`` query parameter must be an absolute filesystem path that resolves
+    inside the project's ``sessions/`` directory — any attempt to escape is rejected
+    with 403.
+
+    Example::
+
+        GET /download/script?path=/abs/path/to/sessions/xxx/runs/yyy/analysis.py
+    """
+    sessions_root = (Path(__file__).parent.parent / "sessions").resolve()
+    try:
+        resolved = Path(path).resolve()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid path")
+
+    # Security: must be inside sessions/
+    try:
+        resolved.relative_to(sessions_root)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Path is outside the sessions directory")
+
+    if not resolved.exists() or not resolved.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    return FileResponse(
+        path=str(resolved),
+        filename=resolved.name,
+        media_type="text/plain",
+    )
 
 
 @app.get("/session/{session_id}/artifacts/{artifact_id}/download")
@@ -983,184 +1216,33 @@ async def execute(req: CommandRequest, request: Request):
         except Exception as e:
             logger.warning(f"S3 browse fast-path skipped due to error: {e}")
 
-        # ── Fast-path: T. gondii Bulk RNA-seq demo ─────────────────────────────
-        # The tgondii fast-path lives inside _tool_executor (call_mcp_tool below
-        # routes to it). Just force-route through call_mcp_tool immediately.
-        _rnaseq_cmd = req.command or ""
-        if ("s3://noricum-ngs-data/demo/rnaseq/tgondii_counts.csv" in _rnaseq_cmd and
-                "s3://noricum-ngs-data/demo/rnaseq/tgondii_metadata.csv" in _rnaseq_cmd):
-            import re as _re_rna
-            _design_m = _re_rna.search(r"design_formula[:\s]+([^\n]+)", _rnaseq_cmd)
-            _df = _design_m.group(1).strip() if _design_m else "~infection_status"
-            _rna_r = await call_mcp_tool("bulk_rnaseq_analysis", {
-                "count_matrix": "s3://noricum-ngs-data/demo/rnaseq/tgondii_counts.csv",
-                "sample_metadata": "s3://noricum-ngs-data/demo/rnaseq/tgondii_metadata.csv",
-                "design_formula": _df, "alpha": 0.05,
-            })
-            return CustomJSONResponse(build_standard_response(
-                prompt=req.command, tool="bulk_rnaseq_analysis",
-                result=_rna_r, session_id=req.session_id, mcp_route="/execute", success=True))
-
-        # ── Fast-path: APAP time-course Bulk RNA-seq demo ──────────────────────
-        # Route directly to _tool_executor (bypasses LLM), which has its own
-        # fast-path that generates presigned URLs on the fly.
-        if ("s3://noricum-ngs-data/demo/rnaseq/apap_timecourse_counts.csv" in _rnaseq_cmd and
-                "s3://noricum-ngs-data/demo/rnaseq/apap_timecourse_metadata.csv" in _rnaseq_cmd):
-            import re as _re_apap
-            _df_apap_m = _re_apap.search(r"design_formula[:\s]+([^\n]+)", _rnaseq_cmd)
-            _df_apap = _df_apap_m.group(1).strip() if _df_apap_m else "~time_point"
-            _apap_r = await call_mcp_tool("bulk_rnaseq_analysis", {
-                "count_matrix": "s3://noricum-ngs-data/demo/rnaseq/apap_timecourse_counts.csv",
-                "sample_metadata": "s3://noricum-ngs-data/demo/rnaseq/apap_timecourse_metadata.csv",
-                "design_formula": _df_apap, "alpha": 0.05,
-            })
-            return CustomJSONResponse(build_standard_response(
-                prompt=req.command, tool="bulk_rnaseq_analysis",
-                result=_apap_r, session_id=req.session_id, mcp_route="/execute", success=True))
-
-        # ── Fast-path: scRNA-seq SLE PBMC demo ─────────────────────────────────
-        # Route directly to _tool_executor which has its own presigned-URL fast-path.
-        _SLE_PATH = "s3://noricum-ngs-data/demo/scrna/sle_pbmc_filtered_feature_bc_matrix.h5"
-        if _SLE_PATH in (req.command or ""):
-            _sc_r = await call_mcp_tool("single_cell_analysis", {
-                "data_file": _SLE_PATH, "data_format": "10x", "resolution": 0.5, "steps": "all",
-            })
-            return CustomJSONResponse(build_standard_response(
-                prompt=req.command, tool="single_cell_analysis",
-                result=_sc_r, session_id=req.session_id, mcp_route="/execute", success=True))
-
-        # ── Fast-path: SARS-CoV-2 / spike protein phylogenetics demo ────────────
-        # Detect by keyword; generate presigned URLs inline.
-        _phylo_cmd = (req.command or "").lower()
-        _is_phylo_demo = (
-            ("sars" in _phylo_cmd or "spike" in _phylo_cmd) and
-            ("variant" in _phylo_cmd or "phylogen" in _phylo_cmd or
-             "alpha" in _phylo_cmd or "omicron" in _phylo_cmd or "wuhan" in _phylo_cmd)
+        # ── Layer 2: Demo fast-paths via BioOrchestrator ───────────────────────
+        # All 5 demos route to real Python-native tools via BioOrchestrator.
+        # Every demo run is recorded in the session ledger with run_id +
+        # parent_run_id for iterative workflow chaining.
+        from backend.demo_dispatch import DemoDispatcher as _DemoDispatcher
+        from backend.bio_pipeline import BioOrchestrator as _BioOrchestrator
+        _bio_orch = _BioOrchestrator(
+            tool_executor=call_mcp_tool,
+            history_manager=history_manager,
         )
-        if _is_phylo_demo:
-            # Use cache if available, otherwise generate inline
-            _newick = _DEMO_PRESIGNED_CACHE.get("newick", "")
-            _ph_ps_inline: Dict[str, str] = {}
-            _PH_B, _PH_P = "noricum-ngs-data", "demo/phylo/precomputed/latest"
-            _ph_asset_keys = {
-                "phylo_tree": "phylo_tree.png", "identity_matrix": "identity_matrix.png",
-                "variant_mutations": "variant_mutations.csv", "spike_sequences": "spike_sequences.fasta",
-            }
-            for _lk, _fn in _ph_asset_keys.items():
-                _ph_ps_inline[_lk] = _DEMO_PRESIGNED_CACHE.get(_lk) or ""
-                if not _ph_ps_inline[_lk]:
-                    try:
-                        import boto3 as _b3ph
-                        _ph_ps_inline[_lk] = _b3ph.client("s3").generate_presigned_url(
-                            "get_object", Params={"Bucket": _PH_B, "Key": f"{_PH_P}/{_fn}"},
-                            ExpiresIn=86400)
-                    except Exception:
-                        pass
-            if not _newick:
-                try:
-                    import boto3 as _b3ph2, json as _jph
-                    _nwk_o = _b3ph2.client("s3").get_object(Bucket=_PH_B, Key=f"{_PH_P}/tree_data.json")
-                    _newick = _jph.loads(_nwk_o["Body"].read().decode()).get("newick", "")
-                except Exception:
-                    pass
-            _ph_text = (
-                "## Phylogenetic Analysis — SARS-CoV-2 Spike Protein\n\n"
-                "**Variants analysed:** Wuhan-Hu-1, Alpha (B.1.1.7), Beta (B.1.351), Gamma (P.1), "
-                "Delta (B.1.617.2), Omicron BA.1, Omicron BA.4/5, XBB.1.5\n\n"
-                "### Phylogenetic Relationship\n\n"
-                "The UPGMA tree (250 aa N-terminal domain) shows:\n"
-                "- **Beta + Gamma** cluster together (shared E484K mutation)\n"
-                "- **Omicron + XBB** form a distinct clade with high mutational divergence from early variants\n"
-                "- **Alpha** diverged early (N501Y, P681H gain-of-function mutations)\n\n"
-                "### Key Mutations Per Variant\n\n"
-                "| Variant | Key RBD Mutations |\n"
-                "|---------|-------------------|\n"
-                "| Wuhan-Hu-1 | — (reference) |\n"
-                "| Alpha B.1.1.7 | N501Y, P681H, Δ69-70 |\n"
-                "| Beta B.1.351 | K417N, E484K, N501Y |\n"
-                "| Gamma P.1 | K417T, E484K, N501Y |\n"
-                "| Delta B.1.617.2 | L452R, T478K, P681R |\n"
-                "| Omicron BA.1 | K417N, E484A, N501Y (+30 RBD) |\n"
-                "| Omicron BA.4/5 | L452R, F486V, R493Q |\n"
-                "| XBB.1.5 | F486P (recombinant BJ.1×BM.1.1.1) |\n"
-            )
-            if _newick:
-                _ph_text += f"\n### Newick Tree String\n```\n{_newick[:300]}…\n```\n"
-
-            _ph_result = {
-                "status": "success", "visualization_type": "results_viewer",
-                "text": _ph_text,
-                "links": [
-                    {"label": "Variant mutation table (CSV)", "url": _ph_ps_inline.get("variant_mutations", "")},
-                    {"label": "Spike protein sequences (FASTA)", "url": _ph_ps_inline.get("spike_sequences", "")},
-                ],
-                "visuals": [
-                    {"type": "image", "url": _ph_ps_inline.get("phylo_tree", ""), "title": "Phylogenetic Tree (UPGMA)"},
-                    {"type": "image", "url": _ph_ps_inline.get("identity_matrix", ""), "title": "Pairwise Identity Matrix (%)"},
-                ],
-                "tree_newick": _newick,
-                "result": {"status": "success", "n_variants": 8, "method": "UPGMA"},
-            }
-            _ph_result["links"]   = [l for l in _ph_result["links"]   if l["url"]]
-            _ph_result["visuals"] = [v for v in _ph_result["visuals"] if v["url"]]
-            std = build_standard_response(
-                prompt=req.command, tool="phylogenetic_tree",
-                result=_ph_result, session_id=req.session_id, mcp_route="/execute", success=True)
-            return CustomJSONResponse(std)
-
-        # ── Fast-path: Amplicon QC Pipeline demo (helix-test-data bucket) ────────
-        _amp_cmd = (req.command or "").lower()
-        _is_amp_demo = (
-            "helix-test-data" in _amp_cmd and
-            ("fastqc" in _amp_cmd or "trim" in _amp_cmd or "amplicon" in _amp_cmd or
-             "microbiome" in _amp_cmd or "16s" in _amp_cmd or
-             "forward_reads" in _amp_cmd or "sample01" in _amp_cmd)
+        _dispatcher = _DemoDispatcher(
+            _DEMO_PRESIGNED_CACHE,
+            call_mcp_tool,
+            orchestrator=_bio_orch,
+            session_id=req.session_id,
+            parent_run_id=getattr(req, "parent_run_id", None),
         )
-        if _is_amp_demo:
-            _amp_text = (
-                "## Amplicon QC Pipeline — Complete\n\n"
-                "**Sample:** sample01 · 16S rRNA V3–V4 · Illumina MiSeq 2×250 bp\n\n"
-                "### Pipeline Summary\n\n"
-                "| Step | Reads In | Reads Out | Pass Rate |\n"
-                "|------|----------|-----------|----------|\n"
-                "| Raw input (R1 + R2) | 50,000 pairs | — | — |\n"
-                "| FastQC QC check | 50,000 | 50,000 | ✅ PASS |\n"
-                "| Adapter trimming (Q≥20, min 150 bp) | 50,000 | 47,832 | 95.7% |\n"
-                "| Paired-end merging (min overlap 20 bp) | 47,832 | 43,891 | 91.8% |\n"
-                "| Final merged amplicons | — | 43,891 | — |\n\n"
-                "### FastQC Summary (R1)\n\n"
-                "| Check | Status |\n"
-                "|-------|--------|\n"
-                "| Basic Statistics | ✅ PASS |\n"
-                "| Per Base Sequence Quality | ✅ PASS |\n"
-                "| Per Sequence Quality Scores | ✅ PASS |\n"
-                "| Per Base Sequence Content | ⚠️ WARN |\n"
-                "| Sequence Duplication Levels | ✅ PASS |\n"
-                "| Adapter Content | ✅ PASS |\n\n"
-                "### Quality Statistics\n\n"
-                "| Metric | R1 | R2 |\n"
-                "|--------|-----|----|\n"
-                "| Mean Q score | 37.2 | 35.8 |\n"
-                "| % bases ≥ Q30 | 92.1% | 88.4% |\n"
-                "| Mean read length | 248 bp | 247 bp |\n"
-                "| Adapter content | 2.3% | 2.5% |\n\n"
-                "### Merged Amplicon Statistics\n\n"
-                "- **Total merged reads:** 43,891\n"
-                "- **Mean amplicon length:** 453 bp (V3–V4 expected: 440–480 bp ✅)\n"
-                "- **Mean GC content:** 54.2%\n"
-                "- **Merge rate:** 91.8% — excellent for V3–V4 amplicons\n\n"
-                "*Pipeline ready for downstream DADA2 / QIIME2 diversity analysis.*"
+        _demo_match = await _dispatcher.handle(req.command)
+        if _demo_match is not None:
+            _demo_tool, _demo_result = _demo_match
+            # BioOrchestrator already recorded the history entry via add_history_entry,
+            # so skip the duplicate recording in _dispatch_result.
+            _orchestrated = "run_id" in _demo_result and "summary_text" in _demo_result
+            return await _dispatch_result(
+                req, _demo_tool, _demo_result,
+                record_history=not _orchestrated,
             )
-            _amp_result = {
-                "status": "success", "visualization_type": "results_viewer",
-                "text": _amp_text, "links": [], "visuals": [],
-                "result": {"status": "success", "pipeline": "amplicon_qc",
-                           "merged_reads": 43891, "merge_rate": 0.918},
-            }
-            std = build_standard_response(
-                prompt=req.command, tool="quality_assessment",
-                result=_amp_result, session_id=req.session_id, mcp_route="/execute", success=True)
-            return CustomJSONResponse(std)
 
         # Phase 2b: if the client explicitly asked to execute a previously planned pipeline,
         # re-route through the agent with an execute_plan flag so it dispatches async jobs
@@ -1221,29 +1303,7 @@ async def execute(req: CommandRequest, request: Request):
                 # Direct tool call — bypasses broker & infra-decision-agent
                 _pre_result = await call_mcp_tool(_pre_tool, _pre_params)
                 logger.info(f"[Phase2c] '{_pre_tool}' done in {_t.time()-_pre_start:.2f}s")
-                # call_mcp_tool returns the raw tool dict (not broker-wrapped).
-                # Extract run-linkage fields from both the top level and the
-                # optional nested "result" sub-dict so we cover all tool shapes.
-                _pre_inner = (_pre_result.get("result") or {}) if isinstance(_pre_result, dict) else {}
-                history_manager.add_history_entry(
-                    req.session_id, req.command, _pre_tool, _pre_result,
-                    metadata={
-                        "tool_args": _pre_params,
-                        "inputs": _pre_result.get("inputs") if isinstance(_pre_result, dict) else None,
-                        "outputs": [],
-                        "produced_artifacts": (_pre_result.get("artifacts") or _pre_inner.get("artifacts")) if isinstance(_pre_result, dict) else None,
-                        "job_id": _pre_result.get("job_id") or _pre_inner.get("job_id"),
-                        "run_id": _pre_result.get("run_id") or _pre_inner.get("run_id"),
-                        "parent_run_id": _pre_result.get("parent_run_id") or _pre_inner.get("parent_run_id"),
-                        "mcp_route": "/execute",
-                    },
-                )
-                _pre_std = build_standard_response(
-                    prompt=req.command, tool=_pre_tool, result=_pre_result,
-                    session_id=req.session_id, mcp_route="/execute",
-                    success=True if not isinstance(_pre_result, dict) else _pre_result.get("status", "success") != "error",
-                )
-                return CustomJSONResponse(_pre_std)
+                return await _dispatch_result(req, _pre_tool, _pre_result, tool_args=_pre_params)
         except Exception as _pre_err:
             logger.warning(f"[Phase2c] fast path raised exception ({_pre_err}), falling through to agent")
 
@@ -1287,15 +1347,15 @@ async def execute(req: CommandRequest, request: Request):
             
             agent_done_time = time.time()
             agent_duration = agent_done_time - agent_start_time
-            print(f"✅ [PERF] Agent tool mapping completed in {agent_duration:.2f}s")
-            
+            logger.info("Agent tool mapping completed in %.2fs", agent_duration)
+
             # Check if agent returned a tool mapping (not full execution)
             if isinstance(agent_result, dict) and agent_result.get("status") == "tool_mapped":
                 # Agent only did tool mapping - now execute via router
                 tool_name = agent_result.get("tool_name")
                 parameters = agent_result.get("parameters", {})
                 
-                print(f"🔧 Agent mapped tool '{tool_name}', executing via router...")
+                logger.debug("Agent mapped tool '%s', executing via router...", tool_name)
                 
                 # Validate and fix S3 URIs for FastQC tool
                 if tool_name == "fastqc_quality_analysis":
@@ -1310,11 +1370,10 @@ async def execute(req: CommandRequest, request: Request):
                             # Fix URIs that start with // instead of s3://
                             if isinstance(uri, str) and uri.startswith("//") and not uri.startswith("s3://"):
                                 fixed_uri = "s3:" + uri
-                                print(f"⚠️  Fixed malformed S3 URI for {param_name}: {uri} → {fixed_uri}")
+                                logger.warning("Fixed malformed S3 URI for %s: %s → %s", param_name, uri, fixed_uri)
                                 parameters[param_name] = fixed_uri
                     
-                    # Log the parameters for debugging
-                    print(f"📋 FastQC parameters: input_r1={parameters.get('input_r1')}, input_r2={parameters.get('input_r2')}")
+                    logger.debug("FastQC parameters: input_r1=%s, input_r2=%s", parameters.get('input_r1'), parameters.get('input_r2'))
                 
                 # Execute the tool via router
                 tool_start_time = time.time()
@@ -1330,91 +1389,19 @@ async def execute(req: CommandRequest, request: Request):
                 )
                 
                 tool_done_time = time.time()
-                tool_duration = tool_done_time - tool_start_time
-                print(f"✅ [PERF] Tool execution completed in {tool_duration:.2f}s")
-                
-                history_manager.add_history_entry(
-                    req.session_id,
-                    req.command,
-                    tool_name,
-                    result,
-                    metadata={
-                        "tool_args": parameters,
-                        "inputs": result.get("inputs") if isinstance(result, dict) else None,
-                        "outputs": [],
-                        "produced_artifacts": result.get("artifacts") if isinstance(result, dict) else None,
-                        "job_id": (result.get("result", {}) or {}).get("job_id") if isinstance(result, dict) else None,
-                        "run_id": (result.get("result", {}) or {}).get("run_id") if isinstance(result, dict) else None,
-                        "parent_run_id": (result.get("result", {}) or {}).get("parent_run_id") if isinstance(result, dict) else None,
-                        "mcp_route": "/execute",
-                    },
-                )
-                
-                history_done_time = time.time()
-                print(f"✅ [PERF] History entry added, took {(history_done_time - tool_done_time)*1000:.2f}ms")
-                
-                response_start_time = time.time()
-                standard_response = build_standard_response(
-                    prompt=req.command,
-                    tool=tool_name,
-                    result=result,
-                    session_id=req.session_id,
-                    mcp_route="/execute",
-                    success=True if not isinstance(result, dict) else result.get("status", "success") != "error"
-                )
-                response_done_time = time.time()
-                total_duration = response_done_time - agent_start_time
-                print(f"✅ [PERF] Backend response ready in {total_duration:.2f}s (total)")
-                print(f"✅ [PERF] Response size: {len(str(standard_response))} chars")
-                return CustomJSONResponse(standard_response)
+                logger.info("Tool '%s' completed in %.2fs", tool_name, tool_done_time - tool_start_time)
+                return await _dispatch_result(req, tool_name, result, tool_args=parameters)
             else:
                 # Agent completed full execution (or returned something else)
-                history_manager.add_history_entry(
-                    req.session_id,
-                    req.command,
+                return await _dispatch_result(
+                    req,
                     "agent",
                     agent_result,
-                    metadata={
-                        "tool_args": {"execute_plan": bool(req.execute_plan)},
-                        "inputs": [],
-                        "outputs": [],
-                        "produced_artifacts": (agent_result.get("artifacts") if isinstance(agent_result, dict) else None) or [],
-                        "mcp_route": "/execute",
-                    },
+                    tool_args={"execute_plan": bool(req.execute_plan)},
                 )
-                
-                history_done_time = time.time()
-                print(f"✅ [PERF] History entry added, took {(history_done_time - agent_done_time)*1000:.2f}ms")
-                
-                response_start_time = time.time()
-                # Determine success: check both explicit success field and status
-                if isinstance(agent_result, dict):
-                    # Check explicit success field first (most reliable)
-                    if "success" in agent_result:
-                        is_success = agent_result["success"]
-                    # Fall back to status check (success/completed vs error/failed)
-                    else:
-                        status = agent_result.get("status", "success")
-                        is_success = status not in ["error", "failed", "workflow_failed"]
-                else:
-                    is_success = True
-                
-                standard_response = build_standard_response(
-                    prompt=req.command,
-                    tool="agent",
-                    result=agent_result,
-                    session_id=req.session_id,
-                    mcp_route="/execute",
-                    success=is_success
-                )
-                response_done_time = time.time()
-                total_duration = response_done_time - agent_start_time
-                print(f"✅ [PERF] Backend response ready in {total_duration:.2f}s (total)")
-                print(f"✅ [PERF] Response size: {len(str(standard_response))} chars")
-                return CustomJSONResponse(standard_response)
         except Exception as agent_err:
             # Fallback: use NLP router and MCP tools if the agent path fails
-            print(f"⚠️  Agent path failed, falling back to router/tool. Error: {agent_err}")
+            logger.warning("Agent path failed, falling back to router/tool: %s", agent_err)
 
             # Phase 4: prevent unintended tool generation for pure Q&A.
             # If the user intent is Q&A and the agent isn't available (e.g. mock mode),
@@ -1441,30 +1428,7 @@ async def execute(req: CommandRequest, request: Request):
                                 session_context=session_context,
                             )
                         )
-                        history_manager.add_history_entry(
-                            req.session_id,
-                            req.command,
-                            _tool_name,
-                            result,
-                            metadata={
-                                "tool_args": _params or {},
-                                "inputs": result.get("inputs") if isinstance(result, dict) else None,
-                                "outputs": [],
-                                "produced_artifacts": result.get("artifacts") if isinstance(result, dict) else None,
-                                "run_id": (result.get("result", {}) or {}).get("run_id") if isinstance(result, dict) else None,
-                                "parent_run_id": (result.get("result", {}) or {}).get("parent_run_id") if isinstance(result, dict) else None,
-                                "mcp_route": "/execute",
-                            },
-                        )
-                        standard_response = build_standard_response(
-                            prompt=req.command,
-                            tool=_tool_name,
-                            result=result,
-                            session_id=req.session_id,
-                            mcp_route="/execute",
-                            success=True if not isinstance(result, dict) else result.get("status", "success") != "error",
-                        )
-                        return CustomJSONResponse(standard_response)
+                        return await _dispatch_result(req, _tool_name, result, tool_args=_params or {})
                 except Exception:
                     pass
 
@@ -1503,49 +1467,16 @@ async def execute(req: CommandRequest, request: Request):
                         session_context=session_context,
                     )
                 )
-
-                history_manager.add_history_entry(
-                    req.session_id,
-                    req.command,
-                    "__plan__",
-                    result,
-                    metadata={
-                        "tool_args": {"plan": plan, "session_id": req.session_id},
-                        "inputs": result.get("inputs") if isinstance(result, dict) else None,
-                        "outputs": [],
-                        "produced_artifacts": result.get("artifacts") if isinstance(result, dict) else None,
-                        "job_id": (result.get("result", {}) or {}).get("job_id") if isinstance(result, dict) else None,
-                        "run_id": (result.get("result", {}) or {}).get("run_id") if isinstance(result, dict) else None,
-                        "parent_run_id": (result.get("result", {}) or {}).get("parent_run_id") if isinstance(result, dict) else None,
-                        "mcp_route": "/execute",
-                    },
+                return await _dispatch_result(
+                    req, "__plan__", result,
+                    tool_args={"plan": plan, "session_id": req.session_id},
                 )
-
-                standard_response = build_standard_response(
-                    prompt=req.command,
-                    tool="__plan__",
-                    result=result,
-                    session_id=req.session_id,
-                    mcp_route="/execute",
-                    success=True if not isinstance(result, dict) else result.get("status", "success") != "error"
-                )
-                return CustomJSONResponse(standard_response)
 
             tool_name, parameters = command_router.route_command(req.command, session_context)
-            print(f"🔧 Routed command '{req.command}' to tool '{tool_name}' with parameters: {parameters}")
-
-            print(f"🔧 [DEBUG] Session context before {tool_name} call:")
-            print(f"  Session ID: {req.session_id}")
-            print(f"  Session context keys: {list(session_context.keys()) if session_context else 'None'}")
-            if session_context and "mutated_sequences" in session_context:
-                print(f"  mutated_sequences count: {len(session_context['mutated_sequences'])}")
-            if session_context and "mutation_results" in session_context:
-                print(f"  mutation_results count: {len(session_context['mutation_results'])}")
+            logger.debug("Routed '%s' → tool='%s'", req.command[:60], tool_name)
 
             if tool_name == "variant_selection" and "session_id" not in parameters:
                 parameters["session_id"] = req.session_id
-            
-            # Add session_id for FastQC jobs to use session-specific S3 paths
             if tool_name == "fastqc_quality_analysis" and "session_id" not in parameters:
                 parameters["session_id"] = req.session_id
 
@@ -1561,90 +1492,10 @@ async def execute(req: CommandRequest, request: Request):
                     session_context=session_context,
                 )
             )
-            
-            tool_done_time = time.time()
-            tool_duration = tool_done_time - tool_start_time
-            print(f"✅ [PERF] Tool execution completed in {tool_duration:.2f}s")
+            logger.info("Tool '%s' completed in %.2fs", tool_name, time.time() - tool_start_time)
 
-            history_manager.add_history_entry(
-                req.session_id,
-                req.command,
-                tool_name,
-                result,
-                metadata={
-                    "tool_args": parameters,
-                    "inputs": result.get("inputs") if isinstance(result, dict) else None,
-                    "outputs": [],
-                    "produced_artifacts": result.get("artifacts") if isinstance(result, dict) else None,
-                    "job_id": (result.get("result", {}) or {}).get("job_id") if isinstance(result, dict) else None,
-                    "run_id": (result.get("result", {}) or {}).get("run_id") if isinstance(result, dict) else None,
-                    "parent_run_id": (result.get("result", {}) or {}).get("parent_run_id") if isinstance(result, dict) else None,
-                    "mcp_route": "/execute",
-                }
-            )
-            
-            history_done_time = time.time()
-            print(f"✅ [PERF] History entry added, took {(history_done_time - tool_done_time)*1000:.2f}ms")
-
-            response_start_time = time.time()
-            standard_response = build_standard_response(
-                prompt=req.command,
-                tool=tool_name,
-                result=result,
-                session_id=req.session_id,
-                mcp_route="/execute",
-                success=True if not isinstance(result, dict) else result.get("status", "success") != "error"
-            )
-            response_done_time = time.time()
-            total_duration = response_done_time - tool_start_time
-            print(f"✅ [PERF] Backend response ready in {total_duration:.2f}s (total)")
-            print(f"✅ [PERF] Response size: {len(str(standard_response))} chars")
-
-            # Store mutated sequences in session context for downstream steps (if mutation)
-            if tool_name == "mutate_sequence":
-                variants = None
-                if isinstance(result, dict):
-                    if "statistics" in result and isinstance(result["statistics"], dict) and "variants" in result["statistics"]:
-                        variants = result["statistics"]["variants"]
-                    elif "variants" in result:
-                        variants = result["variants"]
-                    elif "output" in result and isinstance(result["output"], dict) and "variants" in result["output"]:
-                        variants = result["output"]["variants"]
-
-                if variants and hasattr(history_manager, 'sessions') and req.session_id in history_manager.sessions:
-                    history_manager.sessions[req.session_id]["mutated_sequences"] = variants
-                    history_manager.sessions[req.session_id]["mutation_results"] = variants
-                    print(f"🔧 [DEBUG] After mutation via /execute - Session {req.session_id} contents:")
-                    session_data = history_manager.sessions[req.session_id]
-                    if "mutated_sequences" in session_data:
-                        print(f"  mutated_sequences: {len(session_data['mutated_sequences'])} items")
-
-            # Store aligned sequences in session context for downstream steps (if alignment)
-            if tool_name == "sequence_alignment":
-                aligned_seqs = None
-                if isinstance(result, dict):
-                    if "alignment" in result and isinstance(result["alignment"], list):
-                        aligned_seqs = result["alignment"]
-                    elif "output" in result and isinstance(result["output"], list):
-                        aligned_seqs = result["output"]
-
-                if aligned_seqs and hasattr(history_manager, 'sessions') and req.session_id in history_manager.sessions:
-                    fasta_lines = []
-                    for seq in aligned_seqs:
-                        if isinstance(seq, dict):
-                            name = seq.get("name", "sequence")
-                            sequence = seq.get("sequence", "")
-                            fasta_lines.append(f">{name}")
-                            fasta_lines.append(sequence)
-                    aligned_sequences_fasta = "\n".join(fasta_lines)
-                    history_manager.sessions[req.session_id]["aligned_sequences"] = aligned_sequences_fasta
-                    print(f"🔧 [DEBUG] After alignment via /execute - Stored {len(aligned_seqs)} aligned sequences in session context")
-
-            response_done_time = time.time()
-            total_duration = response_done_time - tool_start_time
-            print(f"✅ [PERF] Backend response ready in {total_duration:.2f}s (total)")
-            print(f"✅ [PERF] Response size: {len(str(standard_response))} chars")
-            return CustomJSONResponse(standard_response)
+            _apply_session_context_side_effects(req.session_id, tool_name, result)
+            return await _dispatch_result(req, tool_name, result, tool_args=parameters)
     except Exception as e:
         return CustomJSONResponse({
             "success": False,
@@ -1688,15 +1539,15 @@ async def agent_command(req: AgentCommandRequest, request: Request):
         result = await handle_command(req.prompt, session_id=session_id, session_context=session_context)
         agent_done_time = time.time()
         agent_duration = agent_done_time - agent_start_time
-        print(f"✅ [PERF] Agent tool mapping completed in {agent_duration:.2f}s")
+        logger.info("Agent tool mapping completed in %.2fs", agent_duration)
 
         # Check if agent returned a tool mapping (not full execution)
         if isinstance(result, dict) and result.get("status") == "tool_mapped":
             # Agent only did tool mapping - now execute via router
             tool_name = result.get("tool_name")
             parameters = result.get("parameters", {})
-            
-            print(f"🔧 Agent mapped tool '{tool_name}', executing via router...")
+
+            logger.debug("Agent mapped tool '%s', executing via router...", tool_name)
             
             try:
                 # Execute via broker for consistent routing (sync vs async jobs)
@@ -1713,7 +1564,7 @@ async def agent_command(req: AgentCommandRequest, request: Request):
                 )
                 tool_done_time = time.time()
                 tool_duration = tool_done_time - tool_start_time
-                print(f"✅ [PERF] Tool execution completed in {tool_duration:.2f}s")
+                logger.info("Tool '%s' completed in %.2fs", tool_name, tool_duration)
                 
                 # Track tool execution in history
                 history_manager.add_history_entry(
@@ -1734,9 +1585,7 @@ async def agent_command(req: AgentCommandRequest, request: Request):
                 )
                 response_done_time = time.time()
                 total_duration = response_done_time - agent_start_time
-                print(f"✅ [PERF] Backend response ready in {total_duration:.2f}s (total)")
-                print(f"✅ [PERF] Response size: {len(str(standard_response))} chars")
-
+                logger.info("Response ready in %.2fs", total_duration)
                 return CustomJSONResponse(standard_response)
             except Exception as tool_err:
                 logger.error(f"Tool execution failed for {tool_name}: {tool_err}")
@@ -1781,8 +1630,7 @@ async def agent_command(req: AgentCommandRequest, request: Request):
             )
             response_done_time = time.time()
             total_duration = response_done_time - agent_start_time
-            print(f"✅ [PERF] Backend response ready in {total_duration:.2f}s (total)")
-            print(f"✅ [PERF] Response size: {len(str(standard_response))} chars")
+            logger.info("Response ready in %.2fs", total_duration)
 
             return CustomJSONResponse(standard_response)
     except Exception as err:
@@ -1879,16 +1727,7 @@ async def mutate_sequence_mcp(req: MutationRequest):
                 # Also store as mutation_results for select_variants
                 history_manager.sessions[req.session_id]["mutation_results"] = variants
                 
-                # DEBUG: Print session contents after mutation
-                print(f"🔧 [DEBUG] After mutation - Session {req.session_id} contents:")
-                session_data = history_manager.sessions[req.session_id]
-                for key, value in session_data.items():
-                    if key in ["mutated_sequences", "mutation_results"]:
-                        print(f"  {key}: {len(value) if isinstance(value, list) else type(value)} items")
-                        if isinstance(value, list) and len(value) > 0:
-                            print(f"    First item: {value[0]}")
-                    else:
-                        print(f"  {key}: {type(value)}")
+                logger.debug("Session %s: stored %d mutated sequences", req.session_id, len(variants) if isinstance(variants, list) else 0)
         
         return CustomJSONResponse({
             "success": True,
@@ -1942,19 +1781,7 @@ async def analyze_sequence_data_mcp(req: AnalysisRequest):
 async def select_variants_mcp(req: VariantSelectionRequest):
     """Select variants from previous mutation results."""
     try:
-        # DEBUG: Print session contents before selection
-        print(f"🔧 [DEBUG] Before selection - Session {req.session_id} contents:")
-        if hasattr(history_manager, 'sessions') and req.session_id in history_manager.sessions:
-            session_data = history_manager.sessions[req.session_id]
-            for key, value in session_data.items():
-                if key in ["mutated_sequences", "mutation_results"]:
-                    print(f"  {key}: {len(value) if isinstance(value, list) else type(value)} items")
-                    if isinstance(value, list) and len(value) > 0:
-                        print(f"    First item: {value[0]}")
-                else:
-                    print(f"  {key}: {type(value)}")
-        else:
-            print(f"  Session {req.session_id} not found in history_manager.sessions")
+        logger.debug("select_variants called for session %s", req.session_id)
         
         # Add tools directory to path
         tools_path = str((Path(__file__).resolve().parent.parent / "tools").resolve())
@@ -2552,6 +2379,90 @@ def _build_needs_inputs_response(tool_name: str, arguments: Dict[str, Any]) -> D
     }
 
 
+def _save_analysis_script(
+    tool_name: str,
+    arguments: Dict[str, Any],
+    result: Dict[str, Any],
+    session_id: str = "",
+) -> Optional[str]:
+    """Generate and persist an analysis.py for *tool_name* + *arguments*.
+
+    Called after the tool result is available so we can embed the run_id that
+    the BioOrchestrator assigned.  Returns the script path string on success,
+    or None if generation is not supported for this tool.
+    """
+    try:
+        from backend import code_generator as _cg
+        from backend.history_manager import history_manager
+
+        # Derive the run_id from the result (BioOrchestrator embeds it)
+        run_id = (
+            result.get("run_id")
+            or result.get("result", {}).get("run_id", "")
+            or ""
+        )
+        if not run_id:
+            # Mint a simple timestamp-based id when orchestrator run_id is absent
+            import time
+            run_id = f"run-{int(time.time() * 1000)}"
+
+        if not session_id:
+            session_id = "default"
+
+        # Store scripts under sessions/<session_id>/runs/<run_id>/
+        sessions_root = Path(__file__).parent.parent / "sessions"
+        run_dir = sessions_root / session_id / "runs" / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+
+        script_text = _cg.generate(
+            tool_name,
+            arguments,
+            run_id=run_id,
+            session_id=session_id,
+            run_dir=str(run_dir),
+        )
+        if script_text is None:
+            return None
+
+        script_path = run_dir / "analysis.py"
+        script_path.write_text(script_text)
+
+        # Register the script as an artifact on the matching run record
+        try:
+            runs = history_manager.list_runs(session_id)
+            for r in reversed(runs):
+                if isinstance(r, dict) and r.get("run_id") == run_id:
+                    arts = r.setdefault("produced_artifacts", [])
+                    # Avoid duplicates
+                    if not any(
+                        a.get("type") == "script" and a.get("uri") == str(script_path)
+                        for a in arts if isinstance(a, dict)
+                    ):
+                        arts.append({
+                            "type":  "script",
+                            "uri":   str(script_path),
+                            "title": "analysis.py",
+                        })
+                    break
+        except Exception:
+            pass  # non-fatal
+
+        return str(script_path)
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).debug("Script generation failed: %s", exc)
+        return None
+
+
+# Tools for which we generate and save an analysis.py after each execution
+_SCRIPTABLE_TOOLS = frozenset({
+    "bulk_rnaseq_analysis",
+    "single_cell_analysis",
+    "phylogenetic_tree",
+    "fastqc_quality_analysis",
+})
+
+
 async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
     """Call an MCP tool and return the result."""
     # Add tools directory to path
@@ -2598,6 +2509,7 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
         "local_edit_visualization",
         "local_edit_and_rerun_script",
         "session_run_io_summary",
+        "patch_and_rerun",
     }:
         from backend import agent_tools as _agent_tools
 
@@ -2722,16 +2634,8 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
                 "summary": {"forward": _trim_result["summary"], "reverse": _trim_result["summary"]},
             }
 
-        print(f"🔧 [DEBUG] read_trimming tool called with:")
-        print(f"  adapter: {adapter}")
-        print(f"  quality_threshold: {quality_threshold}")
-        print(f"  has_forward_reads: {bool(forward_reads)}")
-        print(f"  has_reverse_reads: {bool(reverse_reads)}")
-        print(f"  has_reads: {bool(reads)}")
-        if forward_reads:
-            print(f"  forward_reads length: {len(forward_reads)}")
-        if reverse_reads:
-            print(f"  reverse_reads length: {len(reverse_reads)}")
+        logger.debug("read_trimming: adapter=%s q=%s fw=%s rv=%s reads=%s",
+                     adapter, quality_threshold, bool(forward_reads), bool(reverse_reads), bool(reads))
         
         # If we have separate forward/reverse reads, process them separately
         if forward_reads and reverse_reads:
@@ -2864,7 +2768,7 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
     elif tool_name == "quality_assessment":
         import quality_assessment
         sequences = arguments.get("sequences", "")
-        print(f"🔧 [DEBUG] Quality assessment tool called with {len(sequences)} characters of sequences")
+        logger.debug("quality_assessment called with %d chars", len(sequences))
         return quality_assessment.run_quality_assessment_raw(sequences)
 
     elif tool_name == "quality_report":
@@ -2908,6 +2812,94 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
             "completed_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
         }
 
+    elif tool_name == "bio_rerun":
+        # Re-run the last bioinformatics tool with optional parameter overrides.
+        from backend.bio_pipeline import BioOrchestrator as _BioOrch
+        _orch_rerun = _BioOrch(tool_executor=call_mcp_tool, history_manager=history_manager)
+        _session_id_rr = arguments.get("session_id", "")
+        _changes_rr = arguments.get("changes", {})
+        _target_run = arguments.get("target_run", "latest")
+
+        if _target_run == "latest":
+            # Look up the most recent run for this session from the artifacts dir
+            from pathlib import Path as _Path
+            _arts_root = _Path(__file__).parent.parent / "artifacts"
+            _run_dirs = sorted(
+                _arts_root.glob("*/run.json"),
+                key=lambda p: p.stat().st_mtime if p.exists() else 0,
+                reverse=True,
+            )
+            if not _run_dirs:
+                return {
+                    "status": "error",
+                    "text": "No prior bioinformatics run found. Run an analysis first.",
+                }
+            _target_run = _run_dirs[0].parent.name
+
+        result = await _orch_rerun.rerun(_target_run, _changes_rr, session_id=_session_id_rr)
+        return {
+            "status": result.get("status", "success"),
+            "visualization_type": "results_viewer",
+            "text": result.get("text", result.get("summary_text", "Re-run complete.")),
+            "visuals": result.get("visuals", []),
+            "links": result.get("links", []),
+            "run_id": result.get("run_id"),
+            "parent_run_id": result.get("parent_run_id"),
+            "delta": result.get("delta", {}),
+            "result": result,
+        }
+
+    elif tool_name == "bio_diff_runs":
+        # Return a structured comparison of two bioinformatics runs.
+        from backend.bio_pipeline import BioOrchestrator as _BioOrch
+        from pathlib import Path as _Path
+        _orch_diff = _BioOrch(tool_executor=call_mcp_tool)
+        _run_a = arguments.get("run_id_a", "latest")
+        _run_b = arguments.get("run_id_b", "prior")
+
+        # Resolve "latest" / "prior" pseudo-IDs
+        _arts_root_diff = _Path(__file__).parent.parent / "artifacts"
+        _run_dirs_diff = sorted(
+            _arts_root_diff.glob("*/run.json"),
+            key=lambda p: p.stat().st_mtime if p.exists() else 0,
+            reverse=True,
+        )
+        _resolved_ids = [p.parent.name for p in _run_dirs_diff]
+        if _run_a == "latest":
+            _run_a = _resolved_ids[0] if _resolved_ids else ""
+        if _run_b == "prior":
+            _run_b = _resolved_ids[1] if len(_resolved_ids) > 1 else ""
+
+        if not _run_a or not _run_b:
+            return {
+                "status": "error",
+                "text": "Could not resolve run IDs. Please run an analysis first.",
+            }
+
+        diff = await _orch_diff.diff_runs(_run_a, _run_b)
+        if diff.get("status") == "error":
+            return {"status": "error", "text": diff.get("message", "Diff failed.")}
+
+        _param_changes = diff.get("param_changes", {})
+        _change_lines = "\n".join(
+            f"- **{k}**: `{v['run_a']}` → `{v['run_b']}`"
+            for k, v in _param_changes.items()
+        ) or "- No parameter changes detected."
+
+        text = (
+            f"## Run Comparison\n\n"
+            f"**Run A:** `{_run_a[:8]}…`  \n"
+            f"**Run B:** `{_run_b[:8]}…`\n\n"
+            f"### Parameter Changes\n{_change_lines}\n\n"
+            f"### Metrics (Run B)\n{diff.get('delta_a_to_b', {}).get('narrative', 'N/A')}"
+        )
+        return {
+            "status": "success",
+            "visualization_type": "text",
+            "text": text,
+            "result": diff,
+        }
+
     elif tool_name == "handle_natural_command":
         # Use the BioAgent path (system prompt from agent.md) for natural commands
         # Lazy import: Import backend.agent only when needed, not at module import time.
@@ -2920,17 +2912,57 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
         return await handle_command(command, session_id=session_id)
     
     elif tool_name == "phylogenetic_tree":
-        # Handle phylogenetic tree analysis
-        import phylogenetic_tree
+        # Handle phylogenetic tree analysis — use backend Python-native module
+        from backend import phylogenetic_tree as _phylo_mod
         aligned_sequences = arguments.get("aligned_sequences", "")
-        return phylogenetic_tree.run_phylogenetic_tree_raw(aligned_sequences)
-    
+        raw = _phylo_mod.run_phylogenetic_tree_raw(aligned_sequences)
+
+        # Build a visuals list from the various plot fields the module returns
+        _phylo_visuals = []
+        if raw.get("tree_plot_b64"):
+            _phylo_visuals.append({
+                "type": "image_b64",
+                "data": raw["tree_plot_b64"],
+                "title": "Phylogenetic Tree",
+            })
+        if raw.get("dist_matrix_b64"):
+            _phylo_visuals.append({
+                "type": "image_b64",
+                "data": raw["dist_matrix_b64"],
+                "title": "Pairwise Distance Matrix",
+            })
+        if raw.get("ete_visualization"):
+            _phylo_visuals.append({
+                "type": "image_b64",
+                "data": raw["ete_visualization"],
+                "title": "Annotated Tree (ETE3)",
+            })
+        if not _phylo_visuals and raw.get("plot"):
+            _phylo_visuals.append({
+                "type": "image_b64",
+                "data": raw["plot"],
+                "title": "Distance Heatmap",
+            })
+
+        phylo_response = {
+            **raw,
+            "visuals": _phylo_visuals,
+            "visualization_type": "results_viewer",
+        }
+        _save_analysis_script(
+            "phylogenetic_tree",
+            {"aligned_sequences": aligned_sequences},
+            phylo_response,
+            session_id=arguments.get("session_id", ""),
+        )
+        return phylo_response
+
     elif tool_name == "clustering_analysis":
         # Handle clustering analysis
-        import phylogenetic_tree
+        from backend import phylogenetic_tree as _phylo_mod
         aligned_sequences = arguments.get("aligned_sequences", "")
         num_clusters = arguments.get("num_clusters", 5)
-        return phylogenetic_tree.run_clustering_from_tree(aligned_sequences, num_clusters)
+        return _phylo_mod.run_clustering_from_tree(aligned_sequences, num_clusters)
     
     elif tool_name == "variant_selection":
         # Handle variant selection - use session-based selection instead of phylogenetic tree
@@ -2956,8 +2988,8 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
         )
     
     elif tool_name == "single_cell_analysis":
-        # Handle single-cell RNA-seq analysis using scPipeline
-        import single_cell_analysis
+        # Handle single-cell RNA-seq analysis — use backend Python-native module
+        from backend import single_cell_analysis
 
         data_file = arguments.get("data_file") or arguments.get("data_path")
 
@@ -2965,108 +2997,56 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
         if not data_file and not arguments.get("needs_inputs"):
             return _build_needs_inputs_response("single_cell_analysis", arguments)
 
-        # ── Fast-path for SLE PBMC demo data ──────────────────────────────────
-        _SLE_DATA = "s3://noricum-ngs-data/demo/scrna/sle_pbmc_filtered_feature_bc_matrix.h5"
-        _SCRNA_PRECOMP = "noricum-ngs-data/demo/scrna/precomputed/latest"
-        if data_file and data_file.strip() == _SLE_DATA:
-            import boto3 as _boto3
-            _s3sc = _boto3.client("s3")
-            _sc_bucket = _SCRNA_PRECOMP.split("/")[0]
-            _sc_prefix = "/".join(_SCRNA_PRECOMP.split("/")[1:])
-            _sc_files = {
-                "umap_celltype":   ("umap_celltype.png",   "image/png"),
-                "umap_disease":    ("umap_disease.png",    "image/png"),
-                "dotplot_markers": ("dotplot_markers.png", "image/png"),
-                "marker_genes":    ("marker_genes.csv",    "text/csv"),
-            }
-            _sc_presigned: Dict[str, str] = {}
-            for _label, (_fname, _ct) in _sc_files.items():
-                try:
-                    _sc_presigned[_label] = _s3sc.generate_presigned_url(
-                        "get_object",
-                        Params={"Bucket": _sc_bucket, "Key": f"{_sc_prefix}/{_fname}"},
-                        ExpiresIn=86400)
-                except Exception:
-                    pass
-
-            _sc_text = (
-                "## Single-Cell RNA-seq Analysis Complete\n\n"
-                "**Dataset:** Human PBMC — SLE vs Healthy  \n"
-                "**Cells:** 600  |  **Genes:** 300  |  **Cell types:** 8  \n\n"
-                "### Cell Type Composition\n\n"
-                "| Cell Type | Cells | % of Total |\n"
-                "|-----------|-------|------------|\n"
-                "| CD4 T cell | 150 | 25.0% |\n"
-                "| B cell | 108 | 18.0% |\n"
-                "| Monocyte | 90 | 15.0% |\n"
-                "| CD8 T cell | 90 | 15.0% |\n"
-                "| NK cell | 60 | 10.0% |\n"
-                "| Treg | 42 | 7.0% |\n"
-                "| Plasma cell | 30 | 5.0% |\n"
-                "| pDC | 30 | 5.0% |\n\n"
-                "### Key Findings\n\n"
-                "- **IRF7** and **LILRA4** significantly upregulated in SLE pDCs (interferon signature)\n"
-                "- **FOXP3+ Tregs** depleted in SLE vs Healthy (7.0% vs 8.5%)\n"
-                "- **Plasma cells** expanded in SLE (5.0% vs 2.8%)\n"
-                "- UMAP shows clear separation by disease status in pDC and plasma cell clusters\n\n"
-                "### Top Marker Genes per Cell Type\n\n"
-                "CD4 T: CD3D, CD4, IL7R  |  CD8 T: CD8A, GZMB  |  "
-                "B cell: CD19, MS4A1  |  NK: GNLY, NKG7  |  "
-                "Monocyte: CD14, LYZ  |  pDC: LILRA4, IRF7\n"
-            )
-            _sc_visuals = []
-            _sc_links = []
-            for _label, _url in _sc_presigned.items():
-                if _label.startswith("umap"):
-                    _title = "Cell Type Annotation" if "celltype" in _label else "Disease Status"
-                    _sc_visuals.append({"type": "image", "url": _url, "title": f"UMAP — {_title}"})
-                elif _label == "dotplot_markers":
-                    _sc_visuals.append({"type": "image", "url": _url, "title": "Marker Gene Dot Plot"})
-                elif _label == "marker_genes":
-                    _sc_links.append({"label": "Marker genes table (CSV)", "url": _url})
-
-            return {
-                "status": "success",
-                "visualization_type": "results_viewer",
-                "text": _sc_text,
-                "links": _sc_links,
-                "visuals": _sc_visuals,
-                "result": {"status": "success", "n_cells": 600, "n_genes": 300,
-                           "n_cell_types": 8, "dataset": "SLE PBMC"},
-            }
-
-        # Rscript not available: return informative stub
-        if os.getenv("HELIX_MOCK_MODE") or shutil.which("Rscript") is None:
-            return {
-                "status": "success",
-                "result": {"status": "success",
-                           "summary": {"cells": 500, "genes": 2000, "clusters": 8},
-                           "message": "Install Rscript + Seurat for real single-cell analysis."},
-                "text": "Single-cell analysis completed (mock — Rscript unavailable)",
-            }
         data_format = arguments.get("data_format", "10x")
-        steps = arguments.get("steps", ["all"])
-        resolution = arguments.get("resolution", 0.5)
-        nfeatures = arguments.get("nfeatures", 2000)
-        
-        # Get session context if available
-        session_context = arguments.get("session_context", {})
-        
-        # Run analysis
+        steps = arguments.get("steps", "all")
+        if isinstance(steps, list):
+            steps = ",".join(steps)
+        resolution = float(arguments.get("resolution", 0.5))
+
         result = single_cell_analysis.analyze_single_cell_data(
             data_file=data_file,
             data_format=data_format,
             steps=steps,
             resolution=resolution,
-            nfeatures=nfeatures,
-            **{k: v for k, v in arguments.items() if k not in ["data_file", "data_format", "steps", "resolution", "nfeatures", "session_context"]}
+            question=arguments.get("question"),
         )
-        
-        return {
+
+        # Build visuals from base64 plots
+        plots = result.get("plots", {})
+        _sc_visuals = []
+        for label, b64 in plots.items():
+            titles = {
+                "umap_clusters":   "t-SNE — Cluster Overview",
+                "umap_celltype":   "t-SNE — Cell Type Annotation",
+                "umap_condition":  "t-SNE — Disease Status",
+                "dotplot_markers": "Marker Gene Dot Plot",
+            }
+            _sc_visuals.append({
+                "type": "image_b64",
+                "data": b64,
+                "title": titles.get(label, label.replace("_", " ").title()),
+            })
+
+        sc_response = {
             "status": result.get("status", "success"),
+            "visualization_type": "results_viewer",
+            "text": result.get("text", "Single-cell analysis complete."),
+            "links": [],
+            "visuals": _sc_visuals,
             "result": result,
-            "text": f"Single-cell analysis completed. Steps: {', '.join(steps) if isinstance(steps, list) else steps}"
         }
+        _save_analysis_script(
+            "single_cell_analysis",
+            {
+                "data_file": data_file,
+                "data_format": data_format,
+                "steps": steps,
+                "resolution": resolution,
+            },
+            sc_response,
+            session_id=arguments.get("session_id", ""),
+        )
+        return sc_response
 
     elif tool_name == "fetch_ncbi_sequence":
         # Delegate to backend.agent_tools so mock mode and output shape are consistent.
@@ -3131,7 +3111,7 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
         }
 
     elif tool_name == "bulk_rnaseq_analysis":
-        import bulk_rnaseq
+        from backend import bulk_rnaseq
 
         count_matrix    = arguments.get("count_matrix", "")
         sample_metadata = arguments.get("sample_metadata", "")
@@ -3142,161 +3122,13 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
         if not count_matrix and not sample_metadata:
             return _build_needs_inputs_response("bulk_rnaseq_analysis", arguments)
 
-        # ── Fast-path for the T. gondii demo data ──────────────────────────────
-        # Return pre-computed results immediately so the response fits inside
-        # CloudFront's 60 s timeout. The files were produced by running the full
-        # pydeseq2 analysis locally and are stored at a stable S3 prefix.
-        _DEMO_CM  = "s3://noricum-ngs-data/demo/rnaseq/tgondii_counts.csv"
-        _DEMO_META = "s3://noricum-ngs-data/demo/rnaseq/tgondii_metadata.csv"
-        _PRECOMP   = "noricum-ngs-data/demo/rnaseq/precomputed/latest"
-        _PRECOMP_FILES = {
-            "de_infection_status__infected_vs_uninfected":
-                ("de_infection_status__infected_vs_uninfected.csv", "text/csv"),
-            "de_time_point__11dpi_vs_33dpi":
-                ("de_time_point__11dpi_vs_33dpi.csv", "text/csv"),
-            "volcano_infection_status__infected_vs_uninfected":
-                ("volcano_infection_status__infected_vs_uninfected.png", "image/png"),
-            "volcano_time_point__11dpi_vs_33dpi":
-                ("volcano_time_point__11dpi_vs_33dpi.png", "image/png"),
-            "pca":
-                ("pca.png", "image/png"),
-        }
-        if count_matrix.strip() == _DEMO_CM and sample_metadata.strip() == _DEMO_META:
-            import boto3 as _boto3
-            _s3 = _boto3.client("s3")
-            _presigned: Dict[str, str] = {}
-            for _label, (_fname, _ct) in _PRECOMP_FILES.items():
-                _key = f"{_PRECOMP.split('/', 1)[1]}/{_fname}" if '/' in _PRECOMP else _fname
-                _bucket = _PRECOMP.split("/")[0]
-                _key = "/".join(_PRECOMP.split("/")[1:]) + f"/{_fname}"
-                try:
-                    _presigned[_label] = _s3.generate_presigned_url(
-                        "get_object",
-                        Params={"Bucket": _bucket, "Key": _key},
-                        ExpiresIn=86400,
-                    )
-                except Exception:
-                    pass
-
-            _summary = [
-                {"contrast": "infection status: infected vs uninfected",
-                 "total_genes": 1000, "significant": 15, "upregulated": 13, "downregulated": 2},
-                {"contrast": "time point: 11dpi vs 33dpi",
-                 "total_genes": 1000, "significant": 7, "upregulated": 1, "downregulated": 6},
-            ]
-            _top = (
-                "\n**Infection: infected vs uninfected** — top genes: Mx1, Irf7, Cxcl10, Ifit1, Stat1"
-                "\n**Time point: 11dpi vs 33dpi** — top genes: Tnf, Il6, Socs1, Il1b, Ccl2"
-            )
-            _header = (
-                f"## Bulk RNA-seq Analysis Complete\n\n"
-                f"**Design formula:** `{design_formula}`  \n"
-                f"**Samples:** 12  |  **Genes:** 1,000\n\n"
-                f"### Differential Expression Summary\n\n"
-                f"| Contrast | Total Genes | Significant (padj < {alpha}) | Up | Down |\n"
-                f"|----------|-------------|-----------------------------|----|------|\n"
-            )
-            _rows_md = "".join(
-                f"| {r['contrast']} | {r['total_genes']} | {r['significant']} | {r['upregulated']} | {r['downregulated']} |\n"
-                for r in _summary
-            )
-            _text = _header + _rows_md + f"\n### Top Differentially Expressed Genes{_top}\n"
-
-            _links = []
-            _visuals = []
-            for _label, _url in _presigned.items():
-                if _label.startswith("de_"):
-                    _display = _label[3:].replace("__", ": ").replace("_", " ").title()
-                    _links.append({"label": f"DE table — {_display}", "url": _url})
-                elif _label.startswith("volcano_"):
-                    _display = _label[8:].replace("__", ": ").replace("_", " ").title()
-                    _visuals.append({"type": "image", "url": _url, "title": f"Volcano — {_display}"})
-                elif _label == "pca":
-                    _visuals.append({"type": "image", "url": _url, "title": "PCA Plot"})
-
-            return {
-                "status": "success",
-                "visualization_type": "results_viewer",
-                "text": _text,
-                "links": _links,
-                "visuals": _visuals,
-                "result": {"status": "success", "de_summary": _summary, "top_genes": _top,
-                           "n_genes_total": 1000, "n_samples": 12, "design_formula": design_formula},
-            }
-
-        # ── Fast-path for the APAP time-course demo data ───────────────────────
-        _APAP_CM   = "s3://noricum-ngs-data/demo/rnaseq/apap_timecourse_counts.csv"
-        _APAP_META = "s3://noricum-ngs-data/demo/rnaseq/apap_timecourse_metadata.csv"
-        _APAP_PRECOMP = "noricum-ngs-data/demo/rnaseq/apap_precomputed/latest"
-        if count_matrix.strip() == _APAP_CM and sample_metadata.strip() == _APAP_META:
-            import boto3 as _boto3
-            _s3a = _boto3.client("s3")
-            _bucket_a = _APAP_PRECOMP.split("/")[0]
-            _prefix_a = "/".join(_APAP_PRECOMP.split("/")[1:])
-            # List all files in the precomputed prefix
-            _resp = _s3a.list_objects_v2(Bucket=_bucket_a, Prefix=_prefix_a + "/")
-            _apap_files = [obj["Key"] for obj in _resp.get("Contents", [])]
-            _apap_presigned: Dict[str, str] = {}
-            for _key in _apap_files:
-                _fname = _key.split("/")[-1]
-                _label = _fname.replace(".csv", "").replace(".png", "")
-                try:
-                    _apap_presigned[_label] = _s3a.generate_presigned_url(
-                        "get_object", Params={"Bucket": _bucket_a, "Key": _key}, ExpiresIn=86400)
-                except Exception:
-                    pass
-
-            _apap_summary = [
-                {"contrast": "time point: 0h vs 6h",   "total_genes": 1000, "significant": 11, "upregulated": 3, "downregulated": 8},
-                {"contrast": "time point: 0h vs 24h",  "total_genes": 1000, "significant": 12, "upregulated": 4, "downregulated": 8},
-                {"contrast": "time point: 0h vs 72h",  "total_genes": 1000, "significant": 9,  "upregulated": 1, "downregulated": 8},
-                {"contrast": "time point: 0h vs 168h", "total_genes": 1000, "significant": 7,  "upregulated": 2, "downregulated": 5},
-            ]
-            _apap_top = (
-                "\n**0h vs 6h (acute response)** — top genes: Cyp2e1, Hmox1, Lcn2, Saa1, Il6"
-                "\n**0h vs 24h (peak injury)** — top genes: Ccl2, Cxcl10, Tgfb1, Col1a1, Timp1"
-                "\n**0h vs 168h (recovery)** — top genes: Alb, Apoe, Cyp7a1, G6pc, Pcsk9"
-            )
-            _apap_header = (
-                f"## Bulk RNA-seq Time-Course Analysis Complete\n\n"
-                f"**Design formula:** `{design_formula}`  \n"
-                f"**Samples:** 20 (5 time points × 4 replicates)  |  **Genes:** 1,000\n\n"
-                f"### Differential Expression Summary (vs 0h baseline)\n\n"
-                f"| Contrast | Total Genes | Significant (padj < {alpha}) | Up | Down |\n"
-                f"|----------|-------------|-----------------------------|----|------|\n"
-            )
-            _apap_rows = "".join(
-                f"| {r['contrast']} | {r['total_genes']} | {r['significant']} | {r['upregulated']} | {r['downregulated']} |\n"
-                for r in _apap_summary
-            )
-            _apap_text = _apap_header + _apap_rows + f"\n### Top Differentially Expressed Genes{_apap_top}\n"
-
-            _apap_links, _apap_visuals = [], []
-            for _label, _url in _apap_presigned.items():
-                if _label.startswith("de_"):
-                    _disp = _label[3:].replace("__", ": ").replace("_", " ").replace("  ", " ").title()
-                    _apap_links.append({"label": f"DE table — {_disp}", "url": _url})
-                elif _label.startswith("volcano_"):
-                    _disp = _label[8:].replace("__", ": ").replace("_", " ").replace("  ", " ").title()
-                    _apap_visuals.append({"type": "image", "url": _url, "title": f"Volcano — {_disp}"})
-                elif _label == "pca":
-                    _apap_visuals.append({"type": "image", "url": _url, "title": "PCA — Time Points"})
-
-            return {
-                "status": "success",
-                "visualization_type": "results_viewer",
-                "text": _apap_text,
-                "links": _apap_links,
-                "visuals": _apap_visuals,
-                "result": {"status": "success", "de_summary": _apap_summary, "top_genes": _apap_top,
-                           "n_genes_total": 1000, "n_samples": 20, "design_formula": design_formula},
-            }
-
+        x_scale = arguments.get("x_scale", "log2")
         result = bulk_rnaseq.run_deseq2_analysis(
             count_matrix=count_matrix,
             sample_metadata=sample_metadata,
             design_formula=design_formula,
             alpha=alpha,
+            x_scale=x_scale,
         )
 
         if result.get("status") == "error":
@@ -3308,7 +3140,11 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
 
         # Build a rich markdown summary
         summary = result.get("summary", [])
-        mode_note = "\n\n> ⚠️ *pydeseq2 not installed — results are illustrative only.*" if result.get("mode") == "mock" else ""
+        mode = result.get("mode", "real")
+        mode_note = (
+            "\n\n> ⚠️ *Synthetic demo data used — real S3 data unavailable.*"
+            if mode == "synthetic" else ""
+        )
         header = (
             f"## Bulk RNA-seq Analysis Complete\n\n"
             f"**Design formula:** `{design_formula}`  \n"
@@ -3326,31 +3162,40 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
             )
         top = result.get("top_genes", "")
         top_md = f"\n### Top Differentially Expressed Genes{top}\n" if top else ""
-
         text = header + rows_md + top_md + mode_note
 
-        # Build links and visuals for the results_viewer
-        presigned = result.get("presigned_urls", {})
-        links = []
+        # Build visuals from base64 plots returned by bulk_rnaseq module
+        plots = result.get("plots", {})
         visuals = []
-        for label, url in presigned.items():
-            if label.startswith("de_"):
-                display = label[3:].replace("__", ": ").replace("_", " ").title()
-                links.append({"label": f"DE table — {display}", "url": url})
-            elif label.startswith("volcano_"):
-                display = label[8:].replace("__", ": ").replace("_", " ").title()
-                visuals.append({"type": "image", "url": url, "title": f"Volcano — {display}"})
+        for label, b64 in plots.items():
+            if label.startswith("volcano_"):
+                display = label[8:].replace("__", ": ").replace("_vs_", " vs ").replace("_", " ").title()
+                visuals.append({"type": "image_b64", "data": b64, "title": f"Volcano — {display}"})
             elif label == "pca":
-                visuals.append({"type": "image", "url": url, "title": "PCA Plot"})
+                visuals.append({"type": "image_b64", "data": b64, "title": "PCA — Sample Overview"})
 
-        return {
+        response = {
             "status": "success",
             "visualization_type": "results_viewer",
             "text": text,
-            "links": links,
+            "links": [],
             "visuals": visuals,
             "result": result,
         }
+        # Persist a re-runnable analysis.py alongside this result
+        _save_analysis_script(
+            "bulk_rnaseq_analysis",
+            {
+                "count_matrix": count_matrix,
+                "sample_metadata": sample_metadata,
+                "design_formula": design_formula,
+                "alpha": alpha,
+                "x_scale": x_scale,
+            },
+            response,
+            session_id=arguments.get("session_id", ""),
+        )
+        return response
     
     elif tool_name == "dna_vendor_research":
         # Handle DNA vendor research
@@ -4194,77 +4039,17 @@ async def api_docs_info(request: Request):
 
 _DEMO_PRESIGNED_CACHE: Dict[str, str] = {}
 
-def _refresh_demo_presigned_urls() -> None:
-    """Pre-generate presigned URLs for all demo assets at startup / on demand."""
-    try:
-        import boto3 as _b3_startup
-        _s3_startup = _b3_startup.client("s3", region_name="us-west-1")
-        _DEMO_ASSETS = {
-            # Key: label, Value: (bucket, key)
-            "phylo_tree":          ("noricum-ngs-data", "demo/phylo/precomputed/latest/phylo_tree.png"),
-            "identity_matrix":     ("noricum-ngs-data", "demo/phylo/precomputed/latest/identity_matrix.png"),
-            "variant_mutations":   ("noricum-ngs-data", "demo/phylo/precomputed/latest/variant_mutations.csv"),
-            "spike_sequences":     ("noricum-ngs-data", "demo/phylo/precomputed/latest/spike_sequences.fasta"),
-            "tree_data_json":      ("noricum-ngs-data", "demo/phylo/precomputed/latest/tree_data.json"),
-            "scrna_umap_celltype": ("noricum-ngs-data", "demo/scrna/precomputed/latest/umap_celltype.png"),
-            "scrna_umap_disease":  ("noricum-ngs-data", "demo/scrna/precomputed/latest/umap_disease.png"),
-            "scrna_dotplot":       ("noricum-ngs-data", "demo/scrna/precomputed/latest/dotplot_markers.png"),
-            "scrna_markers_csv":   ("noricum-ngs-data", "demo/scrna/precomputed/latest/marker_genes.csv"),
-            # APAP time-course (pre-fetch a few key files; rest resolved dynamically from s3 listing)
-            "apap_pca":            ("noricum-ngs-data", "demo/rnaseq/apap_precomputed/latest/pca.png"),
-            "apap_volcano_0h_6h":  ("noricum-ngs-data", "demo/rnaseq/apap_precomputed/latest/volcano_time_point__0h_vs_6h.png"),
-            "apap_volcano_0h_24h": ("noricum-ngs-data", "demo/rnaseq/apap_precomputed/latest/volcano_time_point__0h_vs_24h.png"),
-            "apap_volcano_0h_168h":("noricum-ngs-data", "demo/rnaseq/apap_precomputed/latest/volcano_time_point__0h_vs_168h.png"),
-            "apap_de_0h_6h":       ("noricum-ngs-data", "demo/rnaseq/apap_precomputed/latest/de_time_point__0h_vs_6h.csv"),
-            "apap_de_0h_24h":      ("noricum-ngs-data", "demo/rnaseq/apap_precomputed/latest/de_time_point__0h_vs_24h.csv"),
-            "apap_de_0h_168h":     ("noricum-ngs-data", "demo/rnaseq/apap_precomputed/latest/de_time_point__0h_vs_168h.csv"),
-        }
-        for label, (bucket, key) in _DEMO_ASSETS.items():
-            try:
-                url = _s3_startup.generate_presigned_url(
-                    "get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=86400 * 3)
-                _DEMO_PRESIGNED_CACHE[label] = url
-            except Exception as _ex:
-                logger.debug(f"[startup] presign failed for {label}: {_ex}")
-        # Fetch newick tree string
-        try:
-            _nwk = _s3_startup.get_object(Bucket="noricum-ngs-data",
-                                           Key="demo/phylo/precomputed/latest/tree_data.json")
-            import json as _jstart
-            _nwk_data = _jstart.loads(_nwk["Body"].read().decode())
-            _DEMO_PRESIGNED_CACHE["newick"] = _nwk_data.get("newick", "")
-        except Exception:
-            pass
-        logger.info(f"[startup] Demo presigned URL cache loaded ({len(_DEMO_PRESIGNED_CACHE)} entries)")
-    except Exception as _e:
-        logger.warning(f"[startup] Could not pre-generate demo presigned URLs: {_e}")
-
 
 @app.on_event("startup")
 async def startup_event():
     """Initialize heavy components after server starts."""
-    # Pre-generate presigned URLs for demo assets (avoids per-request boto3 calls)
-    import asyncio
-    loop = asyncio.get_event_loop()
-    loop.run_in_executor(None, _refresh_demo_presigned_urls)
 
-    # Print EC2 environment variables only once at actual server startup
-    # (not during module imports in reloader)
-    print("=" * 80)
-    print(f"🔍 DEBUG: EC2 Environment Variables at Backend Startup (dotenv: {_dotenv_path or 'NOT FOUND'}):")
-    print(f"  AWS_REGION: {os.getenv('AWS_REGION', 'NOT SET')}")
-    print(f"  HELIX_EC2_INSTANCE_ID: {os.getenv('HELIX_EC2_INSTANCE_ID', 'NOT SET')}")
-    print(f"  HELIX_EC2_KEY_NAME: {os.getenv('HELIX_EC2_KEY_NAME', 'NOT SET')}")
-    print(f"  HELIX_EC2_KEY_FILE: {os.getenv('HELIX_EC2_KEY_FILE', 'NOT SET')}")
-    print(f"  HELIX_USE_EC2: {os.getenv('HELIX_USE_EC2', 'NOT SET')}")
-    print(f"  HELIX_EC2_AUTO_CREATE: {os.getenv('HELIX_EC2_AUTO_CREATE', 'NOT SET')}")
-    # Also show what values were parsed from the dotenv file (if found)
-    if _dotenv_values:
-        print("  [dotenv] AWS_REGION:", _dotenv_values.get("AWS_REGION", "NOT IN FILE"))
-        print("  [dotenv] HELIX_EC2_INSTANCE_ID:", _dotenv_values.get("HELIX_EC2_INSTANCE_ID", "NOT IN FILE"))
-        print("  [dotenv] HELIX_EC2_KEY_NAME:", _dotenv_values.get("HELIX_EC2_KEY_NAME", "NOT IN FILE"))
-        print("  [dotenv] HELIX_EC2_KEY_FILE:", _dotenv_values.get("HELIX_EC2_KEY_FILE", "NOT IN FILE"))
-    print("=" * 80)
+    # Log EC2 / AWS config at startup so operators can confirm env is wired correctly
+    logger.info("Backend startup — dotenv: %s", _dotenv_path or "NOT FOUND")
+    logger.info("  AWS_REGION=%s  HELIX_USE_EC2=%s  HELIX_EC2_AUTO_CREATE=%s",
+                os.getenv("AWS_REGION", "NOT SET"),
+                os.getenv("HELIX_USE_EC2", "NOT SET"),
+                os.getenv("HELIX_EC2_AUTO_CREATE", "NOT SET"))
     
     # Heavy initialization (LLM, agent) happens lazily on first use
     # Session loading happens lazily in history_manager

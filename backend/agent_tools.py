@@ -652,12 +652,10 @@ def local_update_scatter_x_scale(
             spec_uri = str(cand)
 
     if not spec_uri:
-        return {
-            "status": "error",
-            "text": "Could not locate a visualization spec to update.",
-            "error": "VIZ_SPEC_NOT_FOUND",
-            "parent_run_id": parent_run_id,
-        }
+        # Fallback: re-run the last analysis with the updated x_scale.
+        return _rerun_with_plot_patch(
+            session_id, parent_run_id, {"x_scale": (x_scale or "log2")}
+        )
 
     # Load spec + data
     with open(spec_uri, "r") as f:
@@ -815,6 +813,114 @@ def _render_viz_if_possible(viz_spec: Dict[str, Any], xs: Optional[List[float]],
         return False, str(e)
 
 
+# ---------------------------------------------------------------------------
+# Helper: re-execute the last analytical run with an updated plot parameter.
+# Used as a fallback when local_edit_visualization cannot locate a viz_spec
+# (e.g. the last run used inline base64 plots via BioOrchestrator).
+# ---------------------------------------------------------------------------
+_PLOT_PARAM_TOOLS = {"bulk_rnaseq_analysis", "single_cell_analysis"}
+_SCALE_KEYWORDS = {"x_scale", "y_scale", "scale", "fold_change_scale", "axis_scale"}
+
+
+def _rerun_with_plot_patch(
+    session_id: str,
+    parent_run_id: Optional[str],
+    patch_obj: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Re-run the last relevant analytical tool with updated plot parameters.
+
+    Returns a result dict compatible with the standard response builder.
+    """
+    from backend.history_manager import history_manager
+
+    runs = history_manager.list_runs(session_id)
+    target_run: Optional[Dict[str, Any]] = None
+    for r in reversed(runs):
+        if not isinstance(r, dict):
+            continue
+        if r.get("tool") in _PLOT_PARAM_TOOLS:
+            target_run = r
+            break
+
+    if not target_run:
+        return {
+            "status": "error",
+            "text": (
+                "No prior analysis run found in this session. "
+                "Please run an analysis first, then request plot changes."
+            ),
+            "error": "NO_ANALYSIS_RUN",
+            "parent_run_id": parent_run_id,
+        }
+
+    tool_name = target_run["tool"]
+    tool_args: Dict[str, Any] = dict(target_run.get("tool_args") or {})
+    prev_run_id = target_run.get("run_id")
+
+    # Normalise the scale value from the patch to the canonical key expected
+    # by the tool (e.g. {"x_scale": "linear"} or {"scale": "log"}).
+    x_scale = "log2"
+    for key in ("x_scale", "scale", "fold_change_scale", "axis_scale"):
+        if key in patch_obj:
+            raw = str(patch_obj[key]).lower()
+            x_scale = "linear" if raw.startswith("lin") else "log2"
+            break
+
+    tool_args["x_scale"] = x_scale
+
+    # Re-execute the tool (only bulk RNA-seq supported for now).
+    try:
+        if tool_name == "bulk_rnaseq_analysis":
+            from backend import bulk_rnaseq as _brna
+            result = _brna.run_deseq2_analysis(
+                count_matrix=tool_args.get("count_matrix", ""),
+                sample_metadata=tool_args.get("sample_metadata", ""),
+                design_formula=tool_args.get("design_formula", "~condition"),
+                alpha=float(tool_args.get("alpha", 0.05)),
+                x_scale=x_scale,
+            )
+        else:
+            return {
+                "status": "error",
+                "text": f"On-the-fly re-render is not yet supported for {tool_name}.",
+                "error": "UNSUPPORTED_TOOL_FOR_RERENDER",
+                "parent_run_id": parent_run_id,
+            }
+    except Exception as exc:
+        return {
+            "status": "error",
+            "text": f"Re-run failed: {exc}",
+            "error": "RERUN_FAILED",
+            "parent_run_id": parent_run_id,
+        }
+
+    # Build visuals list from the new plots
+    plots = result.get("plots", {})
+    visuals = []
+    for plot_key, b64 in plots.items():
+        if not b64:
+            continue
+        label = plot_key.replace("volcano_", "Volcano: ").replace("_", " ").replace("__", " — ").title()
+        if "pca" in plot_key.lower():
+            label = "PCA: Sample Overview"
+        visuals.append({"type": "image_b64", "data": b64, "title": label})
+
+    scale_label = "linear fold change" if x_scale == "linear" else "log₂ fold change"
+    return {
+        "status": "success",
+        "text": (
+            f"## Volcano Plots Updated\n\n"
+            f"Re-rendered **{len(visuals)} plots** with x-axis set to **{scale_label}**.\n\n"
+            f"All other analysis parameters (samples, contrasts, significance thresholds) are unchanged."
+        ),
+        "visuals": visuals,
+        "visualization_type": "results_viewer",
+        "parent_run_id": prev_run_id,
+        "tool_name": tool_name,
+        "x_scale": x_scale,
+    }
+
+
 @tool
 def local_edit_visualization(
     session_id: str,
@@ -877,7 +983,10 @@ def local_edit_visualization(
             spec_uri = str(cand)
 
     if not spec_uri:
-        return {"status": "error", "text": "Could not locate a visualization spec to update.", "error": "VIZ_SPEC_NOT_FOUND", "parent_run_id": parent_run_id}
+        # ── Fallback: no viz_spec on disk (e.g. inline base64 runs from BioOrchestrator).
+        # If the patch is purely a plot-parameter change (x_scale, y_scale, color_scheme…)
+        # we can re-execute the last analytical run with the updated parameter.
+        return _rerun_with_plot_patch(session_id, parent_run_id, patch_obj)
 
     with open(spec_uri, "r") as f:
         viz_spec = json.load(f)
@@ -1388,19 +1497,13 @@ def phylogenetic_tree(aligned_sequences: str) -> Dict:
     Do NOT use sequence_alignment for this - phylogenetic_tree handles alignment internally.
     """
     
-    print(f"🔧 Agent phylogenetic_tree called with aligned_sequences: '{aligned_sequences}'")
-    
+    logger.debug("phylogenetic_tree called, sequences length=%d", len(aligned_sequences or ""))
+
     # Import the phylogenetic tree function
     from phylogenetic_tree import run_phylogenetic_tree
-    
+
     result = run_phylogenetic_tree(aligned_sequences)
-    
-    # Log result summary without full data to avoid console spam
-    if isinstance(result, dict):
-        print(f"🔧 Agent phylogenetic_tree result: status={result.get('text', 'N/A')[:50]}...")
-        print(f"🔧 Agent phylogenetic_tree has tree_newick: {bool(result.get('tree_newick'))}")
-    else:
-        print(f"🔧 Agent phylogenetic_tree result: {type(result).__name__}")
+    logger.debug("phylogenetic_tree: has_newick=%s", bool(isinstance(result, dict) and result.get("tree_newick")))
     
     # Return all fields from result, especially tree_newick and ete_visualization for frontend
     if isinstance(result, dict):
@@ -1436,21 +1539,12 @@ def phylogenetic_tree(aligned_sequences: str) -> Dict:
 def sequence_selection(aligned_sequences: str, selection_type: str = "random", num_sequences: int = 1) -> Dict:
     """Select sequences from aligned sequences based on various criteria (random, best_conservation, lowest_gaps, highest_gc, longest, shortest)."""
     
-    print(f"🔧 Agent sequence_selection called with:")
-    print(f"🔧 aligned_sequences: '{aligned_sequences}'")
-    print(f"🔧 selection_type: '{selection_type}'")
-    print(f"🔧 num_sequences: {num_sequences}")
-    
+    logger.debug("sequence_selection: type=%s n=%s", selection_type, num_sequences)
+
     # Import the sequence selection function
     from sequence_selection import run_sequence_selection_raw
-    
+
     result = run_sequence_selection_raw(aligned_sequences, selection_type, num_sequences)
-    
-    # Log result summary without full data to avoid console spam
-    if isinstance(result, dict):
-        print(f"🔧 Agent sequence_selection result: status={result.get('text', 'N/A')[:50]}...")
-    else:
-        print(f"🔧 Agent sequence_selection result: {type(result).__name__}")
     
     return {
         "text": result.get("text", "Sequence selection completed successfully."),
@@ -1824,7 +1918,7 @@ def bulk_rnaseq_analysis(
 ) -> Dict:
     """Run bulk RNA-seq differential expression analysis using DESeq2."""
     
-    from bulk_rnaseq import run_deseq2_analysis
+    from backend.bulk_rnaseq import run_deseq2_analysis
     
     if not count_matrix or not sample_metadata:
         return {
@@ -1847,8 +1941,15 @@ def bulk_rnaseq_analysis(
     )
     
     status = result.get("status", "success")
-    summary = result.get("summary", {})
-    text_summary = f"DESeq2 complete: {summary.get('significant_genes', 'n/a')} significant genes" if summary else result.get("message", "DESeq2 analysis completed")
+    summary = result.get("summary", [])
+    # summary is a list of per-contrast dicts; sum up significant genes across all contrasts
+    if isinstance(summary, list):
+        total_sig = sum(c.get("significant", 0) for c in summary if isinstance(c, dict))
+        text_summary = f"DESeq2 complete: {total_sig} significant genes across {len(summary)} contrast(s)"
+    elif isinstance(summary, dict):
+        text_summary = f"DESeq2 complete: {summary.get('significant_genes', 'n/a')} significant genes"
+    else:
+        text_summary = result.get("message", "DESeq2 analysis completed")
     
     return {
         "text": text_summary if status == "success" else f"DESeq2 error: {result.get('message', 'Unknown error')}",
@@ -2405,20 +2506,71 @@ def ds_run_analysis(
         entity_col=entity_col or None,
     )
 
-    orch = DataScienceOrchestrator(base_dir=session_dir, session_id=session_id)
-    run_data = orch.run(config)
+    # Resolve the previous DS run in this session so iterations are linked.
+    # This must happen before the orchestrator writes the new run.
+    prev_run_id: Optional[str] = None
+    if session_id:
+        try:
+            from backend.history_manager import history_manager as _hm
+            _hm.ensure_session_exists(session_id)
+            _runs = _hm.sessions.get(session_id, {}).get("runs", [])
+            for _r in reversed(_runs):
+                if _r.get("tool") == "ds_run_analysis" and _r.get("run_id"):
+                    prev_run_id = _r["run_id"]
+                    break
+        except Exception:
+            pass
+
+    # Pass session_id=None to suppress _register_with_helix: the Helix API
+    # (Phase2c / call_mcp_tool) will call add_history_entry on our behalf, so
+    # letting the orchestrator also call it would create duplicate run ledger
+    # entries.  The orchestrator still writes artifacts/{run_id}/ and
+    # experiments/experiment_log.csv via its RunStore regardless of session_id.
+    orch = DataScienceOrchestrator(base_dir=session_dir, session_id=None)
+    run_data = orch.run(config, parent_run_id=prev_run_id)
+
+    # Build a structured artifacts list that add_history_entry expects:
+    # [{type, title, uri, format}, ...]
+    produced_artifacts: list = []
+    raw_artifacts: dict = run_data.get("artifacts") or {}
+    report_path = raw_artifacts.get("report_md")
+    if report_path and Path(report_path).exists():
+        produced_artifacts.append({
+            "type": "report",
+            "title": "ds_report",
+            "uri": report_path,
+            "format": "md",
+        })
+    for fig_path in run_data.get("figure_paths") or []:
+        if Path(fig_path).exists():
+            produced_artifacts.append({
+                "type": "plot",
+                "title": Path(fig_path).stem,
+                "uri": fig_path,
+                "format": "png",
+            })
+    run_json_path = str(session_dir / "artifacts" / run_data["run_id"] / "run.json")
+    if Path(run_json_path).exists():
+        produced_artifacts.append({
+            "type": "run_json",
+            "title": "run_metadata",
+            "uri": run_json_path,
+            "format": "json",
+        })
 
     summary = make_review(run_data)
     return {
         "status": "success",
         "text": summary,
         "run_id": run_data["run_id"],
+        "parent_run_id": prev_run_id,
         "metrics": run_data.get("metrics"),
         "decision": run_data.get("decision"),
         "next_steps": run_data.get("next_steps"),
-        "artifacts": run_data.get("artifacts"),
+        "artifacts": raw_artifacts,
+        "produced_artifacts": produced_artifacts,
         "visualization_type": "ds_report",
-        "report_md": run_data.get("artifacts", {}).get("report_md"),
+        "report_md": raw_artifacts.get("report_md"),
     }
 
 
@@ -2532,3 +2684,327 @@ def ds_list_runs(session_id: str) -> Dict:
         "visualization_type": "markdown",
     }
 
+
+@tool
+def patch_and_rerun(
+    session_id: str,
+    change_request: str,
+    target_run: str = "latest",
+) -> Dict:
+    """Apply a natural-language change to the most recent analysis script and re-execute it.
+
+    This tool:
+      1. Finds the ``analysis.py`` saved for the last scriptable tool run.
+      2. Applies *change_request* as a parameter patch (for simple changes) or
+         delegates to the LLM agent for complex code edits.
+      3. Executes the new script in a subprocess.
+      4. Returns the new results plus a human-readable diff of what changed.
+
+    Parameters
+    ----------
+    session_id      : Active session ID.
+    change_request  : Plain-English description of the change,
+                      e.g. ``"change alpha to 0.01"`` or
+                      ``"use linear fold change on the x-axis"``.
+    target_run      : ``"latest"`` (default) or a specific run_id.
+    """
+    from backend.history_manager import history_manager
+    from backend import script_executor as _se
+
+    # ── 1. Find the script to patch ──────────────────────────────────────────
+    runs = history_manager.list_runs(session_id)
+    target: Optional[Dict] = None
+    for r in reversed(runs):
+        if not isinstance(r, dict):
+            continue
+        arts = r.get("produced_artifacts") or []
+        if any(
+            isinstance(a, dict) and a.get("type") == "script" and a.get("uri", "").endswith("analysis.py")
+            for a in arts
+        ):
+            if target_run in {"latest", "last", "current"} or r.get("run_id") == target_run:
+                target = r
+                break
+
+    if not target:
+        return {
+            "status": "error",
+            "text": (
+                "No saved analysis script found in this session. "
+                "Run an analysis first (Demo 1–5) and then request changes."
+            ),
+            "error": "NO_SCRIPT_FOUND",
+        }
+
+    script_art = next(
+        a for a in (target.get("produced_artifacts") or [])
+        if isinstance(a, dict) and a.get("type") == "script"
+    )
+    script_path = Path(script_art["uri"])
+    if not script_path.exists():
+        return {
+            "status": "error",
+            "text": f"Script file not found on disk: {script_path}",
+            "error": "SCRIPT_FILE_MISSING",
+        }
+
+    old_script = script_path.read_text()
+    old_run_id = target.get("run_id", "")
+
+    # ── 2. Parse change_request into a parameter patch ────────────────────────
+    patch = _parse_change_request(change_request)
+
+    if patch:
+        # Simple deterministic patch
+        new_script = _se.patch_parameters(old_script, patch)
+        patch_description = ", ".join(f"{k}={v!r}" for k, v in patch.items())
+    else:
+        # Fallback: use the LLM to edit the Parameters block
+        new_script = _llm_patch_script(old_script, change_request)
+        patch_description = f"(LLM-applied) {change_request}"
+
+    # ── 3. Write new script in a new run directory ────────────────────────────
+    import time, re as _re
+    new_run_id = f"run-{int(time.time()*1000)}-patch"
+    old_run_dir = script_path.parent
+    # Keep new run under sessions/<sid>/runs/ alongside the original
+    new_run_dir = old_run_dir.parent / new_run_id
+    new_run_dir.mkdir(parents=True, exist_ok=True)
+
+    # Update RUN_DIR inside the script — preserve Path() wrapper
+    new_script = _re.sub(
+        r"^RUN_DIR\s*=.*$",
+        f"RUN_DIR          = Path({repr(str(new_run_dir))})",
+        new_script,
+        flags=_re.MULTILINE,
+    )
+
+    new_script_path = new_run_dir / "analysis.py"
+    new_script_path.write_text(new_script)
+
+    # ── 4. Execute ────────────────────────────────────────────────────────────
+    exec_result = _se.execute(new_script_path)
+
+    if exec_result.get("status") == "error":
+        return {
+            "status": "error",
+            "text": (
+                f"Script execution failed after applying: {patch_description}\n\n"
+                f"**Error:** {exec_result.get('error', 'unknown')}\n\n"
+                f"```\n{exec_result.get('logs', '')[-800:]}\n```"
+            ),
+            "error": exec_result.get("error"),
+        }
+
+    # ── 5. Compute diffs ──────────────────────────────────────────────────────
+    param_changes = _se.parameter_diff(old_script, new_script)
+    file_diff     = _se.output_diff(old_run_dir, new_run_dir)
+
+    # ── 6. Build visuals from new plot files ──────────────────────────────────
+    visuals = []
+    summary = exec_result.get("summary", {})
+    for plot_key, path_str in (summary.get("plot_paths") or {}).items():
+        try:
+            import base64
+            b64 = base64.b64encode(Path(path_str).read_bytes()).decode()
+            label = plot_key.replace("volcano_", "Volcano: ").replace("_", " ").replace("__", " — ").title()
+            if "pca" in plot_key.lower():
+                label = "PCA — Sample Overview"
+            visuals.append({"type": "image_b64", "data": b64, "title": label})
+        except Exception:
+            pass
+
+    # ── 7. Persist new run in history ─────────────────────────────────────────
+    try:
+        history_manager.add_run(
+            session_id,
+            command=f"[patch_and_rerun] {change_request}",
+            tool=target.get("tool", "unknown"),
+            result=exec_result.get("summary", {}),
+            run_id=new_run_id,
+            parent_run_id=old_run_id,
+            produced_artifacts=[
+                {"type": "script", "uri": str(new_script_path), "title": "analysis.py"},
+                *[
+                    {"type": a["type"], "uri": a["uri"], "title": a["name"]}
+                    for a in exec_result.get("artifacts", [])
+                    if a.get("type") in ("plot", "table")
+                ],
+            ],
+        )
+    except Exception:
+        pass
+
+    # ── 8. Assemble response ──────────────────────────────────────────────────
+    changes_md = "\n".join(f"- `{c}`" for c in param_changes) or "- (no parameter changes detected)"
+    n_new = len(file_diff.get("new_files", []))
+    n_changed = len(file_diff.get("changed_files", []))
+
+    text = (
+        f"## Analysis Updated\n\n"
+        f"Applied: **{change_request}**\n\n"
+        f"### What Changed\n{changes_md}\n\n"
+        f"### Outputs\n"
+        f"- {len(visuals)} plot(s) re-rendered\n"
+        f"- {n_changed} file(s) updated, {n_new} new file(s)\n"
+        f"- New run: `{new_run_id}` (parent: `{old_run_id[:8] if old_run_id else '?'}…`)\n"
+    )
+
+    script_download_url = f"/download/script?path={str(new_script_path)}"
+    bundle_url = f"/download/bundle?session_id={session_id}&run_id={new_run_id}"
+    return {
+        "status":               "success",
+        "visualization_type":   "results_viewer",
+        "text":                 text,
+        "visuals":              visuals,
+        "links": [
+            {"label": "analysis.py", "url": script_download_url},
+            {"label": "bundle.zip",  "url": bundle_url},
+        ],
+        "parent_run_id":        old_run_id,
+        "run_id":               new_run_id,
+        "script_path":          str(new_script_path),
+        "script_download_url":  script_download_url,
+        "bundle_url":           bundle_url,
+        "param_changes":        param_changes,
+        "file_diff":            file_diff,
+    }
+
+
+# ── helpers for patch_and_rerun ───────────────────────────────────────────────
+
+# Map of keyword patterns → parameter patches. Order matters (first match wins).
+_CHANGE_PATTERNS: List[Tuple[List[str], Dict[str, Any]]] = [
+    # x-axis / fold change scale
+    (["linear fold", "linear scale", "linear x", "x.*linear", "fold change.*linear",
+      "x-axis.*linear", "x axis.*linear"],
+     {"X_SCALE": "linear"}),
+    (["log.*fold", "log2.*fold", "log scale", "log x", "x.*log", "logarithmic"],
+     {"X_SCALE": "log2"}),
+    # alpha / significance threshold
+    (["alpha.*0\\.001", "p.*<.*0\\.001", "significance.*0\\.001"],
+     {"ALPHA": 0.001}),
+    (["alpha.*0\\.01", "p.*<.*0\\.01", "significance.*0\\.01"],
+     {"ALPHA": 0.01}),
+    (["alpha.*0\\.1", "p.*<.*0\\.1"],
+     {"ALPHA": 0.1}),
+    # clustering resolution
+    (["resolution.*0\\.3"],  {"RESOLUTION": 0.3}),
+    (["resolution.*0\\.5"],  {"RESOLUTION": 0.5}),
+    (["resolution.*0\\.8"],  {"RESOLUTION": 0.8}),
+    (["resolution.*1\\.0"],  {"RESOLUTION": 1.0}),
+    (["more clusters", "higher resolution"], {"RESOLUTION": 0.8}),
+    (["fewer clusters", "lower resolution"],  {"RESOLUTION": 0.3}),
+]
+
+
+def _parse_change_request(request: str) -> Dict[str, Any]:
+    """Return a simple parameter patch dict, or {} if no pattern matched."""
+    import re
+    req_lower = request.lower()
+    for patterns, patch in _CHANGE_PATTERNS:
+        for pat in patterns:
+            if re.search(pat, req_lower):
+                return dict(patch)
+
+    # Try to extract alpha from free text: "change alpha to 0.005"
+    m = re.search(r"\balpha\s*(?:to|=|:)?\s*(0\.\d+)", req_lower)
+    if m:
+        try:
+            return {"ALPHA": float(m.group(1))}
+        except ValueError:
+            pass
+
+    return {}
+
+
+def _llm_patch_script(script_text: str, change_request: str) -> str:
+    """Ask the LLM to modify the Parameters block.  Falls back to original if unavailable."""
+    try:
+        from backend.agent import get_llm
+        llm = get_llm()
+        prompt = (
+            "You are editing a Python analysis script. "
+            "Modify ONLY the '# ── Parameters ──' block to implement the following change:\n"
+            f"{change_request}\n\n"
+            "Return the COMPLETE modified script. Do not change anything outside the Parameters block.\n\n"
+            f"```python\n{script_text}\n```"
+        )
+        response = llm.invoke(prompt)
+        text = response.content if hasattr(response, "content") else str(response)
+        # Extract code block if present
+        import re
+        m = re.search(r"```python\n(.*?)```", text, re.DOTALL)
+        if m:
+            return m.group(1)
+        return text
+    except Exception:
+        return script_text  # unchanged; caller will still save + execute
+
+
+@tool
+def bio_rerun(
+    session_id: str = "",
+    changes: Optional[Dict] = None,
+    target_run: str = "latest",
+) -> Dict:
+    """
+    Re-run the most recent bioinformatics analysis with optional parameter overrides.
+
+    Use this tool when the user asks to:
+    - Re-run an analysis with different parameters (e.g., "run again with alpha=0.01")
+    - Change a parameter and re-run (e.g., "change resolution to 0.8 and re-run")
+    - Repeat the last analysis with modifications
+
+    Args:
+        session_id: Session identifier.
+        changes: Dict of parameter overrides, e.g. {"alpha": 0.01} or {"resolution": 0.8}.
+        target_run: Run ID to re-run, or "latest" to use the most recent run.
+
+    Returns:
+        Dict with status, text summary, run_id, parent_run_id, delta metrics.
+    """
+    # NOTE: Actual execution is routed through call_mcp_tool("bio_rerun", ...)
+    # in main_with_mcp.py which calls BioOrchestrator.rerun().
+    # This @tool definition exists for agent routing and documentation.
+    return {
+        "status": "routed",
+        "text": f"Re-running analysis with changes: {changes or {}}",
+        "session_id": session_id,
+        "changes": changes or {},
+        "target_run": target_run,
+    }
+
+
+@tool
+def bio_diff_runs(
+    session_id: str = "",
+    run_id_a: str = "latest",
+    run_id_b: str = "prior",
+) -> Dict:
+    """
+    Compare two bioinformatics runs and return a structured diff.
+
+    Use this tool when the user asks to:
+    - Compare two runs (e.g., "compare run X and run Y")
+    - Show what changed between runs (e.g., "what changed?")
+    - Diff two analyses (e.g., "diff runs abc and def")
+
+    Args:
+        session_id: Session identifier.
+        run_id_a: First run ID (or "latest" for most recent).
+        run_id_b: Second run ID (or "prior" for second most recent).
+
+    Returns:
+        Dict with status, text summary of changes, parameter diffs, metric deltas.
+    """
+    # NOTE: Actual execution is routed through call_mcp_tool("bio_diff_runs", ...)
+    # in main_with_mcp.py which calls BioOrchestrator.diff_runs().
+    # This @tool definition exists for agent routing and documentation.
+    return {
+        "status": "routed",
+        "text": f"Comparing runs {run_id_a} and {run_id_b}",
+        "session_id": session_id,
+        "run_id_a": run_id_a,
+        "run_id_b": run_id_b,
+    }

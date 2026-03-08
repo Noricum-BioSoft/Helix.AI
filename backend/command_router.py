@@ -95,17 +95,15 @@ class CommandRouter:
             print("🔧 Command router: Matched 'toolbox inventory' -> toolbox_inventory")
             return "toolbox_inventory", {}
 
-        # ── LOCAL ITERATION DEMO (HIGHEST PRIORITY in dev/mock) ────────────────
-        # Deterministic tools to prove iterative workflows locally.
-        # IMPORTANT: keep these routes limited to mock mode so production deployments
-        # do not attempt to run local-only demo tools (which may require Docker).
-        if os.getenv("HELIX_MOCK_MODE") == "1":
-            if any(p in command_lower for p in ["demo plot", "demo scatter", "local demo plot", "create demo plot", "generate demo plot"]):
-                print("🔧 Command router: Matched 'local demo plot' -> local_demo_plot_script")
-                # Extract x-scale if present
-                x_scale = "log" if ("log" in command_lower and "linear" not in command_lower) else ("linear" if "linear" in command_lower else "log")
-                return "local_demo_plot_script", {"x_scale": x_scale}
+        # ── LOCAL ITERATION DEMO ────────────────────────────────────────────────
+        # local_demo_plot_script uses only matplotlib — safe in all environments.
+        if any(p in command_lower for p in ["demo plot", "demo scatter", "local demo plot", "create demo plot", "generate demo plot"]):
+            print("🔧 Command router: Matched 'local demo plot' -> local_demo_plot_script")
+            x_scale = "log" if ("log" in command_lower and "linear" not in command_lower) else ("linear" if "linear" in command_lower else "log")
+            return "local_demo_plot_script", {"x_scale": x_scale}
 
+        # Script edit + rerun (was inside mock-mode guard; works in all modes)
+        if os.getenv("HELIX_MOCK_MODE") == "1":
             # Script edit + rerun (explicit deterministic syntax for mock mode)
             if "apply code patch" in command_lower or "apply patch" in command_lower:
                 # Prefer fenced diff block; else take everything after the marker.
@@ -135,13 +133,80 @@ class CommandRouter:
                     return "local_edit_and_rerun_script", {"new_code": new_code, "target_run": "latest"}
 
         # Update plot axis scale (log <-> linear)
-        if (
-            ("x axis" in command_lower or "x-axis" in command_lower or "xaxis" in command_lower) and
-            any(w in command_lower for w in ["linear", "log", "scale"])
-        ) or any(p in command_lower for p in ["change x axis", "change x-axis", "set x axis", "set x-axis", "update x axis", "update x-axis"]):
+        # Matches: "update x-axis to linear", "change the plots from log to linear scale",
+        # "switch to log scale", "use linear scale", etc.
+        _has_scale_word  = any(w in command_lower for w in ["linear", "log scale", "logarithmic"])
+        # "to log" / "to linear" are unambiguous axis-scale references
+        _has_scale_to    = bool(re.search(r"\bto\s+(log|linear)\b", command_lower))
+        _has_axis_ref    = any(w in command_lower for w in ["x axis", "x-axis", "xaxis", "y axis", "y-axis", "yaxis"])
+        _has_plot_ref    = any(w in command_lower for w in ["plot", "plots", "chart", "charts", "graph", "graphs", "axis", "scale"])
+        _has_change_verb = any(w in command_lower for w in ["change", "switch", "update", "set", "use", "convert", "make"])
+        _explicit_axis_phrase = any(p in command_lower for p in [
+            "change x axis", "change x-axis", "set x axis", "set x-axis",
+            "update x axis", "update x-axis", "log scale", "linear scale",
+            "switch to log", "switch to linear",
+        ])
+        if _explicit_axis_phrase or _has_scale_to or (_has_scale_word and (_has_axis_ref or (_has_plot_ref and _has_change_verb))):
             x_scale = "linear" if "linear" in command_lower else ("log" if "log" in command_lower else "linear")
-            print(f"🔧 Command router: Matched 'update x axis' -> local_edit_visualization (x_scale={x_scale})")
-            return "local_edit_visualization", {"patch": {"x_scale": x_scale}, "target_run": "latest"}
+            print(f"🔧 Command router: Matched 'update axis scale' -> patch_and_rerun (x_scale={x_scale})")
+            return "patch_and_rerun", {"change_request": command, "target_run": "latest"}
+
+        # ── GENERIC RESULT CHANGE / PARAMETER UPDATE ────────────────────────────
+        # "change alpha to 0.01", "use resolution 0.8", "change color scheme",
+        # "add a heatmap", "show only significant genes", etc.
+        _change_phrases = [
+            "change the ", "change alpha", "change resolution", "change color",
+            "update alpha", "update the ", "set alpha", "set resolution",
+            "add a heatmap", "add heatmap", "show only", "filter to",
+            "increase alpha", "decrease alpha", "stricter threshold",
+            "less strict", "more clusters", "fewer clusters",
+        ]
+        if any(p in command_lower for p in _change_phrases):
+            print(f"🔧 Command router: Matched 'change result' -> patch_and_rerun")
+            return "patch_and_rerun", {"change_request": command, "target_run": "latest"}
+
+        # ── BIO ITERATIVE RE-RUN ────────────────────────────────────────────────
+        # Patterns: "re-run", "run again", "redo analysis", "repeat with alpha=0.01"
+        _rerun_phrases = [
+            "re-run", "rerun", "run again", "redo", "repeat with",
+            "run with", "try again", "re-analyse", "reanalyze",
+            "change parameter", "update parameter", "set resolution",
+        ]
+        if any(p in command_lower for p in _rerun_phrases):
+            # Extract parameter changes from the command
+            changes: Dict[str, Any] = {}
+            _alpha_m = re.search(r"\balpha\s*[=:]\s*([\d.]+)", command_lower)
+            if _alpha_m:
+                changes["alpha"] = float(_alpha_m.group(1))
+            _res_m = re.search(r"\bresolution\s*[=:]\s*([\d.]+)", command_lower)
+            if _res_m:
+                changes["resolution"] = float(_res_m.group(1))
+            _formula_m = re.search(r"design.formula\s*[=:]\s*(\S+)", command_lower)
+            if _formula_m:
+                changes["design_formula"] = _formula_m.group(1)
+            print(f"🔧 Command router: Matched bio re-run -> bio_rerun (changes={changes})")
+            return "bio_rerun", {"changes": changes, "target_run": "latest"}
+
+        # ── BIO DIFF RUNS ───────────────────────────────────────────────────────
+        # Patterns: "compare run X and Y", "diff runs", "what changed between runs"
+        _diff_phrases = [
+            "compare run", "diff run", "what changed", "compare results",
+            "show differences", "how did it change", "compare iterations",
+            "compare the runs", "what's different", "show the difference",
+        ]
+        if any(p in command_lower for p in _diff_phrases):
+            # Try to extract UUID run IDs from command
+            _uuid_pattern = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+            _uuids = re.findall(_uuid_pattern, command_lower)
+            params: Dict[str, Any] = {}
+            if len(_uuids) >= 2:
+                params["run_id_a"] = _uuids[0]
+                params["run_id_b"] = _uuids[1]
+            else:
+                params["run_id_a"] = "latest"
+                params["run_id_b"] = "prior"
+            print(f"🔧 Command router: Matched bio diff -> bio_diff_runs ({params})")
+            return "bio_diff_runs", params
 
         # Rename / retitle plot (example of generalized viz edit)
         if any(p in command_lower for p in ["rename plot", "rename the plot", "retitle plot", "set plot title", "change plot title", "update plot title"]) or (
@@ -203,10 +268,14 @@ class CommandRouter:
         # Priority-based matching to avoid conflicts
         # Check for specific phrases first, then general keywords
 
-        # ── BULK RNA-SEQ (HIGHEST PRIORITY) ──────────────────────────────────────
-        # Must come before clustering and single-cell checks because RNA-seq prompts
-        # legitimately use terms like "clustering", "differential expression", etc.
-        # in an EDA/statistics context, not as sequence-biology operations.
+        # ── SINGLE-CELL RNA-SEQ (must precede bulk RNA-seq check) ────────────────
+        # Single-cell prompts contain bulk RNA-seq vocabulary (rna-seq, DE, PCA…)
+        # so single-cell routing must win before the bulk catch-all fires.
+        if self._is_single_cell_command(command_lower):
+            print(f"🔧 Command router: Matched 'single-cell RNA-seq' -> single_cell_analysis (early guard)")
+            return 'single_cell_analysis', self._extract_parameters(command, 'single_cell_analysis', session_context)
+
+        # ── BULK RNA-SEQ ──────────────────────────────────────────────────────────
         if self._is_rnaseq_transcriptomics_command(command_lower):
             print(f"🔧 Command router: Matched 'bulk RNA-seq transcriptomics' -> bulk_rnaseq_analysis")
             return 'bulk_rnaseq_analysis', self._extract_parameters(command, 'bulk_rnaseq_analysis', session_context)
@@ -382,9 +451,43 @@ class CommandRouter:
         'sample distance',
     )
 
+    # Strong single-cell signals — any of these present means the request is
+    # for single-cell analysis, not bulk RNA-seq.
+    _SCRNA_PHRASES = (
+        'single cell',
+        'single-cell',
+        'scrna-seq',
+        'scrnaseq',
+        'scRNA',
+        '10x genomics',
+        '10x chromium',
+        'leiden algorithm',
+        'umap',
+        'seurat',
+        'scanpy',
+        'anndata',
+        'pbmc',
+        'cell cluster',
+        'cell type annotation',
+        'cell-type',
+        'cell type composition',
+        'marker gene',
+        'leiden',
+        'louvain',
+    )
+
+    def _is_single_cell_command(self, command_lower: str) -> bool:
+        """Return True when the command clearly describes a single-cell RNA-seq
+        analysis.  Used to prevent single-cell prompts from being swallowed by
+        the bulk RNA-seq catch-all."""
+        return any(phrase in command_lower for phrase in self._SCRNA_PHRASES)
+
     def _is_rnaseq_transcriptomics_command(self, command_lower: str) -> bool:
         """Return True when the lowercased command clearly describes a bulk
-        RNA-seq / transcriptomics analysis (with or without file paths)."""
+        RNA-seq / transcriptomics analysis (with or without file paths).
+        Returns False when single-cell signals are present."""
+        if self._is_single_cell_command(command_lower):
+            return False
         return any(phrase in command_lower for phrase in self._RNASEQ_PHRASES)
 
     # ── Helper: does the command contain molecular-sequence biology cues? ────────
@@ -1317,7 +1420,7 @@ class CommandRouter:
             
             # Extract additional parameters
             resolution = 0.5
-            resolution_match = re.search(r'resolution[:\s]+([\d.]+)', command, re.IGNORECASE)
+            resolution_match = re.search(r'resolution[:\s]+([\d]+(?:\.[\d]+)?)', command, re.IGNORECASE)
             if resolution_match:
                 resolution = float(resolution_match.group(1))
             
