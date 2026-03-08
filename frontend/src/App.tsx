@@ -23,6 +23,8 @@ import { DemoScenariosPanel } from './components/DemoScenariosPanel';
 import { getDemoScenarioById, getDemoScenarioByTool, getDemoScenarioByCommandAndTool, DataPreviewTable } from './data/demoScenarios';
 import { ThinkingIndicator, ActivityIndicator } from './components/ThinkingIndicator';
 
+const SESSION_STORAGE_KEY = 'helix_session_id';
+
 interface HistoryItem {
   input: string;
   output: any;
@@ -33,6 +35,30 @@ interface HistoryItem {
   /** Bioinformatics run tracking IDs, populated from BioOrchestrator responses */
   run_id?: string;
   parent_run_id?: string;
+}
+
+/** Map backend session history entries to frontend HistoryItem[] (newest first). */
+function sessionHistoryToItems(session: { history?: Array<{ command?: string; tool?: string; result?: any; metadata?: any; run_id?: string; timestamp?: string }> }): HistoryItem[] {
+  const raw = session?.history;
+  if (!Array.isArray(raw) || raw.length === 0) return [];
+  const items: HistoryItem[] = [];
+  for (const entry of raw) {
+    const cmd = entry.command ?? '';
+    const out = entry.result ?? {};
+    const meta = entry.metadata ?? {};
+    const runId = entry.run_id ?? meta.run_id;
+    const parentRunId = meta.parent_run_id;
+    const ts = entry.timestamp || meta.timestamp;
+    items.push({
+      input: cmd,
+      output: out,
+      type: 'agent',
+      timestamp: ts ? new Date(ts) : new Date(0),
+      run_id: runId,
+      parent_run_id: parentRunId,
+    });
+  }
+  return items.reverse(); // backend order is oldest-first; UI shows newest first
 }
 
 interface WorkflowContext {
@@ -147,8 +173,16 @@ function App() {
     try {
       const res = await mcpApi.createSession() as { session_id: string };
       setSessionId(res.session_id);
+      try {
+        sessionStorage.setItem(SESSION_STORAGE_KEY, res.session_id);
+      } catch {
+        // ignore storage errors
+      }
     } catch {
       setSessionId(null);
+      try {
+        sessionStorage.removeItem(SESSION_STORAGE_KEY);
+      } catch {}
     }
     setHistory([]);
     setExecutedPipelineCommands(new Set());
@@ -173,20 +207,46 @@ function App() {
     for (const item of history) extractJobIds(item.output, s);
     return Array.from(s);
   }, [history]);
-  // Create a session on mount and check server health
+  // On mount: restore session from storage if valid (and restore history), otherwise create new; check server health
   useEffect(() => {
     const initializeApp = async () => {
       if (isInitialized) return; // Prevent duplicate initialization
       
       try {
         setIsInitialized(true);
-        
-        // Check server health first
         await checkServerHealth();
-        // Create session
-        const res = await mcpApi.createSession() as { session_id: string };
-        setSessionId(res.session_id);
-        console.log('Session created:', res.session_id);
+        let id: string | null = null;
+        let sessionData: { session?: { history?: unknown[] } } | null = null;
+        try {
+          const stored = sessionStorage.getItem(SESSION_STORAGE_KEY);
+          if (stored && stored.trim()) {
+            const info = await mcpApi.getSessionInfo(stored) as { session?: { history?: unknown[] } };
+            id = stored;
+            sessionData = info;
+            console.log('Session restored from storage:', stored);
+          }
+        } catch {
+          try {
+            sessionStorage.removeItem(SESSION_STORAGE_KEY);
+          } catch {}
+        }
+        if (!id) {
+          const res = await mcpApi.createSession() as { session_id: string };
+          id = res.session_id;
+          try {
+            sessionStorage.setItem(SESSION_STORAGE_KEY, id);
+          } catch {}
+          console.log('Session created:', id);
+        }
+        setSessionId(id);
+        // Restore conversation history when we re-open the same session (e.g. after refresh)
+        if (sessionData?.session) {
+          const restored = sessionHistoryToItems(sessionData.session as Parameters<typeof sessionHistoryToItems>[0]);
+          if (restored.length > 0) {
+            setHistory(restored);
+            console.log('Restored', restored.length, 'history items from session');
+          }
+        }
       } catch (err) {
         console.error('Failed to initialize app:', err);
         setIsInitialized(false); // Reset on error
@@ -307,8 +367,12 @@ function App() {
       
       // Update session ID if the backend created one automatically
       if ((response as any).session_id && !sessionId) {
-        setSessionId((response as any).session_id);
-        console.log('Session created automatically by backend:', (response as any).session_id);
+        const sid = (response as any).session_id;
+        setSessionId(sid);
+        try {
+          sessionStorage.setItem(SESSION_STORAGE_KEY, sid);
+        } catch {}
+        console.log('Session created automatically by backend:', sid);
       }
       
       // Update workflow context based on the response
@@ -460,7 +524,11 @@ function App() {
       const response = await mcpApi.executeCommand(finalCommand, sessionId || undefined);
 
       if ((response as any).session_id && !sessionId) {
-        setSessionId((response as any).session_id);
+        const sid = (response as any).session_id;
+        setSessionId(sid);
+        try {
+          sessionStorage.setItem(SESSION_STORAGE_KEY, sid);
+        } catch {}
       }
 
       const historyItem: HistoryItem = {
@@ -498,7 +566,11 @@ function App() {
     try {
       const response = await mcpApi.executePipelinePlan(originalCommand, sessionId || undefined);
       if ((response as any).session_id && !sessionId) {
-        setSessionId((response as any).session_id);
+        const sid = (response as any).session_id;
+        setSessionId(sid);
+        try {
+          sessionStorage.setItem(SESSION_STORAGE_KEY, sid);
+        } catch {}
       }
       const historyItem: HistoryItem = {
         input: `▶ Execute Pipeline`,
@@ -2213,17 +2285,17 @@ function App() {
             <Button
               variant="outline-secondary"
               className="prompt-toolbar-button"
-              onClick={handleNewSession}
-              aria-label="Start a new session"
-              title="Clear history and start a new session"
+              onClick={handleToggleExamples}
+              aria-label="Toggle examples"
               style={{
-                background: '#F1F5F9',
-                color: '#475569',
-                border: '1px solid #CBD5E1',
-                fontWeight: 600,
+                background: 'linear-gradient(135deg, #3A60A8, #7B3FA8)',
+                color: '#FFFFFF',
+                border: 'none',
+                fontWeight: 700,
+                letterSpacing: '0.02em',
               }}
             >
-              ＋ New Session
+              📚 Examples
             </Button>
             <Button
               variant="outline-secondary"
@@ -2239,21 +2311,6 @@ function App() {
               }}
             >
               🧬 Demo
-            </Button>
-            <Button
-              variant="outline-secondary"
-              className="prompt-toolbar-button"
-              onClick={handleToggleExamples}
-              aria-label="Toggle examples"
-              style={{
-                background: 'linear-gradient(135deg, #3A60A8, #7B3FA8)',
-                color: '#FFFFFF',
-                border: 'none',
-                fontWeight: 700,
-                letterSpacing: '0.02em',
-              }}
-            >
-              📚 Examples
             </Button>
             <Button
               variant="outline-secondary"
@@ -2352,6 +2409,16 @@ function App() {
             )}
           </Modal.Body>
           <Modal.Footer>
+            <Button
+              variant="outline-primary"
+              onClick={() => {
+                handleNewSession();
+                setSessionModalOpen(false);
+              }}
+              aria-label="Start a new session"
+            >
+              ＋ New Session
+            </Button>
             <Button variant="secondary" onClick={() => setSessionModalOpen(false)}>
               Close
             </Button>
@@ -2805,6 +2872,16 @@ function App() {
           )}
         </Modal.Body>
         <Modal.Footer>
+          <Button
+            variant="outline-primary"
+            onClick={() => {
+              handleNewSession();
+              setSessionModalOpen(false);
+            }}
+            aria-label="Start a new session"
+          >
+            ＋ New Session
+          </Button>
           <Button variant="secondary" onClick={() => setSessionModalOpen(false)}>
             Close
           </Button>
