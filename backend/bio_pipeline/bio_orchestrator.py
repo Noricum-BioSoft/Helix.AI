@@ -7,7 +7,7 @@ Usage
 from bio_pipeline import BioOrchestrator
 
 orchestrator = BioOrchestrator(
-    tool_executor=call_mcp_tool,          # async (tool_name, params) -> dict
+    tool_executor=dispatch_tool,          # async (tool_name, params) -> dict
     history_manager=history_mgr,          # HistoryManager instance (or None)
 )
 
@@ -48,7 +48,7 @@ class BioOrchestrator:
     ----------
     tool_executor:
         Async callable ``(tool_name: str, params: dict) -> dict``.
-        Typically ``call_mcp_tool`` from main_with_mcp.
+        Typically ``dispatch_tool`` from main_with_mcp.
     history_manager:
         Optional HistoryManager instance.  When supplied, the run is
         registered via ``add_history_entry`` so it appears in the session ledger.

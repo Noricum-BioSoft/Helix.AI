@@ -517,7 +517,21 @@ class HistoryManager:
             self._save_session(session_id)
             logger.info(f"Created new session: {session_id}" + (f" with S3 path: {s3_path}" if s3_path else " (S3 path creation skipped)"))
             return session_id
-    
+
+    def get_session_storage_paths(self, session_id: str) -> Dict[str, str]:
+        """Return absolute paths where this session's inputs, prompts, and results are stored.
+
+        - storage_root: base directory (e.g. sessions/)
+        - session_file: session state JSON (history, results, prompts)
+        - session_dir: per-session directory (artifacts, runs)
+        """
+        root = self.storage_dir.resolve()
+        return {
+            "storage_root": str(root),
+            "session_file": str(root / f"{session_id}.json"),
+            "session_dir": str(root / session_id),
+        }
+
     def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Get session data by ID.
         

@@ -2,7 +2,7 @@
 Tool inventory: a single source of truth for "what tools do you have?"
 
 This module builds a deterministic inventory from:
-- Central MCP/tool schema registry (backend/tool_schemas.py)
+- Central tool schema registry (backend/tool_schemas.py)
 - Static discovery of @tool-decorated python functions (AST scan; no imports)
 - Environment capabilities (local CLI tools discovered via `shutil.which`)
 - Expected EC2 toolchain (from scripts/aws setup + EC2 user-data in ec2_executor.py)
@@ -214,7 +214,7 @@ def format_toolbox_inventory_markdown(inv: Dict[str, Any]) -> str:
     lines.append("### Toolbox inventory")
     lines.append("")
 
-    lines.append(f"- **Registered Helix tools (MCP schemas)**: {schemas.get('count', 0)}")
+    lines.append(f"- **Registered Helix tools (tool schemas)**: {schemas.get('count', 0)}")
     for name in schema_tools:
         lines.append(f"  - `{name}`")
     lines.append("")

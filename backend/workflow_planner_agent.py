@@ -24,6 +24,7 @@ from backend.contracts.workflow_plan import (
     OperationSpec,
     ConstraintSpec
 )
+from backend.routing_keywords import SIMPLE_OPERATION_REGEX
 
 logger = logging.getLogger(__name__)
 
@@ -579,17 +580,7 @@ class SimpleOperationPlaybook(WorkflowPlaybook):
         
         # Operation keyword mapping
         # Use word-boundary matching for short keywords like "qc"
-        ops_regex = [
-            (r"\bmerge\b", ("read_merging", "bbmerge")),
-            (r"\btrim\b|\btrimming\b", ("trimming", "trimmomatic")),
-            (r"\balign\b|\balignment\b", ("alignment", "bwa_mem")),
-            (r"\bqc\b|\bquality\s*control\b", ("quality_control", "fastqc")),
-            (r"\bquality\b", ("quality_control", "fastqc")),
-            (r"\bblast\b", ("blast_search", "blastn")),
-            (r"\bannotate\b|\bannotation\b", ("annotation", "prokka")),
-        ]
-
-        for pattern, (op_name, tool_name) in ops_regex:
+        for pattern, (op_name, tool_name) in SIMPLE_OPERATION_REGEX:
             if re.search(pattern, scrubbed):
                 return op_name, tool_name
         

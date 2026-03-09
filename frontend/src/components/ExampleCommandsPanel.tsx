@@ -23,6 +23,13 @@ export const ExampleCommandsPanel: React.FC<ExampleCommandsPanelProps> = ({
   onCommandSelect 
 }) => {
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
+  const capabilityExamples: string[] = [
+    "Run bulk RNA-seq analysis with counts.csv and samples.csv using design ~condition",
+    "Run single-cell analysis on pbmc.h5 and annotate cell types",
+    "Run FastQC on s3://my-bucket/run42/sample_R1.fastq.gz and sample_R2.fastq.gz",
+    "Fetch sequence for NM_000546 from NCBI",
+    "Build a phylogenetic tree from these aligned sequences:\n>a\nATGC\n>b\nATGA\n>c\nATGG",
+  ];
 
   const exampleCategories: ExampleCategory[] = [
     {
@@ -34,7 +41,7 @@ export const ExampleCommandsPanel: React.FC<ExampleCommandsPanelProps> = ({
           description: "Learn about typical Bioinformatics problems and how AI can help."
         },
         {
-          command: "List all tools Helix.AI has access to (registered MCP tools, discovered @tool functions, and local/EC2 CLI tools)",
+          command: "List all tools Helix.AI has access to (registered tools, discovered @tool functions, and local/EC2 CLI tools)",
           description: "Discover available tools and capabilities"
         }
       ]
@@ -107,6 +114,24 @@ export const ExampleCommandsPanel: React.FC<ExampleCommandsPanelProps> = ({
   return (
     <Card className="mb-4">
       <Card.Body style={{ maxHeight: '500px', overflowY: 'auto', overflowX: 'hidden' }}>
+        <div className="mb-3 p-2 border rounded" style={{ backgroundColor: theme.colors.bgBlueSubtle }}>
+          <div className="fw-semibold mb-2" style={{ color: theme.colors.blue }}>
+            What can I ask?
+          </div>
+          <div className="d-flex flex-column gap-2">
+            {capabilityExamples.map((prompt, idx) => (
+              <Button
+                key={idx}
+                variant="outline-primary"
+                size="sm"
+                className="text-start"
+                onClick={() => onCommandSelect(prompt)}
+              >
+                {prompt}
+              </Button>
+            ))}
+          </div>
+        </div>
         {exampleCategories.map((category, idx) => (
           <div key={idx} className="mb-3">
             <div

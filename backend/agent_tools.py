@@ -21,7 +21,7 @@ if str(_TOOLS_DIR) not in sys.path:
 @tool
 def toolbox_inventory() -> Dict:
     """
-    List all tools Helix.AI has access to (registered MCP tools, discovered @tool functions, and local/EC2 CLI tools).
+    List all tools Helix.AI has access to (registered tools, discovered @tool functions, and local/EC2 CLI tools).
     
     **IMPORTANT: Only use this tool when the user explicitly asks about available tools, capabilities, or what you can do.**
     Examples: "What tools do you have?", "Show me your capabilities", "List available tools"
@@ -1987,7 +1987,7 @@ def read_merging(
         Dictionary containing merge status and summary metrics.
     """
     # NOTE: This function is only used by the agent for tool mapping/recognition.
-    # Actual execution happens in main_with_mcp.py call_mcp_tool() which directly
+    # Actual execution happens in main_with_mcp.py dispatch_tool() which directly
     # calls the read_merging module functions (merge_reads_from_s3 for S3, run_read_merging_raw for content).
     # The code below is never executed but serves as documentation of the tool's behavior.
     import read_merging
@@ -2522,7 +2522,7 @@ def ds_run_analysis(
             pass
 
     # Pass session_id=None to suppress _register_with_helix: the Helix API
-    # (Phase2c / call_mcp_tool) will call add_history_entry on our behalf, so
+    # (Phase2c / dispatch_tool) will call add_history_entry on our behalf, so
     # letting the orchestrator also call it would create duplicate run ledger
     # entries.  The orchestrator still writes artifacts/{run_id}/ and
     # experiments/experiment_log.csv via its RunStore regardless of session_id.
@@ -2964,7 +2964,7 @@ def bio_rerun(
     Returns:
         Dict with status, text summary, run_id, parent_run_id, delta metrics.
     """
-    # NOTE: Actual execution is routed through call_mcp_tool("bio_rerun", ...)
+    # NOTE: Actual execution is routed through dispatch_tool("bio_rerun", ...)
     # in main_with_mcp.py which calls BioOrchestrator.rerun().
     # This @tool definition exists for agent routing and documentation.
     return {
@@ -2998,7 +2998,7 @@ def bio_diff_runs(
     Returns:
         Dict with status, text summary of changes, parameter diffs, metric deltas.
     """
-    # NOTE: Actual execution is routed through call_mcp_tool("bio_diff_runs", ...)
+    # NOTE: Actual execution is routed through dispatch_tool("bio_diff_runs", ...)
     # in main_with_mcp.py which calls BioOrchestrator.diff_runs().
     # This @tool definition exists for agent routing and documentation.
     return {

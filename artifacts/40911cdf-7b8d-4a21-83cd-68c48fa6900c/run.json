@@ -1,0 +1,17 @@
+{
+  "config": {
+    "tool_name": "phylogenetic_tree",
+    "params": {
+      "aligned_sequences": ""
+    },
+    "run_id": "40911cdf-7b8d-4a21-83cd-68c48fa6900c",
+    "parent_run_id": null,
+    "session_id": "cd5e7c52-eda9-4a06-8819-6613ba2bbbf1",
+    "objective": "SARS-CoV-2 spike protein \u2014 variant divergence phylogenetics"
+  },
+  "result_status": "success",
+  "summary_text": "### Phylogenetic Analysis Review\n\n**Sequences:** 8  \n**Mean pairwise distance:** 0.0113  \n**Mean pairwise identity:** 98.9%\n\nNeighbor-joining tree constructed from pairwise Hamming distances. Clusters visualised as hierarchical dendrogram.",
+  "delta": {},
+  "elapsed_s": 1.67,
+  "n_visuals": 3
+}

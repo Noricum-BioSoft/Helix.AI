@@ -232,7 +232,7 @@ class TestToolGeneratorIntegration:
     )
     async def test_unknown_tool_triggers_generator(self):
         """Test that unknown tools trigger the tool-generator-agent."""
-        from backend.main_with_mcp import call_mcp_tool
+        from backend.main_with_mcp import dispatch_tool
         
         # This should trigger the tool-generator-agent
         # We'll mock it to avoid actual LLM calls in unit tests
@@ -245,7 +245,7 @@ class TestToolGeneratorIntegration:
             }
             
             try:
-                result = await call_mcp_tool("unknown_merge_tool", {
+                result = await dispatch_tool("unknown_merge_tool", {
                     "r1_path": "s3://test/r1.fq",
                     "r2_path": "s3://test/r2.fq"
                 })

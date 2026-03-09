@@ -35,7 +35,7 @@ class DemoDispatcher:
         Legacy parameter kept for API compatibility; no longer used.
     tool_executor:
         Async callable ``(tool_name: str, params: dict) -> dict`` — normally
-        ``call_mcp_tool`` from ``main_with_mcp``.  Injected so tests can
+        ``dispatch_tool`` from ``main_with_mcp``.  Injected so tests can
         replace it with a synchronous mock without touching module globals.
     orchestrator:
         Optional ``BioOrchestrator`` instance.  When provided, all tool

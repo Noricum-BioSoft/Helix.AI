@@ -163,7 +163,7 @@ def _get_execution_broker() -> ExecutionBroker:
     """
     global _execution_broker
     if _execution_broker is None:
-        _execution_broker = ExecutionBroker(tool_executor=call_mcp_tool)
+        _execution_broker = ExecutionBroker(tool_executor=dispatch_tool)
     return _execution_broker
 
 # CORS configuration
@@ -337,6 +337,7 @@ async def _dispatch_result(
     *,
     tool_args: Optional[dict] = None,
     record_history: bool = True,
+    execution_path: Optional[str] = None,
 ) -> "CustomJSONResponse":
     """
     Single exit point shared by every dispatch branch.
@@ -353,6 +354,8 @@ async def _dispatch_result(
             result,
             metadata=_extract_metadata(result, tool_args=tool_args),
         )
+    if execution_path:
+        logger.info("Routing path=%s tool=%s session=%s", execution_path, tool, req.session_id)
     std = build_standard_response(
         prompt=req.command,
         tool=tool,
@@ -360,8 +363,118 @@ async def _dispatch_result(
         session_id=req.session_id,
         mcp_route="/execute",
         success=_is_success(result),
+        execution_path=execution_path,
     )
     return CustomJSONResponse(std)
+
+
+def _build_pipeline_execution_storage_result(result: Any, session_id: str) -> Any:
+    """
+    Build a trimmed plan result for session storage: pipeline execution info only,
+    no system prompts, full_response, or huge code blocks. Adds pipeline_entry_point,
+    storage paths, and per-step inputs/outputs summary.
+    """
+    if not isinstance(result, dict):
+        return result
+    inner = result.get("result") or result
+    if inner.get("type") != "plan_result" or not isinstance(inner.get("steps"), list):
+        return result
+
+    paths = history_manager.get_session_storage_paths(session_id)
+    steps_summary: List[Dict[str, Any]] = []
+    trimmed_steps: List[Dict[str, Any]] = []
+
+    for idx, step in enumerate(inner["steps"], 1):
+        step_id = step.get("id") or f"step{idx}"
+        tool_name = step.get("tool_name") or ""
+        args = step.get("arguments") or {}
+        step_result = step.get("result") or {}
+
+        # Inputs summary (no previous_plan_steps blob)
+        input_keys = [k for k in args.keys() if k != "previous_plan_steps"]
+        inputs_summary = {k: _summarize_for_storage(args[k]) for k in input_keys}
+        if "previous_plan_steps" in args:
+            inputs_summary["previous_plan_steps"] = "(from previous step(s))"
+
+        # Outputs summary
+        outputs_summary: Dict[str, Any] = {}
+        if isinstance(step_result, dict):
+            status = step_result.get("status") or ("success" if step_result.get("alignment") or step_result.get("stdout") else "unknown")
+            if step_result.get("alignment"):
+                al = step_result["alignment"]
+                outputs_summary["alignment"] = f"{len(al)} sequences" if isinstance(al, list) else str(al)[:80]
+            if step_result.get("execution_result"):
+                er = step_result["execution_result"]
+                if isinstance(er, dict) and er.get("stdout"):
+                    outputs_summary["stdout"] = (er["stdout"] or "").strip()[:200]
+            if step_result.get("text"):
+                outputs_summary["text"] = (step_result["text"] or "").strip()[:200]
+        else:
+            status = "unknown"
+
+        steps_summary.append({
+            "step_index": idx,
+            "id": step_id,
+            "tool_name": tool_name,
+            "inputs": inputs_summary,
+            "outputs": outputs_summary,
+            "status": status,
+            "step_dir": None,  # reserved: per-step working dir when we add it
+        })
+
+        # Trim step for storage: drop full_response, long code_preview, previous_plan_steps
+        trimmed_step = {
+            "id": step_id,
+            "tool_name": tool_name,
+            "arguments": {k: v for k, v in args.items() if k != "previous_plan_steps"},
+        }
+        if "previous_plan_steps" in args:
+            trimmed_step["arguments"]["_previous_plan_steps"] = "(included at execution time)"
+        res = dict(step_result) if isinstance(step_result, dict) else {}
+        for key in ("full_response", "code_preview"):
+            res.pop(key, None)
+        if res.get("result") and isinstance(res["result"], dict):
+            res["result"] = {k: v for k, v in res["result"].items() if k not in ("full_response", "code_preview")}
+        trimmed_step["result"] = res
+        trimmed_steps.append(trimmed_step)
+
+    pipeline_execution = {
+        "entry_point": "backend.execution_broker.ExecutionBroker._execute_plan_sync (invoked from POST /execute when _looks_like_workflow)",
+        "storage": {
+            "storage_root": paths["storage_root"],
+            "session_file": paths["session_file"],
+            "session_dir": paths["session_dir"],
+        },
+        "steps": steps_summary,
+    }
+
+    trimmed_inner = {
+        "status": inner.get("status"),
+        "type": "plan_result",
+        "plan_version": inner.get("plan_version"),
+        "steps": trimmed_steps,
+        "result": trimmed_steps[-1]["result"] if trimmed_steps else {},
+        "pipeline_execution": pipeline_execution,
+    }
+    return {
+        **result,
+        "result": trimmed_inner,
+    }
+
+
+def _summarize_for_storage(val: Any, max_len: int = 120) -> Any:
+    """Shorten values for pipeline execution storage."""
+    if val is None:
+        return None
+    if isinstance(val, str):
+        return val[:max_len] + ("..." if len(val) > max_len else "")
+    if isinstance(val, (int, float, bool)):
+        return val
+    if isinstance(val, dict):
+        return "(object)"
+    if isinstance(val, list):
+        return f"({len(val)} items)"
+    return str(val)[:max_len]
 
 
 def _apply_session_context_side_effects(
@@ -370,11 +483,23 @@ def _apply_session_context_side_effects(
     """
     Persist mutation / alignment outputs into the in-memory session dict so
     downstream tool calls (e.g. variant_selection, sequence_alignment) can
-    read them back via session_context.
+    read them back via session_context. For __plan__, apply side effects from
+    each step so session handling matches single-tool flow.
     """
     if not isinstance(result, dict):
         return
     if not (hasattr(history_manager, "sessions") and session_id in history_manager.sessions):
+        return
+
+    # Plan result: apply side effects from each step so session has aligned_sequences etc.
+    if tool_name == "__plan__":
+        inner = result.get("result") or result
+        if inner.get("type") == "plan_result" and isinstance(inner.get("steps"), list):
+            for step in inner["steps"]:
+                step_tool = step.get("tool_name")
+                step_result = step.get("result") or {}
+                if step_tool and isinstance(step_result, dict):
+                    _apply_session_context_side_effects(session_id, step_tool, step_result)
         return
 
     if tool_name == "mutate_sequence":
@@ -544,6 +669,7 @@ def build_standard_response(
     session_id: str,
     mcp_route: str,
     success: bool = True,
+    execution_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Wrap tool/agent results in a standardized envelope for the frontend.
@@ -677,11 +803,19 @@ def build_standard_response(
             "host": "localhost",
             "port": 8001,
             "route": mcp_route,
-            "tool_route": f"call_mcp_tool:{tool}"
+            "tool_route": f"dispatch_tool:{tool}"
         },
         "raw_result": truncated_result,  # Truncated to prevent large sequences in JSON
         "timestamp": now
     }
+
+    if os.getenv("HELIX_DEBUG_ROUTING", "0").lower() in ("1", "true", "yes"):
+        response["execution_path"] = execution_path or "unknown"
+        if isinstance(truncated_result, dict):
+            if "intent" in truncated_result:
+                response["intent"] = truncated_result.get("intent")
+            if "intent_reason" in truncated_result:
+                response["intent_reason"] = truncated_result.get("intent_reason")
 
     # Add tree data to top level for frontend
     response.update(tree_data)
@@ -1211,6 +1345,7 @@ async def execute(req: CommandRequest, request: Request):
                             session_id=req.session_id,
                             mcp_route="/execute",
                             success=True if not isinstance(result, dict) else result.get("status") != "error",
+                            execution_path="fast_path_s3_browse",
                         )
                         return CustomJSONResponse(standard_response)
         except Exception as e:
@@ -1223,12 +1358,12 @@ async def execute(req: CommandRequest, request: Request):
         from backend.demo_dispatch import DemoDispatcher as _DemoDispatcher
         from backend.bio_pipeline import BioOrchestrator as _BioOrchestrator
         _bio_orch = _BioOrchestrator(
-            tool_executor=call_mcp_tool,
+            tool_executor=dispatch_tool,
             history_manager=history_manager,
         )
         _dispatcher = _DemoDispatcher(
             _DEMO_PRESIGNED_CACHE,
-            call_mcp_tool,
+            dispatch_tool,
             orchestrator=_bio_orch,
             session_id=req.session_id,
             parent_run_id=getattr(req, "parent_run_id", None),
@@ -1242,6 +1377,7 @@ async def execute(req: CommandRequest, request: Request):
             return await _dispatch_result(
                 req, _demo_tool, _demo_result,
                 record_history=not _orchestrated,
+                execution_path="demo",
             )
 
         # Phase 2b: if the client explicitly asked to execute a previously planned pipeline,
@@ -1278,32 +1414,31 @@ async def execute(req: CommandRequest, request: Request):
                 session_id=req.session_id,
                 mcp_route="/execute",
                 success=agent_result.get("success", True) if isinstance(agent_result, dict) else True,
+                execution_path="agent_execute_plan",
             )
             return CustomJSONResponse(standard)
 
-        # Phase 2c: pre-agent command-router fast path.
-        # Run the keyword/regex router BEFORE invoking the LLM agent.  For
-        # well-known bioinformatics patterns (bulk_rnaseq, single_cell, fastqc …)
-        # the router gives a deterministic, sub-second answer without any LLM
-        # latency, avoiding multi-hop agent pipelines that can exceed 90 s for
-        # long structured prompts.
-        # Call call_mcp_tool directly (not the full broker) so we skip the
-        # infrastructure-decision-agent path entirely for recognised patterns.
+        # Phase 2c: deterministic router allowlist fast path (agent-first strategy).
+        # Keep this path narrow and deterministic. Everything else should flow to
+        # the agent path below for semantic tool selection.
+        _phase2c_allowlist = {"toolbox_inventory", "session_run_io_summary"}
         try:
             import time as _t
             from backend.command_router import CommandRouter as _PreRouter
             _pre_router = _PreRouter()
             _pre_tool, _pre_params = _pre_router.route_command(req.command, session_context)
             logger.info(f"[Phase2c] route_command → tool='{_pre_tool}'")
-            if _pre_tool != "handle_natural_command":
+            if _pre_tool in _phase2c_allowlist:
                 _pre_start = _t.time()
                 if _pre_params is None:
                     _pre_params = {}
                 _pre_params.setdefault("session_id", req.session_id)
                 # Direct tool call — bypasses broker & infra-decision-agent
-                _pre_result = await call_mcp_tool(_pre_tool, _pre_params)
+                _pre_result = await dispatch_tool(_pre_tool, _pre_params)
                 logger.info(f"[Phase2c] '{_pre_tool}' done in {_t.time()-_pre_start:.2f}s")
-                return await _dispatch_result(req, _pre_tool, _pre_result, tool_args=_pre_params)
+                return await _dispatch_result(
+                    req, _pre_tool, _pre_result, tool_args=_pre_params, execution_path="phase2c_router"
+                )
         except Exception as _pre_err:
             logger.warning(f"[Phase2c] fast path raised exception ({_pre_err}), falling through to agent")
 
@@ -1390,7 +1525,9 @@ async def execute(req: CommandRequest, request: Request):
                 
                 tool_done_time = time.time()
                 logger.info("Tool '%s' completed in %.2fs", tool_name, tool_done_time - tool_start_time)
-                return await _dispatch_result(req, tool_name, result, tool_args=parameters)
+                return await _dispatch_result(
+                    req, tool_name, result, tool_args=parameters, execution_path="agent_tool_mapped"
+                )
             else:
                 # Agent completed full execution (or returned something else)
                 return await _dispatch_result(
@@ -1398,6 +1535,7 @@ async def execute(req: CommandRequest, request: Request):
                     "agent",
                     agent_result,
                     tool_args={"execute_plan": bool(req.execute_plan)},
+                    execution_path="agent",
                 )
         except Exception as agent_err:
             # Fallback: use NLP router and MCP tools if the agent path fails
@@ -1428,7 +1566,9 @@ async def execute(req: CommandRequest, request: Request):
                                 session_context=session_context,
                             )
                         )
-                        return await _dispatch_result(req, _tool_name, result, tool_args=_params or {})
+                        return await _dispatch_result(
+                            req, _tool_name, result, tool_args=_params or {}, execution_path="fallback_router"
+                        )
                 except Exception:
                     pass
 
@@ -1438,9 +1578,9 @@ async def execute(req: CommandRequest, request: Request):
                     result={
                         "status": "success",
                         "text": (
-                            "This looks like a question (Q&A intent). "
-                            "In mock mode or when the agent is unavailable, Helix.AI will not generate new tools. "
-                            "Re-run with HELIX_MOCK_MODE=0 (Agent enabled) or rephrase as an execution request."
+                            "This looks like a question. Enable the agent (HELIX_MOCK_MODE=0) "
+                            "or use the /chat endpoint for Q&A. If you intended execution, "
+                            "rephrase as: 'Run <analysis> on <inputs>'."
                         ),
                         "intent": intent.intent,
                         "intent_reason": intent.reason,
@@ -1448,6 +1588,7 @@ async def execute(req: CommandRequest, request: Request):
                     session_id=req.session_id,
                     mcp_route="/execute",
                     success=True,
+                    execution_path="qa_safe_fallback",
                 )
                 return CustomJSONResponse(standard_response)
 
@@ -1467,9 +1608,12 @@ async def execute(req: CommandRequest, request: Request):
                         session_context=session_context,
                     )
                 )
+                _apply_session_context_side_effects(req.session_id, "__plan__", result)
+                storage_result = _build_pipeline_execution_storage_result(result, req.session_id)
                 return await _dispatch_result(
-                    req, "__plan__", result,
+                    req, "__plan__", storage_result,
                     tool_args={"plan": plan, "session_id": req.session_id},
+                    execution_path="fallback_router_plan",
                 )
 
             tool_name, parameters = command_router.route_command(req.command, session_context)
@@ -1495,7 +1639,9 @@ async def execute(req: CommandRequest, request: Request):
             logger.info("Tool '%s' completed in %.2fs", tool_name, time.time() - tool_start_time)
 
             _apply_session_context_side_effects(req.session_id, tool_name, result)
-            return await _dispatch_result(req, tool_name, result, tool_args=parameters)
+            return await _dispatch_result(
+                req, tool_name, result, tool_args=parameters, execution_path="fallback_router"
+            )
     except Exception as e:
         return CustomJSONResponse({
             "success": False,
@@ -1581,7 +1727,8 @@ async def agent_command(req: AgentCommandRequest, request: Request):
                     result=tool_result,
                     session_id=session_id,
                     mcp_route="/agent",
-                    success=True if not isinstance(tool_result, dict) else tool_result.get("status", "success") != "error"
+                    success=True if not isinstance(tool_result, dict) else tool_result.get("status", "success") != "error",
+                    execution_path="agent_endpoint_tool",
                 )
                 response_done_time = time.time()
                 total_duration = response_done_time - agent_start_time
@@ -1605,7 +1752,8 @@ async def agent_command(req: AgentCommandRequest, request: Request):
                     result=error_result,
                     session_id=session_id,
                     mcp_route="/agent",
-                    success=False
+                    success=False,
+                    execution_path="agent_endpoint_tool_error",
                 )
                 
                 return CustomJSONResponse(standard_response)
@@ -1626,7 +1774,8 @@ async def agent_command(req: AgentCommandRequest, request: Request):
                 result=result,
                 session_id=session_id,
                 mcp_route="/agent",
-                success=True if not isinstance(result, dict) else result.get("status", "success") != "error"
+                success=True if not isinstance(result, dict) else result.get("status", "success") != "error",
+                execution_path="agent_endpoint",
             )
             response_done_time = time.time()
             total_duration = response_done_time - agent_start_time
@@ -1648,7 +1797,7 @@ async def sequence_alignment_mcp(req: SequenceAlignmentRequest):
         if not req.session_id:
             req.session_id = history_manager.create_session()
         
-        result = await call_mcp_tool("sequence_alignment", {
+        result = await dispatch_tool("sequence_alignment", {
             "sequences": req.sequences,
             "algorithm": req.algorithm
         })
@@ -1690,7 +1839,7 @@ async def mutate_sequence_mcp(req: MutationRequest):
         if not req.session_id:
             req.session_id = history_manager.create_session()
         
-        result = await call_mcp_tool("mutate_sequence", {
+        result = await dispatch_tool("mutate_sequence", {
             "sequence": req.sequence,
             "num_variants": req.num_variants,
             "mutation_rate": req.mutation_rate
@@ -1750,7 +1899,7 @@ async def analyze_sequence_data_mcp(req: AnalysisRequest):
         if not req.session_id:
             req.session_id = history_manager.create_session()
         
-        result = await call_mcp_tool("analyze_sequence_data", {
+        result = await dispatch_tool("analyze_sequence_data", {
             "data": req.data,
             "analysis_type": req.analysis_type
         })
@@ -1900,7 +2049,7 @@ async def handle_natural_command_mcp(req: NaturalCommandRequest):
 async def visualize_alignment_mcp(alignment_file: str, output_format: str = "png"):
     """Visualize sequence alignment using MCP server."""
     try:
-        result = await call_mcp_tool("visualize_alignment", {
+        result = await dispatch_tool("visualize_alignment", {
             "alignment_file": alignment_file,
             "output_format": output_format
         })
@@ -2022,7 +2171,7 @@ async def read_trimming_mcp(req: ReadTrimmingRequest):
     """Perform read trimming using MCP tooling."""
     try:
         session_id = req.session_id or history_manager.create_session()
-        result = await call_mcp_tool("read_trimming", {
+        result = await dispatch_tool("read_trimming", {
             "reads": req.reads,
             "adapter": req.adapter,
             "quality_threshold": req.quality_threshold,
@@ -2055,7 +2204,7 @@ async def read_merging_mcp(req: ReadMergingRequest):
     """Merge paired-end reads using MCP tooling."""
     try:
         session_id = req.session_id or history_manager.create_session()
-        result = await call_mcp_tool("read_merging", {
+        result = await dispatch_tool("read_merging", {
             "forward_reads": req.forward_reads,
             "reverse_reads": req.reverse_reads,
             "min_overlap": req.min_overlap,
@@ -2463,8 +2612,8 @@ _SCRIPTABLE_TOOLS = frozenset({
 })
 
 
-async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-    """Call an MCP tool and return the result."""
+async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    """Dispatch to internal Helix tools and return the result."""
     # Add tools directory to path
     tools_path = str((Path(__file__).resolve().parent.parent / "tools").resolve())
     # tools/ is injected via PYTHONPATH by start.sh (and by tests/conftest.py in unit tests)
@@ -2815,7 +2964,7 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
     elif tool_name == "bio_rerun":
         # Re-run the last bioinformatics tool with optional parameter overrides.
         from backend.bio_pipeline import BioOrchestrator as _BioOrch
-        _orch_rerun = _BioOrch(tool_executor=call_mcp_tool, history_manager=history_manager)
+        _orch_rerun = _BioOrch(tool_executor=dispatch_tool, history_manager=history_manager)
         _session_id_rr = arguments.get("session_id", "")
         _changes_rr = arguments.get("changes", {})
         _target_run = arguments.get("target_run", "latest")
@@ -2853,7 +3002,7 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
         # Return a structured comparison of two bioinformatics runs.
         from backend.bio_pipeline import BioOrchestrator as _BioOrch
         from pathlib import Path as _Path
-        _orch_diff = _BioOrch(tool_executor=call_mcp_tool)
+        _orch_diff = _BioOrch(tool_executor=dispatch_tool)
         _run_a = arguments.get("run_id_a", "latest")
         _run_b = arguments.get("run_id_b", "prior")
 
@@ -2908,8 +3057,11 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
         # to work in sandbox/CI environments where LLM dependencies may not be installed.
         from backend.agent import handle_command
         command = arguments.get("command", "")
-        session_id = arguments.get("session_id", "")
-        return await handle_command(command, session_id=session_id)
+        session_id = arguments.get("session_id", "") or ""
+        session_context = dict(arguments.get("session_context") or {})
+        if arguments.get("previous_plan_steps"):
+            session_context["previous_plan_steps"] = arguments["previous_plan_steps"]
+        return await handle_command(command, session_id=session_id, session_context=session_context)
     
     elif tool_name == "phylogenetic_tree":
         # Handle phylogenetic tree analysis — use backend Python-native module
@@ -3328,9 +3480,10 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
                     "tool_name": tool_name,
                     "result": {},
                     "text": (
-                        "This request looks like Q&A intent. "
-                        "Helix.AI will not generate or execute a new tool for Q&A. "
-                        "Rephrase as an execution request (e.g. 'run ...', 'analyze ...')."
+                        "Helix couldn't match your request to a known tool and this looks like Q&A intent. "
+                        "Helix will not generate or execute a new tool for Q&A. "
+                        "Try examples in /docs/user/CAPABILITIES_GUIDE.md or rephrase as "
+                        "'Run <analysis> on <inputs>'."
                     ),
                     "intent": intent.intent,
                     "intent_reason": intent.reason,
@@ -3381,6 +3534,10 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
             # Fall through to raise ValueError
         
         raise ValueError(f"Unknown tool: {tool_name}")
+
+
+# Backward compatibility alias (to be removed in a future major release).
+call_mcp_tool = dispatch_tool
 
 def parse_fasta_to_dataframe(fasta_content: str):
     """Parse FASTA content to DataFrame."""

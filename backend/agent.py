@@ -86,6 +86,7 @@ from pydantic import BaseModel, Field
 
 # load the environment
 from dotenv import load_dotenv
+from backend.routing_keywords import INLINE_PIPELINE_TOOL_MAP
 
 logger = logging.getLogger(__name__)
 
@@ -726,33 +727,9 @@ class CommandProcessor:
             return None
 
         # Map step descriptions to known Helix tool names
-        _TOOL_MAP = [
-            # More-specific patterns first so they win over partial matches below
-            (["quality report", "qc report", "quality summary"],                  "quality_report"),
-            (["fastqc", "quality assessment", "quality control"],                 "fastqc_quality_analysis"),
-            (["trim", "adapter", "cutadapt", "trimmomatic"],                      "read_trimming"),
-            (["merge overlap", "merge paired", "overlapping paired", "flash", "pear"],
-                                                                                  "read_merging"),
-            (["merge", "overlap"],                                                 "read_merging"),
-            # Phylogenetics / comparative-genomics tools (before generic "align")
-            (["phylogenetic tree", "phylogeny", "maximum-likelihood", "bootstrap"],
-                                                                                  "phylogenetic_tree"),
-            (["pairwise", "identity matrix", "pairwise amino", "pairwise identity"],
-                                                                                  "pairwise_identity"),
-            (["annotate", "mutation site", "rbd mutation", "key mutation"],       "annotate_tree"),
-            (["multiple sequence alignment", "mafft", "muscle", "clustal"],       "sequence_alignment"),
-            (["retrieve", "fetch", "ncbi", "refseq", "genbank"],                  "fetch_ncbi_sequence"),
-            (["align", "map ", "star ", "hisat", "bowtie"],                       "sequence_alignment"),
-            (["quantif", "featurecount", "htseq"],                                "read_quantification"),
-            (["differential", "deseq", "edger", "limma"],                         "differential_expression"),
-            (["single.cell", "scanpy", "seurat", "cell ranger"],                  "single_cell_analysis"),
-            (["diversity", "qiime", "kraken", "metaphlan"],                       "microbiome_analysis"),
-            (["report", "summary", "csv", "visualiz", "plot"],                    "quality_report"),
-        ]
-
         def _tool_for(text: str) -> str:
             tl = text.lower()
-            for keywords, tool in _TOOL_MAP:
+            for keywords, tool in INLINE_PIPELINE_TOOL_MAP:
                 if any(kw in tl for kw in keywords):
                     return tool
             return "custom_step"
@@ -1314,6 +1291,19 @@ class CommandProcessor:
                 "local_update_scatter_x_scale",
             }
             
+            # Consensus must not be routed to sequence_alignment: consensus is derived FROM
+            # alignment (e.g. majority-rule per column), not "run alignment again". See
+            # docs/CONSENSUS_FROM_ALIGNMENT_GAP.md.
+            _consensus_phrases = (
+                "consensus sequence", "calculate consensus", "compute consensus",
+                "consensus of", "consensus from", "derived from the alignment",
+            )
+            _cmd_lower = (command or "").lower()
+            _wants_consensus = any(p in _cmd_lower for p in _consensus_phrases)
+            if tool_name == "sequence_alignment" and _wants_consensus:
+                print("[CommandProcessor] Router returned sequence_alignment but command asks for consensus -> use tool generator")
+                return None
+
             if tool_name and tool_name in safe_tools:
                 print(f"[CommandProcessor] Deterministic router fallback -> {tool_name}")
                 return {
@@ -1905,7 +1895,7 @@ class CommandProcessor:
         """
         Execute each pipeline step extracted from *command* in sequence.
 
-        For each step the matching MCP tool is called via call_mcp_tool()
+        For each step the matching MCP tool is called via dispatch_tool()
         (which activates demo-mode simulation for helix-test-data buckets).
         Results are aggregated and returned as a single rich response.
         """
@@ -1951,7 +1941,7 @@ class CommandProcessor:
         print(f"[execute_pipeline] params: adapter={adapter}, overlap={min_overlap}, qual={quality_threshold}")
 
         # ── 3. Execute each tool, collect results ───────────────────────────
-        from backend.main_with_mcp import call_mcp_tool   # lazy import inside agent
+        from backend.main_with_mcp import dispatch_tool   # lazy import inside agent
 
         TOOL_ARGS: Dict[str, Dict] = {
             "fastqc_quality_analysis": {
@@ -2091,14 +2081,14 @@ class CommandProcessor:
                     tool_result = _PHYLO_DEMO[tool_name]
                 elif tool_name == "custom_step" or tool_name not in _KNOWN_TOOLS or not args:
                     # Generic / unknown tool: produce a minimal simulated result without
-                    # hitting the LLM-based tool-generator fallback in call_mcp_tool.
+                    # hitting the LLM-based tool-generator fallback in dispatch_tool.
                     tool_result = {
                         "status": "completed",
                         "mode": "demo",
                         "text": f"{step_name} completed successfully (demo).",
                     }
                 else:
-                    tool_result = await call_mcp_tool(tool_name, args)
+                    tool_result = await dispatch_tool(tool_name, args)
                     if not isinstance(tool_result, dict):
                         tool_result = {"status": "completed", "raw": str(tool_result)}
                     if tool_result.get("status") == "error":

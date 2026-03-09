@@ -1,0 +1,19 @@
+{
+  "config": {
+    "tool_name": "fastqc_quality_analysis",
+    "params": {
+      "input_r1": "s3://helix-test-data/microbiome/run1/sample01_R1.fastq.gz",
+      "input_r2": "s3://helix-test-data/microbiome/run1/sample01_R2.fastq.gz",
+      "_from_broker": true
+    },
+    "run_id": "c88526d7-8c17-49c6-a804-b4e3c4df96e2",
+    "parent_run_id": null,
+    "session_id": "c6fd0814-fec5-43d3-8ecc-8bb02a380108",
+    "objective": "16S amplicon QC \u2014 V3\u2013V4 gut microbiome pipeline"
+  },
+  "result_status": "completed",
+  "summary_text": "### Amplicon QC Review\n\n**Merged reads:** ?\n\nQuality assessment completed.",
+  "delta": {},
+  "elapsed_s": 0.22,
+  "n_visuals": 0
+}

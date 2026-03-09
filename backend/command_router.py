@@ -1,12 +1,54 @@
+import json
+import os
 import re
 from typing import Dict, Any, Optional, Tuple
-import os
 
 # Import directed evolution handler
 from backend.directed_evolution_handler import DirectedEvolutionHandler
 
+# Tools the router may return; must match agent's safe_tools + handle_natural_command.
+# Used by LLM-based routing. Order does not matter.
+ROUTER_TOOLS = [
+    ("toolbox_inventory", "List available tools and capabilities"),
+    ("read_merging", "Merge paired-end reads"),
+    ("read_trimming", "Trim reads by quality or adapter"),
+    ("fastqc_quality_analysis", "Run FastQC quality control on reads"),
+    ("sequence_alignment", "Align DNA/RNA sequences (MSA)"),
+    ("mutate_sequence", "Create sequence variants / mutations"),
+    ("plasmid_visualization", "Visualize plasmid/vector constructs"),
+    ("phylogenetic_tree", "Build phylogenetic/evolutionary tree"),
+    ("clustering_analysis", "Cluster sequences and get representatives"),
+    ("variant_selection", "Select N sequences or top/diverse variants"),
+    ("fetch_ncbi_sequence", "Fetch sequence from NCBI by accession"),
+    ("query_uniprot", "Query UniProt for protein sequences"),
+    ("lookup_go_term", "Look up Gene Ontology terms"),
+    ("bulk_rnaseq_analysis", "Bulk RNA-seq / DESeq2 differential expression"),
+    ("single_cell_analysis", "Single-cell RNA-seq (scPipeline, Seurat)"),
+    ("patch_and_rerun", "Change result/parameters and re-run"),
+    ("bio_rerun", "Re-run analysis with parameter changes"),
+    ("bio_diff_runs", "Compare two runs or iterations"),
+    ("local_edit_visualization", "Edit plot title or axis labels"),
+    ("local_update_scatter_x_scale", "Change plot axis scale (log/linear)"),
+    ("handle_natural_command", "No specific tool; use general assistant/tool generator"),
+]
+
+# JSON schema for the LLM router response (for planning and debugging).
+# Example: {"problem-description": "...", "intent": "...", "suggested-steps": ["Step one", "Step two"], "tool": "..."}
+ROUTER_LLM_RESPONSE_SCHEMA = {
+    "tool": "string (required): one of the tool names from the list",
+    "problem-description": "string (required): one-line summary of the user request",
+    "intent": "string (required): e.g. multi-step, single-tool, qa",
+    "suggested-steps": "array of strings (required): e.g. [\"Align sequences\", \"Compute consensus\"] or [\"Single tool\"]",
+}
+
+
 class CommandRouter:
-    """Simple keyword-based command router to replace ChatGPT."""
+    """Hybrid router: a few high-confidence keyword checks, then LLM-based tool selection.
+
+    Keyword-based matching is intentionally minimal and used as a fallback when the LLM
+    is off or fails; it cannot cover the full range of how scientists phrase requests.
+    Prefer enabling HELIX_USE_LLM_ROUTER and extending ROUTER_TOOLS / prompts over
+    adding more hard-coded phrases. See docs/PROMPT_NORMALIZATION.md."""
     
     def __init__(self):
         self.tool_mappings = {
@@ -70,13 +112,96 @@ class CommandRouter:
         
         # Initialize directed evolution handler
         self.de_handler = DirectedEvolutionHandler()
+
+    @staticmethod
+    def _scrub_for_keyword_matching(command: str) -> str:
+        """Scrub URIs and absolute paths to reduce keyword false positives."""
+        scrubbed = (command or "").lower()
+        scrubbed = re.sub(r"s3://[^\s]+", " ", scrubbed)
+        scrubbed = re.sub(r"(?:^|\s)(/[^\s]+)", " ", scrubbed)
+        scrubbed = re.sub(r"\s+", " ", scrubbed).strip()
+        return scrubbed
+
+    def _route_with_llm(
+        self, command: str, session_context: Dict[str, Any]
+    ) -> Optional[Tuple[str, Dict[str, Any]]]:
+        """
+        Use the same LLM as the intent classifier to pick the best tool for the command.
+        Returns (tool_name, base_params) or None if LLM is disabled/unavailable or on error.
+        Only returns tool names from ROUTER_TOOLS; otherwise returns handle_natural_command.
+        """
+        if os.getenv("HELIX_USE_LLM_ROUTER", "1").lower() not in ("1", "true", "yes"):
+            return None
+        if os.getenv("HELIX_MOCK_MODE") == "1":
+            return None
+        try:
+            from backend.intent_classifier import _get_llm
+            llm = _get_llm()
+        except Exception:
+            return None
+
+        allowed = {t[0] for t in ROUTER_TOOLS}
+        tools_text = "\n".join(f"- {name}: {desc}" for name, desc in ROUTER_TOOLS)
+        schema_desc = ", ".join(f"\"{k}\": {v}" for k, v in ROUTER_LLM_RESPONSE_SCHEMA.items())
+        system = (
+            "You are a router. Given a user command and a list of tools, respond with a single JSON object "
+            "with these keys: " + schema_desc + ". "
+            "For \"tool\", use exactly one of the tool names from the list, or \"handle_natural_command\" "
+            "if no single tool fits (e.g. multi-step or composite requests). Use only the exact tool names given."
+        )
+        user = f"User command:\n{command.strip()}\n\nTools:\n{tools_text}"
+        messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+        try:
+            response = llm.invoke(messages)
+            content = (response.content or "").strip()
+        except Exception:
+            return None
+        # Parse JSON
+        start = content.find("{")
+        end = content.rfind("}") + 1
+        if start < 0 or end <= start:
+            return None
+        try:
+            out = json.loads(content[start:end])
+            tool = (out.get("tool") or "").strip()
+        except (json.JSONDecodeError, TypeError):
+            return None
+        if not tool or tool not in allowed:
+            tool = "handle_natural_command"
+        base = {"session_id": session_context.get("session_id", "")}
+        if tool == "handle_natural_command":
+            base["command"] = command
+        # Attach parsed schema fields for planning/debugging (keys may have hyphens -> use safe keys)
+        raw_steps = out.get("suggested-steps")
+        if isinstance(raw_steps, list):
+            suggested_steps = [str(s).strip() for s in raw_steps if s]
+        elif isinstance(raw_steps, str) and raw_steps.strip():
+            suggested_steps = [raw_steps.strip()]
+        else:
+            suggested_steps = []
+        base["router_reasoning"] = {
+            "problem_description": out.get("problem-description") or "",
+            "intent": out.get("intent") or "",
+            "suggested_steps": suggested_steps,
+        }
+        return (tool, base)
     
     def route_command(self, command: str, session_context: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
         """
         Route a command to the appropriate tool based on keywords.
         Returns (tool_name, parameters)
         """
-        command_lower = command.lower()
+        command_lower = self._scrub_for_keyword_matching(command)
+
+        if os.getenv("HELIX_LLM_ROUTER_FIRST", "0").lower() in ("1", "true", "yes"):
+            llm_result = self._route_with_llm(command, session_context)
+            if llm_result is not None:
+                tool_name, base_params = llm_result
+                params = self._extract_parameters(command, tool_name, session_context)
+                for k, v in base_params.items():
+                    params.setdefault(k, v)
+                print(f"🔧 Command router: LLM-first routed -> {tool_name}")
+                return (tool_name, params)
         
         # Tool inventory / "what tools do you have?" (HIGHEST PRIORITY)
         if any(
@@ -265,8 +390,27 @@ class CommandRouter:
             print(f"🔧 Command router: Matched 'run io summary' -> session_run_io_summary ({run_ref})")
             return "session_run_io_summary", {"run_ref": run_ref}
 
+        # ── HYBRID: LLM-based routing for everything not matched by high-confidence keywords above ──
+        llm_result = self._route_with_llm(command, session_context)
+        if llm_result is not None:
+            tool_name, base_params = llm_result
+            params = self._extract_parameters(command, tool_name, session_context)
+            for k, v in base_params.items():
+                params.setdefault(k, v)
+            print(f"🔧 Command router: LLM routed -> {tool_name}")
+            return (tool_name, params)
+
+        # Fallback: keyword-based routing when LLM is off or failed
         # Priority-based matching to avoid conflicts
         # Check for specific phrases first, then general keywords
+
+        # ── CONSENSUS / COMPOSITE (before alignment so "align + consensus" -> handle_natural_command) ──
+        if any(phrase in command_lower for phrase in [
+            'consensus sequence', 'consensus of', 'calculate consensus', 'compute consensus',
+            'consensus from', 'consensus from the', 'consensus of the following'
+        ]):
+            print(f"🔧 Command router: Consensus/composite request -> handle_natural_command (tool generator)")
+            return "handle_natural_command", {"command": command, "session_id": session_context.get("session_id", "")}
 
         # ── SINGLE-CELL RNA-SEQ (must precede bulk RNA-seq check) ────────────────
         # Single-cell prompts contain bulk RNA-seq vocabulary (rna-seq, DE, PCA…)
@@ -535,14 +679,20 @@ class CommandRouter:
         return Plan(steps=steps).dict()
 
     def _split_workflow_command(self, command: str) -> list[str]:
+        """Split command into workflow steps. Only explicit delimiters are used.
+
+        We do NOT split on bare newlines, so FASTA (and other newline-heavy payloads)
+        stay as one chunk. See docs/PROMPT_NORMALIZATION.md.
+        """
         if not command:
             return []
-        # Normalize separators
-        text = command.replace("->", "\n").replace("→", "\n")
-        # Split on "then"/"and then" plus newlines/semicolons
-        chunks = re.split(r"(?:\bthen\b|\band then\b|;|\n)+", text, flags=re.IGNORECASE)
+        # Split only on explicit workflow delimiters (not newline — avoids 7-step FASTA bug)
+        chunks = re.split(
+            r"(?:\s+and\s+then\s+|\s+then\s+|;|->|→)+",
+            command,
+            flags=re.IGNORECASE,
+        )
         parts = [c.strip() for c in chunks if c and c.strip()]
-        # If no real split happened, return the original as a single step
         return parts or [command.strip()]
     
     def _extract_parameters(self, command: str, tool_name: str, session_context: Dict[str, Any]) -> Dict[str, Any]:

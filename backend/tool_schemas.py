@@ -1,5 +1,5 @@
 """
-Central registry for tool metadata (inputs/outputs) to keep MCP listings and
+Central registry for tool metadata (inputs/outputs) to keep tool listings and
 agent wiring in sync.
 """
 from typing import Dict, List, Any
@@ -8,11 +8,11 @@ from typing import Dict, List, Any
 TOOL_SCHEMAS: List[Dict[str, Any]] = [
     {
         "name": "toolbox_inventory",
-        "description": "List all tools Helix.AI has access to (registered MCP tools, discovered @tool functions, and local/EC2 CLI tools).",
+        "description": "List all tools Helix.AI has access to (registered tools, discovered @tool functions, and local/EC2 CLI tools).",
         "tags": ["tools", "inventory", "capabilities", "help"],
         "outputs": {
             "type": "object",
-            "description": "Tool inventory including MCP tools, discovered @tool functions, and local/EC2 tools.",
+            "description": "Tool inventory including registered tools, discovered @tool functions, and local/EC2 tools.",
         },
         "inputs": {
             "type": "object",

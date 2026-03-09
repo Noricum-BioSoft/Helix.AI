@@ -1,0 +1,20 @@
+{
+  "config": {
+    "tool_name": "single_cell_analysis",
+    "params": {
+      "data_file": "s3://noricum-ngs-data/demo/scrna/sle_pbmc_filtered_feature_bc_matrix.h5",
+      "data_format": "10x",
+      "resolution": 0.5,
+      "steps": "all"
+    },
+    "run_id": "1fbd8d52-9e63-4924-aa62-cb86ee1c32af",
+    "parent_run_id": null,
+    "session_id": "34e01bae-25ac-4451-9c51-0bf764d2d74b",
+    "objective": "SLE PBMC immune profiling \u2014 cell-type DEG"
+  },
+  "result_status": "success",
+  "summary_text": "### Single-Cell RNA-seq Analysis Review\n\n**Cells:** ?  |  **Genes:** ?  |  **Clusters:** ?  |  **Resolution:** ?\n\n",
+  "delta": {},
+  "elapsed_s": 0.0,
+  "n_visuals": 0
+}

@@ -1,0 +1,20 @@
+{
+  "config": {
+    "tool_name": "bulk_rnaseq_analysis",
+    "params": {
+      "count_matrix": "s3://noricum-ngs-data/demo/rnaseq/apap_timecourse_counts.csv",
+      "sample_metadata": "s3://noricum-ngs-data/demo/rnaseq/apap_timecourse_metadata.csv",
+      "design_formula": "~time_point",
+      "alpha": 0.05
+    },
+    "run_id": "a8e7fbfd-944d-4adf-aa4e-a16002f58bb2",
+    "parent_run_id": null,
+    "session_id": "ebc426ca-ede7-4c50-a380-47a7e08976ac",
+    "objective": "APAP liver-injury time-course \u2014 expression recovery"
+  },
+  "result_status": "success",
+  "summary_text": "### Bulk RNA-seq DE Analysis Review\n**Objective:** APAP liver-injury time-course \u2014 expression recovery\n\n**Dataset:** ? samples, ? genes  \n**Total significant genes (across all contrasts):** 0\n\n#### Contrasts\n",
+  "delta": {},
+  "elapsed_s": 0.0,
+  "n_visuals": 0
+}

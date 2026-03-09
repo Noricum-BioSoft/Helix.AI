@@ -16,7 +16,7 @@ Follows the pattern from test_iterative_workflows_local.py:
 - ``monkeypatch.setenv("HELIX_MOCK_MODE", "1")`` — skip LLM entirely
 - isolated ``history_manager.storage_dir`` + ``history_manager.sessions = {}``
 - ``TestClient(app)`` for HTTP round-trips
-- ``unittest.mock`` for heavy dependencies (agent, call_mcp_tool, broker)
+- ``unittest.mock`` for heavy dependencies (agent, dispatch_tool, broker)
 """
 from __future__ import annotations
 
@@ -167,11 +167,11 @@ class TestS3Browse:
         mock_tool.invoke = MagicMock(return_value={"status": "success"})
         monkeypatch.setattr("backend.agent_tools.s3_browse_results", mock_tool)
 
-        # Phase 2c will handle the fastqc command; mock call_mcp_tool for it
+        # Phase 2c will handle the fastqc command; mock dispatch_tool for it
         async def _mock_call(tool, params):
             return {"status": "success", "text": f"mock {tool}"}
 
-        monkeypatch.setattr("backend.main_with_mcp.call_mcp_tool", _mock_call)
+        monkeypatch.setattr("backend.main_with_mcp.dispatch_tool", _mock_call)
 
         client = _client()
         client.post(
@@ -206,7 +206,7 @@ AMPLICON_CMD = (
 
 @pytest.fixture()
 def mock_tool_executor(monkeypatch):
-    """Replace call_mcp_tool so demo tests need no AWS credentials."""
+    """Replace dispatch_tool so demo tests need no AWS credentials."""
 
     async def _mock(tool: str, params: dict) -> dict:
         if tool == "bulk_rnaseq_analysis":
@@ -223,7 +223,7 @@ def mock_tool_executor(monkeypatch):
             }
         return {"status": "success", "text": f"mock {tool}"}
 
-    monkeypatch.setattr("backend.main_with_mcp.call_mcp_tool", _mock)
+    monkeypatch.setattr("backend.main_with_mcp.dispatch_tool", _mock)
 
 
 class TestDemoFastPaths:
@@ -312,7 +312,7 @@ class TestCommandRouterFastPath:
     def test_command_router_scale_change(self):
         """
         'change the plots from log to linear scale'
-        → tool='local_edit_visualization' in run ledger.
+        → tool='patch_and_rerun' in run ledger.
         """
         client = _client()
         r1 = client.post("/execute", json={"command": "Create demo plot"})
@@ -329,11 +329,11 @@ class TestCommandRouterFastPath:
 
         runs = _get_runs(client, session_id)
         edit_run = next(
-            (run for run in runs if run.get("tool") == "local_edit_visualization"),
+            (run for run in runs if run.get("tool") == "patch_and_rerun"),
             None,
         )
         assert edit_run is not None, (
-            f"Expected a local_edit_visualization run, got runs: {runs}"
+            f"Expected a patch_and_rerun run, got runs: {runs}"
         )
 
     def test_command_router_session_run_io_summary(self):
@@ -372,7 +372,7 @@ class TestCommandRouterFastPath:
                 }
             return {"status": "success", "text": f"mock {tool}"}
 
-        monkeypatch.setattr("backend.main_with_mcp.call_mcp_tool", _mock_call)
+        monkeypatch.setattr("backend.main_with_mcp.dispatch_tool", _mock_call)
 
         client = _client()
         r = client.post(
@@ -398,7 +398,7 @@ class TestCommandRouterFastPath:
                 }
             return {"status": "success", "text": f"mock {tool}"}
 
-        monkeypatch.setattr("backend.main_with_mcp.call_mcp_tool", _mock_call)
+        monkeypatch.setattr("backend.main_with_mcp.dispatch_tool", _mock_call)
 
         client = _client()
         r = client.post(
@@ -425,7 +425,7 @@ class TestCommandRouterFastPath:
 
     def test_command_router_bio_diff_runs_routes_correctly(self, monkeypatch):
         """
-        'what changed between the runs?' → CommandRouter returns 'bio_diff_runs'
+        'run compare results between runs' → CommandRouter returns 'bio_diff_runs'
         and the /execute endpoint succeeds.
         """
         async def _mock_call(tool: str, params: dict) -> dict:
@@ -437,12 +437,12 @@ class TestCommandRouterFastPath:
                 }
             return {"status": "success", "text": f"mock {tool}"}
 
-        monkeypatch.setattr("backend.main_with_mcp.call_mcp_tool", _mock_call)
+        monkeypatch.setattr("backend.main_with_mcp.dispatch_tool", _mock_call)
 
         client = _client()
         r = client.post(
             "/execute",
-            json={"command": "what changed between the runs?"},
+            json={"command": "run compare results between runs"},
         )
         assert r.status_code == 200
         assert r.json().get("tool") == "bio_diff_runs"
@@ -576,14 +576,14 @@ class TestAgentPath:
 
 def _disable_phase2c(monkeypatch):
     """
-    Force Phase 2c to always fall through by making call_mcp_tool raise.
+    Force Phase 2c to always fall through by making dispatch_tool raise.
     Phase 2c wraps the tool call in try/except, so this safely skips it.
     """
 
     async def _raise(tool: str, params: dict) -> dict:
         raise Exception("Phase2c intentionally disabled for fallback test")
 
-    monkeypatch.setattr("backend.main_with_mcp.call_mcp_tool", _raise)
+    monkeypatch.setattr("backend.main_with_mcp.dispatch_tool", _raise)
 
 
 class TestFallbackPath:

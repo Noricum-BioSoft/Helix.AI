@@ -157,6 +157,25 @@ const ScenarioCard: React.FC<{
         ))}
       </div>
 
+      {/* Inputs */}
+      {scenario.inputs && scenario.inputs.length > 0 && (
+        <div>
+          <div style={{ fontSize: '0.68rem', color: '#94A3B8', marginBottom: '4px', fontWeight: 600, letterSpacing: '0.04em' }}>
+            INPUTS
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+            {scenario.inputs.slice(0, 3).map((inp) => (
+              <span key={inp.label} style={{ fontSize: '0.68rem', color: '#64748B', lineHeight: 1.3 }}>
+                • {inp.label}
+              </span>
+            ))}
+            {scenario.inputs.length > 3 && (
+              <span style={{ fontSize: '0.65rem', color: '#94A3B8' }}>+{scenario.inputs.length - 3} more</span>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Outputs row */}
       <div style={{ marginTop: 'auto' }}>
         <div style={{ fontSize: '0.68rem', color: '#94A3B8', marginBottom: '4px', fontWeight: 600, letterSpacing: '0.04em' }}>
@@ -198,167 +217,6 @@ const ScenarioCard: React.FC<{
   );
 };
 
-// ── Preview pane ───────────────────────────────────────────────────────────────
-const ScenarioPreview: React.FC<{
-  scenario: DemoScenario;
-  onLoad: () => void;
-}> = ({ scenario, onLoad }) => {
-  const behavior = BEHAVIOR_CONFIG[scenario.expectedBehavior];
-
-  return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-      {/* Scenario header */}
-      <div
-        style={{
-          padding: '20px',
-          borderRadius: '12px',
-          background: `linear-gradient(135deg, ${scenario.domainColor}15, ${scenario.domainColor}05)`,
-          border: `1px solid ${scenario.domainColor}30`,
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
-          <span style={{ fontSize: '2rem' }}>{scenario.icon}</span>
-          <div>
-            <div style={{ fontWeight: 800, fontSize: '1.05rem', color: '#1A202C' }}>
-              {scenario.title}
-            </div>
-            <div style={{ fontSize: '0.82rem', color: '#718096' }}>{scenario.subtitle}</div>
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '10px' }}>
-          <span
-            style={{
-              padding: '4px 10px',
-              borderRadius: '6px',
-              backgroundColor: behavior.bg,
-              color: behavior.color,
-              fontSize: '0.75rem',
-              fontWeight: 700,
-            }}
-          >
-            {behavior.icon} {behavior.label}
-          </span>
-          <span
-            style={{
-              padding: '4px 10px',
-              borderRadius: '6px',
-              backgroundColor: '#F1F5F9',
-              color: '#475569',
-              fontSize: '0.75rem',
-            }}
-          >
-            ⏱ {scenario.estimatedRuntime}
-          </span>
-          <span
-            style={{
-              padding: '4px 10px',
-              borderRadius: '6px',
-              backgroundColor: '#F1F5F9',
-              color: '#475569',
-              fontSize: '0.75rem',
-            }}
-          >
-            🔧 {scenario.tool}
-          </span>
-        </div>
-      </div>
-
-      {/* What Helix will do */}
-      <div
-        style={{
-          padding: '14px 16px',
-          borderRadius: '8px',
-          backgroundColor: behavior.bg,
-          border: `1px solid ${
-            scenario.expectedBehavior === 'needs_inputs' ? '#FDE68A' :
-            scenario.expectedBehavior === 'executes_pipeline' ? '#A7F3D0' : '#DDD6FE'
-          }`,
-        }}
-      >
-        <div style={{ fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.06em', color: behavior.color, marginBottom: '4px' }}>
-          WHAT HELIX DOES WITH THIS PROMPT
-        </div>
-        <div style={{ fontSize: '0.82rem', color: behavior.color }}>{behavior.description}</div>
-      </div>
-
-      {/* Expected outputs */}
-      <div>
-        <div style={{ fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.06em', color: '#94A3B8', marginBottom: '8px' }}>
-          EXPECTED OUTPUTS
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-          {scenario.outputs.map((o) => (
-            <div
-              key={o.label}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                padding: '7px 10px',
-                borderRadius: '6px',
-                backgroundColor: '#F8FAFC',
-                border: '1px solid #E2E8F0',
-                fontSize: '0.82rem',
-                color: '#374151',
-              }}
-            >
-              <span>{OUTPUT_ICONS[o.type]}</span>
-              <span>{o.label}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Prompt preview */}
-      <div style={{ flex: 1, minHeight: 0 }}>
-        <div style={{ fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.06em', color: '#94A3B8', marginBottom: '8px' }}>
-          PROMPT PREVIEW
-        </div>
-        <div
-          style={{
-            padding: '12px',
-            borderRadius: '8px',
-            backgroundColor: '#0F172A',
-            color: '#E2E8F0',
-            fontSize: '0.72rem',
-            fontFamily: 'Consolas, "Liberation Mono", Menlo, Courier, monospace',
-            whiteSpace: 'pre-wrap',
-            overflowY: 'auto',
-            maxHeight: '220px',
-            lineHeight: 1.6,
-            border: '1px solid #1E293B',
-          }}
-        >
-          {scenario.prompt}
-        </div>
-      </div>
-
-      {/* CTA */}
-      <button
-        onClick={onLoad}
-        style={{
-          padding: '12px 0',
-          borderRadius: '10px',
-          border: 'none',
-          backgroundColor: scenario.domainColor,
-          color: '#FFFFFF',
-          fontSize: '0.9rem',
-          fontWeight: 700,
-          cursor: 'pointer',
-          width: '100%',
-          letterSpacing: '0.02em',
-          transition: 'opacity 0.15s',
-        }}
-        onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.88')}
-        onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
-      >
-        Load into Helix ↗
-      </button>
-    </div>
-  );
-};
-
 // ── Main modal ─────────────────────────────────────────────────────────────────
 export const DemoScenariosPanel: React.FC<DemoScenariosPanelProps> = ({
   show,
@@ -366,7 +224,6 @@ export const DemoScenariosPanel: React.FC<DemoScenariosPanelProps> = ({
   onSelect,
 }) => {
   const [selectedId, setSelectedId] = useState<string>(demoScenarios[0].id);
-  const selected = demoScenarios.find((s) => s.id === selectedId)!;
 
   const handleLoad = (scenario: DemoScenario) => {
     onSelect(scenario.prompt, scenario.id);
@@ -428,25 +285,15 @@ export const DemoScenariosPanel: React.FC<DemoScenariosPanelProps> = ({
       </Modal.Header>
 
       <Modal.Body style={{ padding: 0, backgroundColor: '#F8FAFC' }}>
-        <div style={{ display: 'flex', height: '580px' }}>
-
-          {/* Left: scenario grid */}
-          <div
-            style={{
-              flex: '0 0 62%',
-              padding: '20px',
-              overflowY: 'auto',
-              borderRight: '1px solid #E2E8F0',
-            }}
-          >
-            {/* Legend */}
+        <div style={{ padding: '20px', overflowX: 'auto', overflowY: 'auto' }}>
+            {/* Legend — full descriptions, no truncation */}
             <div
               style={{
                 display: 'flex',
-                gap: '12px',
+                gap: '16px',
                 flexWrap: 'wrap',
                 marginBottom: '16px',
-                padding: '10px 14px',
+                padding: '12px 14px',
                 borderRadius: '8px',
                 backgroundColor: '#FFFFFF',
                 border: '1px solid #E2E8F0',
@@ -454,30 +301,47 @@ export const DemoScenariosPanel: React.FC<DemoScenariosPanelProps> = ({
             >
               {(Object.entries(BEHAVIOR_CONFIG) as [ExpectedBehavior, typeof BEHAVIOR_CONFIG[ExpectedBehavior]][]).map(
                 ([key, cfg]) => (
-                  <div key={key} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.72rem' }}>
+                  <div
+                    key={key}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '8px',
+                      fontSize: '0.72rem',
+                      flex: '1 1 200px',
+                      minWidth: 0,
+                    }}
+                  >
                     <span
                       style={{
+                        flexShrink: 0,
                         display: 'inline-block',
                         width: '10px',
                         height: '10px',
                         borderRadius: '3px',
+                        marginTop: '3px',
                         backgroundColor: cfg.bg,
                         border: `1px solid ${cfg.color}50`,
                       }}
                     />
-                    <span style={{ color: cfg.color, fontWeight: 700 }}>{cfg.label}</span>
-                    <span style={{ color: '#94A3B8' }}>— {cfg.description.split(' ').slice(0, 8).join(' ')}…</span>
+                    <div style={{ minWidth: 0 }}>
+                      <span style={{ color: cfg.color, fontWeight: 700 }}>{cfg.label}</span>
+                      <span style={{ color: '#64748B', display: 'block', marginTop: '2px', lineHeight: 1.4 }}>
+                        {cfg.description}
+                      </span>
+                    </div>
                   </div>
                 )
               )}
             </div>
 
-            {/* Cards grid */}
+            {/* Cards — all 5 in one row; minWidth so they don't collapse on narrow modals */}
             <div
               style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(2, 1fr)',
-                gap: '14px',
+                gridTemplateColumns: 'repeat(5, minmax(168px, 1fr))',
+                gap: '12px',
+                minWidth: '880px',
               }}
             >
               {demoScenarios.map((scenario) => (
@@ -490,22 +354,6 @@ export const DemoScenariosPanel: React.FC<DemoScenariosPanelProps> = ({
                 />
               ))}
             </div>
-          </div>
-
-          {/* Right: preview pane */}
-          <div
-            style={{
-              flex: '0 0 38%',
-              padding: '20px',
-              overflowY: 'auto',
-              backgroundColor: '#FFFFFF',
-            }}
-          >
-            <ScenarioPreview
-              scenario={selected}
-              onLoad={() => handleLoad(selected)}
-            />
-          </div>
         </div>
       </Modal.Body>
 
@@ -520,7 +368,7 @@ export const DemoScenariosPanel: React.FC<DemoScenariosPanelProps> = ({
         }}
       >
         <span style={{ fontSize: '0.78rem', color: '#94A3B8' }}>
-          Click any card to preview · "Try this scenario →" loads the prompt directly
+          "Try this scenario →" loads the prompt into Helix
         </span>
         <Button variant="outline-secondary" size="sm" onClick={onHide}>
           Close

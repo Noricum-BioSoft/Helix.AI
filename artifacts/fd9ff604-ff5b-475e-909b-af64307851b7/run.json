@@ -1,0 +1,20 @@
+{
+  "config": {
+    "tool_name": "single_cell_analysis",
+    "params": {
+      "data_file": "s3://noricum-ngs-data/demo/scrna/sle_pbmc_filtered_feature_bc_matrix.h5",
+      "data_format": "10x",
+      "resolution": 0.5,
+      "steps": "all"
+    },
+    "run_id": "fd9ff604-ff5b-475e-909b-af64307851b7",
+    "parent_run_id": null,
+    "session_id": "72168d63-5b0f-493a-a8aa-acfc592bf29b",
+    "objective": "SLE PBMC immune profiling \u2014 cell-type DEG"
+  },
+  "result_status": "success",
+  "summary_text": "### Single-Cell RNA-seq Analysis Review\n\n**Cells:** 600  |  **Genes:** 300  |  **Clusters:** 9  |  **Resolution:** 0.5\n\n#### Top Cell Types\n- **CD4 T cell**: 150 (25%)\n- **B cell**: 108 (18%)\n- **Monocyte**: 90 (15%)\n- **CD8 T cell**: 90 (15%)\n- **NK cell**: 60 (10%)\n\n\n> \u26a0\ufe0f Synthetic PBMC data \u2014 cell-type composition is representative.",
+  "delta": {},
+  "elapsed_s": 2.37,
+  "n_visuals": 4
+}

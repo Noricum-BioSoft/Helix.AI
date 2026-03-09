@@ -276,7 +276,7 @@ def run_phylogenetic_tree_raw(aligned_sequences: str) -> Dict[str, Any]:
     If ``aligned_sequences`` is empty or None, the canonical SARS-CoV-2
     spike protein dataset (5 VOCs) is used.
 
-    Returns a result dict matching the shape expected by call_mcp_tool and
+    Returns a result dict matching the shape expected by dispatch_tool and
     agent_tools.phylogenetic_tree.
     """
     fasta_text = (aligned_sequences or "").strip()

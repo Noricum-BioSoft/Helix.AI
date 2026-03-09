@@ -32,20 +32,22 @@ User (natural language prompt)
    ┌────┴────────────────────────────┐
    │ ask path         execute path   │
    │                                 │
-BioinformaticsGuru  WorkflowPlannerAgent
-                            │
-                   ImplementationAgent
-                            │
-                InfrastructureDecisionAgent
-                            │
-                   ┌────────┴──────────┐
-                   │  tool exists?      │
-                   │  No → ToolGenerator│
-                   │  Yes → ExecutionBroker (jobs, I/O)
-                   └────────┬──────────┘
-                       DataVisualizer
-                            │
-                   Response (report + artifacts + download links)
+BioinformaticsGuru           WorkflowPlannerAgent
+                                     │
+                              ImplementationAgent
+                                     │
+                        InfrastructureDecisionAgent
+                                     │
+                            ┌────────┴───────────────┐
+                            │    Tool exists?        │
+                            │   No → ToolGenerator   │
+                            │  Yes → ExecutionBroker |
+                            |        (jobs, I/O)     |
+                            └────────┬───────────────┘
+                               DataVisualizer
+                                     │
+                                 Response 
+                     (report + artifacts + download links)
 ```
 
 **Key structural properties:**
@@ -83,8 +85,11 @@ Copy `backend/.env.example` to `.env` at the repo root and fill in:
 
 | Variable | Required | Description |
 |---|---|---|
-| `OPENAI_API_KEY` | One of these two | GPT-4 model access |
+| `OPENAI_API_KEY` | One of these two | OpenAI API access (model configurable, see below) |
 | `DEEPSEEK_API_KEY` | One of these two | DeepSeek model access |
+| `HELIX_INTENT_OPENAI_MODEL` | Optional | Intent classifier model (e.g. `openai:gpt-5.2`, `openai:gpt-4o`). Default: `openai:gpt-5.2`. |
+| `HELIX_INFRASTRUCTURE_OPENAI_MODEL` | Optional | Infrastructure decision model. Default: `openai:gpt-5.2`. |
+| `HELIX_TOOLGEN_OPENAI_MODEL` | Optional | Tool-generation model. Default: `openai:gpt-5.2`. |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Optional | S3 data access and EC2/EMR routing |
 | `HELIX_USE_EC2` | Optional | Set `true` to enable EC2 job routing |
 | `NCBI_API_KEY` | Optional | Higher NCBI rate limits for sequence queries |

@@ -14,6 +14,7 @@ This directory contains the documentation needed for **release** and ongoing dev
 | [**AWS_USAGE.md**](AWS_USAGE.md) | **How the cloud (AWS) is used**: hosting (ECS, S3, CloudFront, ALB, ECR), data (S3 inputs/outputs, size estimation), compute (Local vs EC2 vs EMR, 3-factor model, sync vs async). |
 | [**architecture/ARCHITECTURE_EXPLANATION.md**](architecture/ARCHITECTURE_EXPLANATION.md) | Frontend vs backend deployment (local vs production, S3/CloudFront, ECS), how frontend connects to backend. |
 | [**architecture/BACKEND_DATAFLOW.md**](architecture/BACKEND_DATAFLOW.md) | End-to-end backend flow: request reception, preflight, intent, tool selection, infrastructure decision, execution routing, result return. |
+| [**architecture/ROUTING_FLOW.md**](architecture/ROUTING_FLOW.md) | Current and target `/execute` routing order, deterministic fast paths, and fallback behavior. |
 | [**ORCHESTRATION_DUALITY.md**](ORCHESTRATION_DUALITY.md) | Explains the two orchestration systems (primary in `agent.py` vs experimental in `orchestrator.py`) and which is used in production. |
 | [**architecture/TARGET_ARCHITECTURE_CHECKLIST.md**](architecture/TARGET_ARCHITECTURE_CHECKLIST.md) | Rollout checklist for execution broker, sync/async routing, job management, EMR. |
 
@@ -29,6 +30,8 @@ This directory contains the documentation needed for **release** and ongoing dev
 | Document | Description |
 |----------|-------------|
 | [**USER_SCENARIOS.md**](USER_SCENARIOS.md) | Scenario definitions for scientists and bioinformaticians: domain context, personas, exploration (A), first run (B), iteration (C), validation (D), reproducibility (E), sequence/plasmid (F–I), roadmap (J–N). Drives product and QA. |
+| [**user/CAPABILITIES_GUIDE.md**](user/CAPABILITIES_GUIDE.md) | What scientists can ask Helix, with one concrete example prompt per supported tool. |
+| [**user/UNKNOWN_PROMPT_BEHAVIOR.md**](user/UNKNOWN_PROMPT_BEHAVIOR.md) | How Helix behaves for ambiguous/unknown prompts across execute and Q&A intents. |
 
 ### 4. Tests
 
@@ -45,6 +48,8 @@ This directory contains the documentation needed for **release** and ongoing dev
 | [**getting-started/ENVIRONMENT_SETUP.md**](getting-started/ENVIRONMENT_SETUP.md) | Environment variables, API keys, `.env` setup. |
 | [**deployment/AWS_DEPLOYMENT_GUIDE.md**](deployment/AWS_DEPLOYMENT_GUIDE.md) | AWS deployment (CDK, ECS, etc.). |
 | [**development/DEVELOPMENT_GUIDE.md**](development/DEVELOPMENT_GUIDE.md) | Development setup, running locally, contributing. |
+| [**development/RELEASE_READINESS_ROADMAP.md**](development/RELEASE_READINESS_ROADMAP.md) | Coding-agent roadmap to fix stability, routing, and release-readiness issues. |
+| [**development/KNOWN_GOOD_SMOKE_COMMANDS.md**](development/KNOWN_GOOD_SMOKE_COMMANDS.md) | Short, known-good smoke command set (5 demos + 3 unknown prompts). |
 | [**troubleshooting/**](troubleshooting/) | EMR, S3, and other operational troubleshooting. |
 
 ---

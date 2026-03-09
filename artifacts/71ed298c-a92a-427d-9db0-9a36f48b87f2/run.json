@@ -1,0 +1,20 @@
+{
+  "config": {
+    "tool_name": "bulk_rnaseq_analysis",
+    "params": {
+      "count_matrix": "s3://noricum-ngs-data/demo/rnaseq/tgondii_counts.csv",
+      "sample_metadata": "s3://noricum-ngs-data/demo/rnaseq/tgondii_metadata.csv",
+      "design_formula": "~infection_status",
+      "alpha": 0.05
+    },
+    "run_id": "71ed298c-a92a-427d-9db0-9a36f48b87f2",
+    "parent_run_id": null,
+    "session_id": "a41806c5-28ba-4242-9a1a-1dd65b1d945e",
+    "objective": "T. gondii infection vs uninfected \u2014 2\u00d72 factorial design"
+  },
+  "result_status": "success",
+  "summary_text": "### Bulk RNA-seq DE Analysis Review\n**Objective:** T. gondii infection vs uninfected \u2014 2\u00d72 factorial design\n\n**Dataset:** ? samples, ? genes  \n**Total significant genes (across all contrasts):** 0\n\n#### Contrasts\n",
+  "delta": {},
+  "elapsed_s": 0.0,
+  "n_visuals": 0
+}
