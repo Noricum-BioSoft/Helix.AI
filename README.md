@@ -141,6 +141,17 @@ Every completed run produces two downloadable artifacts:
 
 ---
 
+## Artifact storage policy
+
+Helix may generate local run metadata under `artifacts/<run_id>/run.json` during
+development/testing. These files are runtime outputs and should **not** be versioned.
+
+- `artifacts/` is excluded in `.gitignore`
+- run metadata belongs in local/session storage, not in GitHub
+- if `artifacts/` is accidentally committed, remove it from git tracking and keep it local
+
+---
+
 ## Repo structure
 
 ```

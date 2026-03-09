@@ -206,6 +206,8 @@ cython_debug/
 sessions/
 backend/sessions/
 **/sessions/
+artifacts/
+**/artifacts/
 *.session
 *.session.json
 
