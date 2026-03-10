@@ -1926,6 +1926,16 @@ function App() {
       return <div className="alert alert-danger mb-0">{message}</div>;
     }
 
+    // Resolve scenario by explicit scenarioId first, then by command/tool match.
+    // We do this early so rendering can stay deterministic for demo cards.
+    const responseTool =
+      output?.tool || output?.tool_name || output?.result?.tool;
+    const scenario =
+      (item.scenarioId ? getDemoScenarioById(item.scenarioId) : undefined) ??
+      (responseTool
+        ? getDemoScenarioByCommandAndTool(item.input ?? '', responseTool)
+        : undefined);
+
     // Detect a workflow plan response so we can append the "Execute Pipeline" button
     const isWorkflowPlan =
       output?.execute_ready === true ||
@@ -1964,11 +1974,19 @@ function App() {
       /please provide|required information|required inputs|before .* can .* proceed/i.test(agentText) &&
       /count matrix|sample metadata|design formula/i.test(agentText);
 
-    const isNeedsInputs = explicitNeedsInputs || looksLikeNeedsInputsFromAgent;
+    // Some demo scenarios are explicitly authored as "needs_inputs". If backend
+    // emits workflow_planned for these, keep the demo UX consistent and prefer
+    // the scenario's follow-up data path.
+    const scenarioForcesNeedsInputs =
+      isWorkflowPlan &&
+      !!scenario?.followUpPrompt &&
+      scenario?.expectedBehavior === 'needs_inputs';
+
+    const isNeedsInputs = explicitNeedsInputs || looksLikeNeedsInputsFromAgent || scenarioForcesNeedsInputs;
 
     const renderedResponse = renderAgentResponse(output);
 
-    if (isWorkflowPlan) {
+    if (isWorkflowPlan && !scenarioForcesNeedsInputs) {
       const alreadyExecuted = executedPipelineCommands.has(item.input);
       return (
         <div>
@@ -1999,16 +2017,6 @@ function App() {
     }
 
     if (isNeedsInputs) {
-      // Resolve scenario by explicit scenarioId first, then fall back to matching the
-      // backend's reported tool name so the button appears even when the prompt was
-      // typed directly (not loaded via the demo modal).
-      const needsInputsTool =
-        output?.tool || output?.tool_name || output?.result?.tool;
-      const scenario =
-        (item.scenarioId ? getDemoScenarioById(item.scenarioId) : undefined) ??
-        (needsInputsTool
-          ? getDemoScenarioByCommandAndTool(item.input ?? '', needsInputsTool)
-          : undefined);
       if (scenario?.followUpPrompt) {
         return (
           <div>

@@ -82,15 +82,15 @@ Desired Outputs
     {
         "id": "3-amplicon-qc-pipeline",
         "title": "Amplicon QC Pipeline: 16S Gut Microbiome",
-        "expected_behavior": "executes_pipeline",
-        "tool": "fastqc_quality_analysis / read_trimming / read_merging",
+        "expected_behavior": "multi_step_plan",
+        "tool": "fastqc_quality_analysis → read_trimming → read_merging → quality_assessment",
         "prompt": """You are processing a 16S rRNA amplicon sequencing dataset from a gut microbiome study. Raw paired-end FASTQ files are on S3 and need a full preprocessing pipeline before downstream diversity analysis.
 
 Dataset
   Illumina MiSeq 2×250 bp paired-end reads; V3–V4 hypervariable region.
-  Forward reads: s3://helix-test-data/microbiome/run1/sample01_R1.fastq.gz
-  Reverse reads: s3://helix-test-data/microbiome/run1/sample01_R2.fastq.gz
-  Output prefix:  s3://helix-test-data/microbiome/run1/processed/
+  Forward reads: s3://noricum-ngs-data/datasets/GRCh38.p12.MafHi/mate_R1.fq
+  Reverse reads: s3://noricum-ngs-data/datasets/GRCh38.p12.MafHi/mate_R2.fq
+  Output prefix:  s3://noricum-ngs-data/test-output/amplicon-demo/
 
 Study Design
   Case-control: 20 IBD patients vs. 20 healthy controls.

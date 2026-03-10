@@ -818,6 +818,92 @@ class CommandProcessor:
         """
         print("[CommandProcessor] 🔄 Starting multi-step workflow execution...")
 
+        # Guard: some "study description" prompts are data-dependent analyses and
+        # should first request concrete input files, not return a runnable plan.
+        # This keeps demo behavior stable across frontend/backend.
+        cmd_lower = command.lower()
+        has_s3_data = bool(re.search(r"s3://", command, re.IGNORECASE))
+        has_structured_inputs = bool(
+            re.search(
+                r"\b(data_file|count_matrix|sample_metadata|design_formula|forward_reads|reverse_reads)\s*:\s*\S+",
+                command,
+                re.IGNORECASE,
+            )
+        )
+        has_local_or_remote_file_hint = bool(
+            re.search(r"\b\S+\.(csv|tsv|h5|h5ad|fastq|fastq\.gz|fasta|fa)\b", command, re.IGNORECASE)
+        )
+        has_concrete_inputs = has_s3_data or has_structured_inputs or has_local_or_remote_file_hint
+        has_scrna_markers = any(
+            k in cmd_lower for k in ["single-cell", "single cell", "scrna", "pbmc", "10x genomics"]
+        )
+        has_bulk_markers = any(
+            k in cmd_lower for k in ["bulk rna-seq", "bulk rnaseq", "rnaseq", "rna-seq", "transcriptome"]
+        )
+        has_phylo_markers = any(
+            k in cmd_lower for k in ["phylogenetic", "phylogeny", "sars-cov", "spike protein", "newick"]
+        )
+        has_explicit_sequences = bool(re.search(r"^>[\w\-\.]+", command, re.MULTILINE))
+        has_public_fetch = bool(
+            re.search(
+                r"\b(from\s+ncbi|ncbi\s+refseq|from\s+refseq|from\s+genbank|"
+                r"retrieve\s+sequences|fetch\s+sequences|fetch\s+from\s+ncbi)\b",
+                command,
+                re.IGNORECASE,
+            )
+        )
+
+        if has_scrna_markers and not has_concrete_inputs:
+            text = (
+                "I can run this single-cell workflow once inputs are provided.\n\n"
+                "Please provide:\n"
+                "- `data_file` (10x H5/H5AD path, local path, or S3 URI)\n"
+                "- `data_format` (for example `10x`)\n"
+                "- optional `resolution` and `steps`"
+            )
+            return {
+                "status": "needs_inputs",
+                "success": True,
+                "tool": "single_cell_analysis",
+                "text": text,
+                "message": text,
+                "data": {"required_inputs": ["data_file", "data_format"]},
+            }
+
+        if has_bulk_markers and not has_concrete_inputs:
+            text = (
+                "I can run this bulk RNA-seq workflow once inputs are provided.\n\n"
+                "Please provide:\n"
+                "- `count_matrix` (CSV)\n"
+                "- `sample_metadata` (CSV)\n"
+                "- `design_formula` (for example `~condition` or `~time_point`)"
+            )
+            return {
+                "status": "needs_inputs",
+                "success": True,
+                "tool": "bulk_rnaseq_analysis",
+                "text": text,
+                "message": text,
+                "data": {"required_inputs": ["count_matrix", "sample_metadata", "design_formula"]},
+            }
+
+        if has_phylo_markers and not (has_s3_data or has_explicit_sequences or has_public_fetch):
+            text = (
+                "I can run this phylogenetic workflow with either explicit FASTA sequences "
+                "or a resolvable variant list.\n\n"
+                "Please provide one of:\n"
+                "- FASTA sequences\n"
+                "- a concise variant list (for example: Wuhan-Hu-1, Alpha, Delta, Omicron)"
+            )
+            return {
+                "status": "needs_inputs",
+                "success": True,
+                "tool": "phylogenetic_tree",
+                "text": text,
+                "message": text,
+                "data": {"required_inputs": ["sequences_or_variant_list"]},
+            }
+
         # Fast path: if the command already contains explicitly-numbered pipeline
         # steps, parse them directly rather than going through the playbook matcher
         # (which can mis-classify e.g. amplicon prompts as RNA-seq).
@@ -1895,8 +1981,7 @@ class CommandProcessor:
         """
         Execute each pipeline step extracted from *command* in sequence.
 
-        For each step the matching MCP tool is called via dispatch_tool()
-        (which activates demo-mode simulation for helix-test-data buckets).
+        For each step the matching tool is called via dispatch_tool().
         Results are aggregated and returned as a single rich response.
         """
         import re as _re
@@ -1970,9 +2055,8 @@ class CommandProcessor:
             },
         }
 
-        job_results = []
-        step_lines  = []
-        detailed_results: Dict = {}
+        submitted_jobs = []
+        submitted_lines = []
 
         # Use the real JobManager so the Jobs tab can track pipeline steps.
         from backend.job_manager import get_job_manager
@@ -1980,188 +2064,119 @@ class CommandProcessor:
 
         for step in steps:
             tool_name = step.get("tool", "custom_step")
-            step_num  = step.get("step")
+            step_num = step.get("step")
             step_name = step.get("name", f"Step {step_num}")
-
-            # Register a proper job entry before execution so the Jobs tab can find it.
             job_id = jm.create_local_tool_job(
                 tool_name=tool_name,
                 tool_args=TOOL_ARGS.get(tool_name, {}),
                 session_id=session_id,
                 original_command=command,
             )
-            jm.set_local_job_running(job_id)
-
-            print(f"[execute_pipeline] Running step {step_num}: {step_name} ({tool_name}) job={job_id} …")
-
-            tool_result: Dict = {}
-            status_emoji = "✅"
-            try:
-                _KNOWN_TOOLS = {
-                    "fastqc_quality_analysis", "read_trimming", "read_merging",
-                    "quality_report", "quality_assessment",
+            submitted_jobs.append(
+                {
+                    "job_id": job_id,
+                    "step": step_num,
+                    "name": step_name,
+                    "tool": tool_name,
+                    "status": "submitted",
                 }
-                # Rich demo results for phylogenetics / comparative-sequence tools.
-                _PHYLO_DEMO: Dict[str, Dict] = {
-                    "fetch_ncbi_sequence": {
-                        "status": "success", "mode": "demo",
-                        "text": (
-                            "Fetched 8 spike protein sequences from NCBI RefSeq:\n"
-                            "  Wuhan-Hu-1 (YP_009724390.1, 1,273 aa)\n"
-                            "  Alpha B.1.1.7 (QHD43416.1, 1,273 aa)\n"
-                            "  Beta B.1.351 (QRN78347.1, 1,271 aa)\n"
-                            "  Gamma P.1 (QTN86088.1, 1,271 aa)\n"
-                            "  Delta B.1.617.2 (UFO69279.1, 1,274 aa)\n"
-                            "  Omicron BA.1 (UJA26495.1, 1,274 aa)\n"
-                            "  Omicron BA.4/5 (UOD98325.1, 1,274 aa)\n"
-                            "  XBB.1.5 (UUY06659.1, 1,274 aa)\n"
-                            "Saved to `s3://helix-results/phylo/spike_sequences.fasta`"
-                        ),
-                        "n_sequences": 8,
-                    },
-                    "sequence_alignment": {
-                        "status": "success", "mode": "demo",
-                        "text": (
-                            "MAFFT L-INS-i alignment complete.\n"
-                            "  Aligned length: 1,285 positions (12 gap columns introduced)\n"
-                            "  Mean pairwise identity: 97.4%\n"
-                            "  Wuhan-Hu-1 vs Omicron BA.1: 95.8% identity (54 substitutions)\n"
-                            "  Wuhan-Hu-1 vs XBB.1.5: 94.2% identity (74 substitutions)\n"
-                            "Saved to `s3://helix-results/phylo/spike_aligned.fasta`"
-                        ),
-                    },
-                    "phylogenetic_tree": {
-                        "status": "success", "mode": "demo",
-                        "text": (
-                            "Maximum-likelihood tree reconstructed (RAxML-NG, GTR+G model).\n"
-                            "  1,000 bootstrap replicates completed.\n"
-                            "  Log-likelihood: -3,842.7\n"
-                            "  Tree topology:\n"
-                            "    ((Wuhan-Hu-1, Alpha), Beta, Gamma, Delta,\n"
-                            "     (Omicron-BA.1, Omicron-BA.4-5, XBB.1.5))\n"
-                            "  Omicron clade bootstrap: 99/100\n"
-                            "Saved to `s3://helix-results/phylo/spike_tree.nwk`\n"
-                            "Annotated tree PNG: `s3://helix-results/phylo/spike_tree.png`"
-                        ),
-                    },
-                    "annotate_tree": {
-                        "status": "success", "mode": "demo",
-                        "text": (
-                            "Key RBD mutation sites annotated on tree:\n"
-                            "  K417N: Beta, Gamma, Omicron-BA.1\n"
-                            "  E484K: Beta, Gamma\n"
-                            "  E484A: Omicron-BA.1\n"
-                            "  N501Y: Alpha, Beta, Gamma, Omicron-BA.1\n"
-                            "  L452R: Delta, Omicron-BA.4-5\n"
-                            "  Furin site P681H: Alpha, Delta\n"
-                            "Mutation table CSV: `s3://helix-results/phylo/mutation_matrix.csv`"
-                        ),
-                    },
-                    "pairwise_identity": {
-                        "status": "success", "mode": "demo",
-                        "text": (
-                            "Pairwise amino acid identity matrix (8×8):\n"
-                            "```\n"
-                            "           Wuhan  Alpha  Beta  Gamma  Delta  BA.1  BA.4/5  XBB\n"
-                            "Wuhan        100   99.2  98.9   98.7   99.1  95.8    96.0  94.2\n"
-                            "Alpha       99.2    100  99.1   98.9   99.3  96.0    96.2  94.4\n"
-                            "Beta        98.9   99.1   100   99.8   99.0  95.5    95.7  93.9\n"
-                            "Gamma       98.7   98.9  99.8    100   98.8  95.3    95.5  93.7\n"
-                            "Delta       99.1   99.3  99.0   98.8    100  95.9    96.1  94.3\n"
-                            "BA.1        95.8   96.0  95.5   95.3   95.9   100    98.6  96.7\n"
-                            "BA.4/5      96.0   96.2  95.7   95.5   96.1  98.6     100  97.4\n"
-                            "XBB         94.2   94.4  93.9   93.7   94.3  96.7    97.4   100\n"
-                            "```\n"
-                            "Full matrix CSV: `s3://helix-results/phylo/pairwise_identity.csv`"
-                        ),
-                    },
-                }
-                args = TOOL_ARGS.get(tool_name, {})
-                if tool_name in _PHYLO_DEMO:
-                    tool_result = _PHYLO_DEMO[tool_name]
-                elif tool_name == "custom_step" or tool_name not in _KNOWN_TOOLS or not args:
-                    # Generic / unknown tool: produce a minimal simulated result without
-                    # hitting the LLM-based tool-generator fallback in dispatch_tool.
-                    tool_result = {
-                        "status": "completed",
-                        "mode": "demo",
-                        "text": f"{step_name} completed successfully (demo).",
-                    }
-                else:
-                    tool_result = await dispatch_tool(tool_name, args)
-                    if not isinstance(tool_result, dict):
-                        tool_result = {"status": "completed", "raw": str(tool_result)}
-                    if tool_result.get("status") == "error":
-                        status_emoji = "⚠️"
-
-                # Mark the job as completed in the JobManager with the real result.
-                jm.set_local_job_completed(job_id, tool_result)
-
-            except Exception as exc:
-                print(f"[execute_pipeline] Step {step_num} raised: {exc}")
-                tool_result = {
-                    "status": "error",
-                    "mode": "demo",
-                    "text": f"{step_name} — demo result (execution unavailable: {exc.__class__.__name__})",
-                }
-                status_emoji = "⚠️"
-                jm.set_local_job_failed(job_id, str(exc))
-
-            final_status = tool_result.get("status", "completed")
-            job_record = {
-                "job_id": job_id,
-                "step": step_num,
-                "name": step_name,
-                "tool": tool_name,
-                "status": final_status,
-                "result": tool_result,
-            }
-            job_results.append(job_record)
-            detailed_results[f"step_{step_num}"] = tool_result
-            print(f"[execute_pipeline] Step {step_num} → {final_status}")
-
-            # Build display line
-            result_summary = ""
-            if tool_name == "fastqc_quality_analysis" and isinstance(tool_result.get("summary"), dict):
-                samples = list(tool_result["summary"].keys())
-                r1_pass = tool_result["summary"].get(samples[0], {}).get("basic_statistics", "N/A") if samples else "N/A"
-                result_summary = f"basic_stats={r1_pass}"
-            elif tool_name == "read_trimming":
-                fwd = tool_result.get("forward_reads", tool_result)
-                sm = fwd.get("summary", {}) if isinstance(fwd, dict) else {}
-                if sm.get("pct_reads_kept"):
-                    result_summary = f"{sm['pct_reads_kept']}% reads kept"
-            elif tool_name == "read_merging":
-                sm = tool_result.get("summary", {})
-                if sm.get("merge_rate_pct"):
-                    result_summary = f"{sm['merge_rate_pct']}% merge rate"
-            elif "quality" in tool_name:
-                result_summary = "report generated"
-
-            display_line = (
-                f"{step_num}. {status_emoji} **{step_name}** (`{tool_name}`)"
-                + (f" — {result_summary}" if result_summary else "")
-                + f"  `{job_id[:8]}...`"
             )
-            step_lines.append(display_line)
+            submitted_lines.append(
+                f"{step_num}. ⏳ **{step_name}** (`{tool_name}`)  `{job_id[:8]}...`"
+            )
 
-        # ── 4. Compose final response ───────────────────────────────────────
-        success_count = sum(1 for j in job_results if j["status"] not in ("error",))
+        async def _run_pipeline_steps() -> None:
+            pipeline_metrics: Dict[str, Any] = {}
+            for step in submitted_jobs:
+                step_num = step["step"]
+                step_name = step["name"]
+                tool_name = step["tool"]
+                job_id = step["job_id"]
+                print(
+                    f"[execute_pipeline/bg] Running step {step_num}: "
+                    f"{step_name} ({tool_name}) job={job_id} …"
+                )
+                jm.set_local_job_running(job_id)
+                try:
+                    if tool_name == "custom_step":
+                        tool_result: Dict[str, Any] = {
+                            "status": "error",
+                            "text": f"Unsupported custom pipeline step: {step_name}",
+                        }
+                    else:
+                        args = dict(TOOL_ARGS.get(tool_name, {}))
+                        if tool_name == "quality_report":
+                            args.update(
+                                {
+                                    "raw_reads": pipeline_metrics.get("raw_reads"),
+                                    "post_trim": pipeline_metrics.get("post_trim_reads"),
+                                    "merged_reads": pipeline_metrics.get("merged_reads"),
+                                    "sample_name": pipeline_metrics.get("sample_name", "sample01"),
+                                }
+                            )
+                        tool_result = await dispatch_tool(tool_name, args)
+                        if not isinstance(tool_result, dict):
+                            tool_result = {"status": "completed", "raw": str(tool_result)}
+
+                    if tool_name == "fastqc_quality_analysis" and isinstance(tool_result.get("summary"), dict):
+                        summary_values = list(tool_result["summary"].values())
+                        if summary_values:
+                            pipeline_metrics["raw_reads"] = summary_values[0].get("total_sequences")
+                    elif tool_name == "read_trimming":
+                        trim_summary = (
+                            tool_result.get("forward_reads", {}).get("summary", {})
+                            if isinstance(tool_result.get("forward_reads"), dict)
+                            else {}
+                        )
+                        if trim_summary.get("total_reads") is not None:
+                            pipeline_metrics["post_trim_reads"] = trim_summary.get("total_reads")
+                    elif tool_name == "read_merging":
+                        merge_summary = tool_result.get("summary", {})
+                        if isinstance(merge_summary, dict) and merge_summary.get("merged_pairs") is not None:
+                            pipeline_metrics["merged_reads"] = merge_summary.get("merged_pairs")
+
+                    jm.set_local_job_completed(job_id, tool_result)
+                    print(f"[execute_pipeline/bg] Step {step_num} completed")
+                except Exception as exc:
+                    print(f"[execute_pipeline/bg] Step {step_num} failed: {exc}")
+                    jm.set_local_job_failed(job_id, str(exc))
+
+        # Kick off background execution in a dedicated thread/event-loop so
+        # long-running tool calls do not block the API event loop.
+        import threading
+
+        def _runner() -> None:
+            loop = asyncio.new_event_loop()
+            try:
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(_run_pipeline_steps())
+            finally:
+                try:
+                    loop.close()
+                except Exception:
+                    pass
+
+        threading.Thread(
+            target=_runner,
+            name=f"helix-pipeline-{session_id[:8]}",
+            daemon=True,
+        ).start()
+
         response_text = (
-            f"## Pipeline Execution Complete\n\n"
-            f"**{success_count}/{len(job_results)} steps completed successfully.**\n\n"
-            + "\n".join(step_lines)
-            + "\n"
+            "## Pipeline Submitted\n\n"
+            f"**{len(submitted_jobs)} step jobs queued for background execution.**\n\n"
+            + "\n".join(submitted_lines)
+            + "\n\n"
+            "Use the Jobs panel to monitor progress and view results as each step completes."
         )
 
         return {
-            "status": "pipeline_executed",
+            "status": "pipeline_submitted",
             "success": True,
             "execute_ready": False,
             "text": response_text,
             "message": response_text,
-            "jobs": job_results,
-            "pipeline_results": detailed_results,
+            "jobs": submitted_jobs,
             "visualization_type": "markdown",
         }
 

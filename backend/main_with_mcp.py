@@ -1351,35 +1351,6 @@ async def execute(req: CommandRequest, request: Request):
         except Exception as e:
             logger.warning(f"S3 browse fast-path skipped due to error: {e}")
 
-        # ── Layer 2: Demo fast-paths via BioOrchestrator ───────────────────────
-        # All 5 demos route to real Python-native tools via BioOrchestrator.
-        # Every demo run is recorded in the session ledger with run_id +
-        # parent_run_id for iterative workflow chaining.
-        from backend.demo_dispatch import DemoDispatcher as _DemoDispatcher
-        from backend.bio_pipeline import BioOrchestrator as _BioOrchestrator
-        _bio_orch = _BioOrchestrator(
-            tool_executor=dispatch_tool,
-            history_manager=history_manager,
-        )
-        _dispatcher = _DemoDispatcher(
-            _DEMO_PRESIGNED_CACHE,
-            dispatch_tool,
-            orchestrator=_bio_orch,
-            session_id=req.session_id,
-            parent_run_id=getattr(req, "parent_run_id", None),
-        )
-        _demo_match = await _dispatcher.handle(req.command)
-        if _demo_match is not None:
-            _demo_tool, _demo_result = _demo_match
-            # BioOrchestrator already recorded the history entry via add_history_entry,
-            # so skip the duplicate recording in _dispatch_result.
-            _orchestrated = "run_id" in _demo_result and "summary_text" in _demo_result
-            return await _dispatch_result(
-                req, _demo_tool, _demo_result,
-                record_history=not _orchestrated,
-                execution_path="demo",
-            )
-
         # Phase 2b: if the client explicitly asked to execute a previously planned pipeline,
         # re-route through the agent with an execute_plan flag so it dispatches async jobs
         # rather than returning another plan document.
@@ -2734,6 +2705,8 @@ async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
 
     elif tool_name == "read_trimming":
         import read_trimming
+        import boto3
+        import gzip
         
         # Check if we have separate forward and reverse reads
         forward_reads = arguments.get("forward_reads", "")
@@ -2743,61 +2716,59 @@ async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
         adapter = arguments.get("adapter")
         quality_threshold = arguments.get("quality_threshold", 20)
 
-        # Demo-mode: if inputs are S3 demo paths return simulated trimming results
-        _demo_buckets_trim = ("helix-test", "demo", "sample-data", "example")
-        _is_s3_demo = any(
-            db in (forward_reads or reads or "").lower() or db in (reverse_reads or "").lower()
-            for db in _demo_buckets_trim
-        ) and ((forward_reads or reads or "").startswith("s3://") or (reverse_reads or "").startswith("s3://"))
-        if os.getenv("HELIX_DEMO_MODE", "0") == "1" or _is_s3_demo:
-            import random as _rnd
-            _total = _rnd.randint(180_000, 250_000)
-            _kept  = _rnd.randint(int(_total * 0.88), int(_total * 0.97))
-            _out_r1 = (forward_reads or reads or "").replace(".fastq.gz", "_trimmed.fastq.gz")
-            _out_r2 = (reverse_reads or "").replace(".fastq.gz", "_trimmed.fastq.gz")
-            logger.info("🎭 [Demo mode] Returning simulated read-trimming result")
-            _trim_result = {
-                "status": "completed",
-                "mode": "demo",
-                "text": (
-                    f"Adapter trimming completed (demo). "
-                    f"Kept {_kept:,}/{_total:,} reads ({100*_kept//_total}%)."
-                ),
-                "summary": {
-                    "total_reads": _total,
-                    "reads_kept": _kept,
-                    "reads_discarded": _total - _kept,
-                    "pct_reads_kept": round(100 * _kept / _total, 1),
-                    "adapter_trimmed": _rnd.randint(int(_total * 0.35), int(_total * 0.55)),
-                    "quality_trimmed": _rnd.randint(500, 5000),
-                    "adapter_sequence": adapter or "CTGTCTCTTATACACATCT",
-                    "quality_threshold": quality_threshold,
-                    "output_r1": _out_r1,
-                    "output_r2": _out_r2,
-                },
-            }
-            return {
-                "text": _trim_result["text"],
-                "forward_reads": _trim_result,
-                "reverse_reads": _trim_result,
-                "summary": {"forward": _trim_result["summary"], "reverse": _trim_result["summary"]},
-            }
-
         logger.debug("read_trimming: adapter=%s q=%s fw=%s rv=%s reads=%s",
                      adapter, quality_threshold, bool(forward_reads), bool(reverse_reads), bool(reads))
+
+        def _load_fastq_content(value: str) -> str:
+            if not value:
+                return ""
+            if value.startswith("s3://"):
+                s3 = boto3.client("s3")
+                bucket, key = value.replace("s3://", "").split("/", 1)
+                obj = s3.get_object(Bucket=bucket, Key=key)
+                body = obj["Body"].read()
+                if key.endswith(".gz"):
+                    return gzip.decompress(body).decode("utf-8", errors="replace")
+                return body.decode("utf-8", errors="replace")
+            # Treat filesystem path-like values as file inputs
+            if (
+                value.startswith("/")
+                or value.endswith(".fastq")
+                or value.endswith(".fastq.gz")
+                or value.endswith(".fq")
+                or value.endswith(".fq.gz")
+            ):
+                p = Path(value)
+                if not p.exists():
+                    raise FileNotFoundError(f"FASTQ file not found: {value}")
+                if value.endswith(".gz"):
+                    with gzip.open(p, "rt", encoding="utf-8", errors="replace") as fh:
+                        return fh.read()
+                return p.read_text(encoding="utf-8", errors="replace")
+            # Otherwise assume the string already contains FASTQ content
+            return value
         
         # If we have separate forward/reverse reads, process them separately
         if forward_reads and reverse_reads:
-            forward_result = read_trimming.run_read_trimming_raw(
-                forward_reads,
-                adapter,
-                quality_threshold,
-            )
-            reverse_result = read_trimming.run_read_trimming_raw(
-                reverse_reads,
-                adapter,
-                quality_threshold,
-            )
+            try:
+                forward_content = _load_fastq_content(forward_reads)
+                reverse_content = _load_fastq_content(reverse_reads)
+                forward_result = read_trimming.run_read_trimming_raw(
+                    forward_content,
+                    adapter,
+                    quality_threshold,
+                )
+                reverse_result = read_trimming.run_read_trimming_raw(
+                    reverse_content,
+                    adapter,
+                    quality_threshold,
+                )
+            except Exception as e:
+                return {
+                    "status": "error",
+                    "error": str(e),
+                    "text": f"Failed to trim reads: {e}",
+                }
             
             # Combine results for paired-end format
             return {
@@ -2811,11 +2782,19 @@ async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
             }
         elif reads:
             # Single-end or combined reads
-            return read_trimming.run_read_trimming_raw(
-                reads,
-                adapter,
-                quality_threshold,
-            )
+            try:
+                content = _load_fastq_content(reads)
+                return read_trimming.run_read_trimming_raw(
+                    content,
+                    adapter,
+                    quality_threshold,
+                )
+            except Exception as e:
+                return {
+                    "status": "error",
+                    "error": str(e),
+                    "text": f"Failed to trim reads: {e}",
+                }
         else:
             return {
                 "status": "error",
@@ -2835,41 +2814,6 @@ async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
                 "status": "error",
                 "error": "Missing required parameters: forward_reads and reverse_reads",
                 "text": "Please provide forward_reads and reverse_reads paths or FASTQ content.",
-            }
-
-        # Demo-mode: if inputs are S3 demo paths return simulated merging results
-        _demo_buckets_merge = ("helix-test", "demo", "sample-data", "example")
-        _is_s3_demo_merge = any(
-            db in forward_reads.lower() or db in reverse_reads.lower()
-            for db in _demo_buckets_merge
-        ) and (
-            forward_reads.startswith("s3://") or reverse_reads.startswith("s3://")
-        )
-        if os.getenv("HELIX_DEMO_MODE", "0") == "1" or _is_s3_demo_merge:
-            import random as _rnd
-            _total = _rnd.randint(160_000, 240_000)
-            _merged = _rnd.randint(int(_total * 0.62), int(_total * 0.81))
-            _merge_rate = round(100 * _merged / _total, 1)
-            _out_path = output or (
-                (forward_reads or "s3://demo/merged").rsplit("/", 1)[0] + "/merged.fasta"
-            )
-            logger.info("🎭 [Demo mode] Returning simulated read-merging result")
-            return {
-                "status": "completed",
-                "mode": "demo",
-                "text": (
-                    f"Read merging completed (demo). "
-                    f"Merged {_merged:,}/{_total:,} read-pairs ({_merge_rate}% merge rate)."
-                ),
-                "summary": {
-                    "total_pairs": _total,
-                    "merged_pairs": _merged,
-                    "merge_rate_pct": _merge_rate,
-                    "min_overlap": min_overlap,
-                    "output_fasta": _out_path,
-                    "mean_merged_length": _rnd.randint(240, 260),
-                },
-                "output_path": _out_path,
             }
 
         import read_merging
@@ -2921,12 +2865,19 @@ async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
         return quality_assessment.run_quality_assessment_raw(sequences)
 
     elif tool_name == "quality_report":
-        # Lightweight quality-report summary; accepts context from upstream pipeline steps.
-        # Generates a demo CSV-style report when inputs are S3 demo paths.
-        import random as _rnd, io as _io, datetime as _dt
-        raw_reads    = arguments.get("raw_reads")     or _rnd.randint(180_000, 250_000)
-        post_trim    = arguments.get("post_trim")     or int(raw_reads * _rnd.uniform(0.88, 0.97))
-        merged_reads = arguments.get("merged_reads")  or int(post_trim * _rnd.uniform(0.62, 0.81))
+        # Deterministic quality-report summary from upstream pipeline metrics.
+        import datetime as _dt
+        raw_reads    = arguments.get("raw_reads")
+        post_trim    = arguments.get("post_trim")
+        merged_reads = arguments.get("merged_reads")
+        if raw_reads is None or post_trim is None or merged_reads is None:
+            return {
+                "status": "error",
+                "text": (
+                    "quality_report requires `raw_reads`, `post_trim`, and `merged_reads` "
+                    "from upstream pipeline steps."
+                ),
+            }
         merge_rate   = round(100 * merged_reads / post_trim, 1) if post_trim else 0.0
         sample_name  = arguments.get("sample_name", "sample01")
 
@@ -2948,7 +2899,6 @@ async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
 
         return {
             "status": "completed",
-            "mode": "demo",
             "text": report_text,
             "csv": csv_text,
             "summary": {
@@ -4193,9 +4143,6 @@ async def api_docs_info(request: Request):
             }
         }
     }
-
-_DEMO_PRESIGNED_CACHE: Dict[str, str] = {}
-
 
 @app.on_event("startup")
 async def startup_event():
