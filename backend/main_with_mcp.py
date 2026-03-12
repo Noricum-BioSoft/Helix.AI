@@ -1392,7 +1392,7 @@ async def execute(req: CommandRequest, request: Request):
         # Phase 2c: deterministic router allowlist fast path (agent-first strategy).
         # Keep this path narrow and deterministic. Everything else should flow to
         # the agent path below for semantic tool selection.
-        _phase2c_allowlist = {"toolbox_inventory", "session_run_io_summary"}
+        _phase2c_allowlist = {"toolbox_inventory", "session_run_io_summary", "visualize_job_results"}
         try:
             import time as _t
             from backend.command_router import CommandRouter as _PreRouter
@@ -2606,6 +2606,170 @@ async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
             "result": inv,
         }
 
+    if tool_name == "visualize_job_results":
+        from backend.job_manager import get_job_manager
+        import re as _re
+
+        jm = get_job_manager()
+        requested_job_id = arguments.get("job_id")
+        original_command = str(arguments.get("original_command") or "")
+        session_id = arguments.get("session_id")
+
+        if not requested_job_id and original_command:
+            m = _re.search(
+                r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+                original_command.lower(),
+            )
+            if m:
+                requested_job_id = m.group(0)
+
+        if not requested_job_id:
+            # Fallback to latest completed job, optionally scoped to session.
+            candidates = [
+                job for job in jm.jobs.values()
+                if isinstance(job, dict) and job.get("status") == "completed"
+            ]
+            if session_id:
+                scoped = [j for j in candidates if j.get("session_id") == session_id]
+                if scoped:
+                    candidates = scoped
+            candidates.sort(key=lambda j: str(j.get("updated_at") or j.get("completed_at") or ""), reverse=True)
+            if candidates:
+                requested_job_id = candidates[0].get("job_id")
+
+        if not requested_job_id:
+            return {
+                "status": "error",
+                "visualization_type": "text",
+                "text": "No job ID was provided and no completed jobs were found to visualize.",
+                "result": {},
+            }
+
+        try:
+            job = jm.get_job_status(requested_job_id)
+        except Exception as e:
+            return {
+                "status": "error",
+                "visualization_type": "text",
+                "text": f"Could not find job `{requested_job_id}`: {e}",
+                "result": {"job_id": requested_job_id},
+            }
+
+        if job.get("status") != "completed":
+            return {
+                "status": "success",
+                "visualization_type": "text",
+                "text": (
+                    f"Job `{requested_job_id}` is currently `{job.get('status')}`. "
+                    "Please wait for completion, then request visualization again."
+                ),
+                "result": {"job_id": requested_job_id, "job_status": job.get("status"), "job": job},
+            }
+
+        try:
+            results_info = jm.get_job_results(requested_job_id)
+        except Exception as e:
+            return {
+                "status": "error",
+                "visualization_type": "text",
+                "text": f"Failed to load results for job `{requested_job_id}`: {e}",
+                "result": {"job_id": requested_job_id, "job": job},
+            }
+
+        tool_result = results_info.get("result") if isinstance(results_info, dict) else {}
+        if not isinstance(tool_result, dict):
+            tool_result = {"value": tool_result}
+
+        visuals = []
+        if isinstance(tool_result.get("visuals"), list):
+            visuals = tool_result.get("visuals", [])
+        elif isinstance(tool_result.get("plot"), dict):
+            visuals = [{"type": "plotly_json", "data": tool_result.get("plot"), "title": "Job Visualization"}]
+
+        # Some pipeline steps (notably pairwise_identity) may return only summary text
+        # even though the immediately preceding phylogenetic step has the matrix visuals.
+        # In that case, recover visuals from the latest completed phylogenetic job in
+        # the same session so "visualize job results" still renders the matrix.
+        recovered_from_job_id = None
+        if not visuals and str(job.get("tool_name") or "") == "pairwise_identity":
+            session_scope = job.get("session_id")
+            related_phylo_jobs = [
+                j for j in jm.jobs.values()
+                if isinstance(j, dict)
+                and j.get("status") == "completed"
+                and j.get("tool_name") == "phylogenetic_tree"
+                and (not session_scope or j.get("session_id") == session_scope)
+            ]
+            related_phylo_jobs.sort(
+                key=lambda j: str(j.get("updated_at") or j.get("completed_at") or ""),
+                reverse=True,
+            )
+
+            for related in related_phylo_jobs:
+                related_result = related.get("result")
+                if not isinstance(related_result, dict):
+                    continue
+
+                recovered_visuals = []
+                related_visuals = related_result.get("visuals")
+                if isinstance(related_visuals, list):
+                    # Prefer matrix visual first if available.
+                    matrix_first = sorted(
+                        [v for v in related_visuals if isinstance(v, dict)],
+                        key=lambda v: 0 if "matrix" in str(v.get("title", "")).lower() else 1,
+                    )
+                    recovered_visuals.extend(matrix_first)
+
+                dist_matrix_b64 = related_result.get("dist_matrix_b64")
+                if isinstance(dist_matrix_b64, str) and dist_matrix_b64.strip():
+                    recovered_visuals.append(
+                        {
+                            "type": "image_b64",
+                            "data": dist_matrix_b64,
+                            "title": "Pairwise Distance Matrix",
+                        }
+                    )
+
+                if recovered_visuals:
+                    visuals = recovered_visuals
+                    recovered_from_job_id = related.get("job_id")
+                    break
+
+        links = []
+        if results_info.get("session_html_path"):
+            links.append(
+                {
+                    "title": "Session HTML Results",
+                    "url": str(results_info.get("session_html_path")),
+                }
+            )
+        results_path = results_info.get("results_path")
+        if results_path:
+            links.append({"title": "Results JSON", "url": str(results_path)})
+
+        text = (
+            tool_result.get("text")
+            or f"Loaded visualization payload for job `{requested_job_id}`."
+        )
+        if recovered_from_job_id:
+            text = (
+                f"{text}\n\nRecovered matrix visualization from related phylogenetic job "
+                f"`{recovered_from_job_id}`."
+            )
+        return {
+            "status": "success",
+            "visualization_type": "results_viewer" if (visuals or tool_result) else "text",
+            "text": text,
+            "visuals": visuals,
+            "links": links,
+            "result": {
+                "job_id": requested_job_id,
+                "job": job,
+                "results": results_info,
+                "tool_result": tool_result,
+            },
+        }
+
     # ── Data science pipeline tools ───────────────────────────────────────────
     if tool_name in {"ds_run_analysis", "ds_reproduce_run", "ds_diff_runs", "ds_list_runs"}:
         from backend import agent_tools as _agent_tools
@@ -3151,36 +3315,96 @@ async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
         return sc_response
 
     elif tool_name == "fetch_ncbi_sequence":
-        # Delegate to backend.agent_tools so mock mode and output shape are consistent.
-        from backend.agent_tools import fetch_ncbi_sequence as ncbi_tool
+        # Support both single-accession and multi-accession fetches.
+        from tools.ncbi_tools import fetch_sequence_from_ncbi
 
-        tool_input = {
-            "accession": arguments.get("accession"),
-            "database": arguments.get("database", "nucleotide"),
-        }
+        database = arguments.get("database", "nucleotide")
+        single_accession = arguments.get("accession")
+        multi_accessions = arguments.get("accessions")
+        targets = []
+        if isinstance(multi_accessions, list):
+            targets = [str(a).strip() for a in multi_accessions if str(a).strip()]
+        elif single_accession:
+            targets = [str(single_accession).strip()]
 
-        try:
-            if hasattr(ncbi_tool, "invoke"):
-                tool_out = ncbi_tool.invoke(tool_input)
-            elif hasattr(ncbi_tool, "func"):
-                tool_out = ncbi_tool.func(**tool_input)
-            else:
-                tool_out = ncbi_tool(**tool_input)
-        except Exception as e:
+        if not targets:
             return {
                 "status": "error",
                 "result": {},
-                "text": f"Error fetching sequence: {str(e)}",
-                "error": str(e),
+                "text": "Error fetching sequence: no accession(s) provided",
+                "error": "no accession(s) provided",
             }
 
-        # Keep legacy shape used by other handlers (`status` + `result`), but also
-        # promote the accession for easier downstream extraction in tests/UI.
+        fetched = []
+        failed = []
+        for accession in targets:
+            row = None
+            tried_dbs = [database]
+            # Fallback: if accession isn't available in requested DB, try the other one.
+            if database == "protein":
+                tried_dbs.append("nucleotide")
+            elif database == "nucleotide":
+                tried_dbs.append("protein")
+            for db_choice in tried_dbs:
+                try:
+                    row = fetch_sequence_from_ncbi(accession=accession, database=db_choice)
+                except Exception as e:
+                    row = {"status": "error", "accession": accession, "error": str(e), "database": db_choice}
+                if isinstance(row, dict) and row.get("status") == "success" and row.get("sequence"):
+                    row["database"] = db_choice
+                    break
+            if isinstance(row, dict) and row.get("status") == "success" and row.get("sequence"):
+                fetched.append(row)
+            else:
+                failed.append(
+                    {
+                        "accession": accession,
+                        "error": (row.get("error") if isinstance(row, dict) else str(row)) or "Unknown error",
+                    }
+                )
+
+        if len(targets) == 1:
+            # Preserve legacy response shape for single fetch.
+            if fetched:
+                tool_out = fetched[0]
+                return {
+                    "status": "success",
+                    "accession": tool_out.get("accession"),
+                    "result": tool_out,
+                    "text": f"Fetched sequence {tool_out.get('accession')} ({tool_out.get('length', 0)} aa/bp)",
+                }
+            err = failed[0].get("error") if failed else "Unknown error"
+            return {
+                "status": "error",
+                "result": {},
+                "text": f"Error fetching sequence: {err}",
+                "error": err,
+            }
+
+        # Keep FASTA headers minimal (accession only) so downstream parsers that
+        # expect strict FASTA tokenization do not treat description text as bases.
+        combined_fasta = "\n".join(
+            f">{row.get('accession')}\n{row.get('sequence', '')}".strip()
+            for row in fetched
+        ).strip()
+        summary_text = (
+            f"Fetched {len(fetched)}/{len(targets)} NCBI sequences."
+            + (f" Failed: {len(failed)}." if failed else "")
+        )
         return {
-            "status": (tool_out.get("status") if isinstance(tool_out, dict) else None) or "success",
-            "accession": tool_out.get("accession") if isinstance(tool_out, dict) else None,
-            "result": tool_out if isinstance(tool_out, dict) else {"value": tool_out},
-            "text": tool_out.get("text", "") if isinstance(tool_out, dict) else "",
+            "status": "success" if fetched else "error",
+            "accessions": [row.get("accession") for row in fetched],
+            "result": {
+                "database": database,
+                "fetched": fetched,
+                "failed": failed,
+                "combined_fasta": combined_fasta,
+                "count_requested": len(targets),
+                "count_fetched": len(fetched),
+            },
+            "combined_fasta": combined_fasta,
+            "text": summary_text,
+            "error": None if fetched else "; ".join(f.get("error", "Unknown error") for f in failed),
         }
     
     elif tool_name == "query_uniprot":

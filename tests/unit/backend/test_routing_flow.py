@@ -48,6 +48,33 @@ def test_phase2c_allowlist_short_circuits_agent(monkeypatch):
     mock_dispatch.assert_awaited()
 
 
+def test_phase2c_visualize_job_short_circuits_agent(monkeypatch):
+    monkeypatch.setenv("HELIX_MOCK_MODE", "0")
+
+    mock_router = MagicMock()
+    mock_router.route_command.return_value = (
+        "visualize_job_results",
+        {"job_id": "99228f84-dea7-4424-8569-3f9c235a1547"},
+    )
+    monkeypatch.setattr("backend.command_router.CommandRouter", lambda: mock_router)
+
+    mock_dispatch = AsyncMock(
+        return_value={"status": "success", "visualization_type": "results_viewer", "text": "ok"}
+    )
+    monkeypatch.setattr("backend.main_with_mcp.dispatch_tool", mock_dispatch)
+
+    mock_agent = AsyncMock(side_effect=AssertionError("Agent should not be called for visualize_job_results fast-path"))
+    monkeypatch.setattr("backend.agent.handle_command", mock_agent)
+
+    r = _client().post("/execute", json={"command": "visualize results for that job"})
+    body = r.json()
+
+    assert r.status_code == 200
+    assert body.get("tool") == "visualize_job_results"
+    assert body.get("execution_path") == "phase2c_router"
+    mock_dispatch.assert_awaited()
+
+
 def test_non_allowlisted_router_result_uses_agent_path(monkeypatch):
     monkeypatch.setenv("HELIX_MOCK_MODE", "0")
 

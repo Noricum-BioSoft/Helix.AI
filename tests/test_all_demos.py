@@ -152,7 +152,15 @@ Dataset
   Full-length spike protein amino acid sequences for 8 SARS-CoV-2 variants:
   Wuhan-Hu-1 (reference), Alpha (B.1.1.7), Beta (B.1.351), Gamma (P.1),
   Delta (B.1.617.2), Omicron BA.1, Omicron BA.4/5, and XBB.1.5.
-  Sequences should be fetched from NCBI RefSeq where available.
+  Use this curated GenBank-allowed accession set for reproducible retrieval:
+    Wuhan-Hu-1: MN908947.3
+    Alpha (B.1.1.7): OQ898928.1
+    Beta (B.1.351): OR353131.1
+    Gamma (P.1): MW642250.1
+    Delta (B.1.617.2): OR323381.1
+    Omicron BA.1: PP847536.1
+    Omicron BA.4/5: PP848071.1
+    XBB.1.5: PP405604.1
 
 Study Design
   Comparative sequence analysis — no experimental replicates.

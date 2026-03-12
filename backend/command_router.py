@@ -29,6 +29,7 @@ ROUTER_TOOLS = [
     ("bio_diff_runs", "Compare two runs or iterations"),
     ("local_edit_visualization", "Edit plot title or axis labels"),
     ("local_update_scatter_x_scale", "Change plot axis scale (log/linear)"),
+    ("visualize_job_results", "Visualize results for an existing job ID"),
     ("handle_natural_command", "No specific tool; use general assistant/tool generator"),
 ]
 
@@ -698,6 +699,19 @@ class CommandRouter:
     def _extract_parameters(self, command: str, tool_name: str, session_context: Dict[str, Any]) -> Dict[str, Any]:
         """Extract parameters for the specific tool."""
         command_lower = command.lower()
+
+        if tool_name == "visualize_job_results":
+            uuid_match = re.search(
+                r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+                command_lower,
+            )
+            params: Dict[str, Any] = {}
+            if uuid_match:
+                params["job_id"] = uuid_match.group(0)
+            # Preserve session context so tool can fall back to latest session job.
+            if session_context.get("session_id"):
+                params["session_id"] = session_context.get("session_id")
+            return params
         
         if tool_name == "mutate_sequence":
             # Extract sequence and number of variants

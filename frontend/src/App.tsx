@@ -708,6 +708,34 @@ function App() {
       .replace(/^./, (char) => char.toUpperCase());
   };
 
+  const formatNewickForDisplay = (newick: string): string => {
+    const source = newick.trim();
+    if (!source) return source;
+
+    let depth = 0;
+    let out = '';
+
+    for (let i = 0; i < source.length; i++) {
+      const char = source[i];
+
+      if (char === '(') {
+        out += '(\n' + '  '.repeat(depth + 1);
+        depth += 1;
+      } else if (char === ',') {
+        out += ',\n' + '  '.repeat(depth);
+      } else if (char === ')') {
+        depth = Math.max(0, depth - 1);
+        out += '\n' + '  '.repeat(depth) + ')';
+      } else if (char === ';') {
+        out += ';\n';
+      } else {
+        out += char;
+      }
+    }
+
+    return out.trim();
+  };
+
   const renderStructuredData = (data: any, depth = 0, visited = new WeakSet()): React.ReactNode => {
     if (data === null || data === undefined) return null;
 
@@ -744,7 +772,13 @@ function App() {
           {entries.map(([key, value]) => (
             <div key={key} className="structured-row">
               <div className="structured-label">{formatLabel(key)}</div>
-              <div className="structured-value">{renderStructuredData(value, depth + 1, visited)}</div>
+              <div className="structured-value">
+                {/newick/i.test(key) && typeof value === 'string' ? (
+                  <pre className="newick-display">{formatNewickForDisplay(value)}</pre>
+                ) : (
+                  renderStructuredData(value, depth + 1, visited)
+                )}
+              </div>
             </div>
           ))}
         </div>
@@ -838,17 +872,53 @@ function App() {
       ) : null;
 
     // ========== PHYLOGENETIC TREE VISUALIZATIONS ==========
+    const extractNewickFromText = (text?: string): string | undefined => {
+      if (!text || typeof text !== 'string') return undefined;
+
+      // Prefer fenced code blocks if present
+      const fenced = text.match(/```(?:newick)?\s*([\s\S]*?)```/i);
+      if (fenced?.[1]) {
+        const candidate = fenced[1].trim();
+        if (candidate.includes('(') && candidate.includes(')') && candidate.includes(';')) {
+          return candidate;
+        }
+      }
+
+      // Fallback: grab the first Newick-like expression ending in semicolon
+      const inline = text.match(/(\([^;]*\)[^;]*;)/s);
+      if (inline?.[1]) {
+        const candidate = inline[1].trim();
+        if (candidate.includes('(') && candidate.includes(')') && candidate.includes(';')) {
+          return candidate;
+        }
+      }
+
+      return undefined;
+    };
+
     // Check ALL possible locations including top-level, raw_result, data, and nested structures
     // Priority: raw_result.result first (most likely location based on agent execution structure), then raw_result, then top-level
     const treeNewick = rawResult?.result?.tree_newick ||  // Agent execution result structure
+                       rawResult?.result?.newick_tree ||
                        rawResult?.tree_newick ||
+                       rawResult?.newick_tree ||
                        agentOutput?.tree_newick ||
+                       agentOutput?.newick_tree ||
                        agentResult?.tree_newick ||
+                       agentResult?.newick_tree ||
                        actualResult?.tree_newick ||
+                       actualResult?.newick_tree ||
                        agentOutput?.data?.tree_newick ||
+                       agentOutput?.data?.newick_tree ||
                        (agentOutput?.result && agentOutput.result.tree_newick) ||
+                       (agentOutput?.result && agentOutput.result.newick_tree) ||
                        (agentOutput?.raw_result && agentOutput.raw_result.tree_newick) ||
-                       (agentOutput?.raw_result?.result && agentOutput.raw_result.result.tree_newick);
+                       (agentOutput?.raw_result && agentOutput.raw_result.newick_tree) ||
+                       (agentOutput?.raw_result?.result && agentOutput.raw_result.result.tree_newick) ||
+                       (agentOutput?.raw_result?.result && agentOutput.raw_result.result.newick_tree) ||
+                       extractNewickFromText(actualResult?.text) ||
+                       extractNewickFromText(rawResult?.text) ||
+                       extractNewickFromText(agentOutput?.text);
     
     const eteVisualization = rawResult?.result?.ete_visualization ||  // Agent execution result structure
                              agentOutput?.ete_visualization ||
@@ -877,12 +947,191 @@ function App() {
     
     if (treeNewick) {
       console.log('🔍 Rendering phylogenetic tree visualization');
+      const parseStatsFromText = (text?: string): Record<string, string> => {
+        if (!text || typeof text !== 'string') return {};
+        const stats: Record<string, string> = {};
+        const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+
+        for (const line of lines) {
+          // Matches markdown bold form, e.g. "**Sequences analysed:** 3"
+          const boldMatch = line.match(/^\*\*([^*]+)\*\*:\s*(.+)$/);
+          if (boldMatch) {
+            stats[boldMatch[1].trim()] = boldMatch[2].trim();
+            continue;
+          }
+          // Matches plain key:value form
+          const plainMatch = line.match(/^([A-Za-z][A-Za-z0-9 _%()-]+):\s*(.+)$/);
+          if (plainMatch) {
+            const key = plainMatch[1].trim();
+            if (!/^(step|tool|status)$/i.test(key)) {
+              stats[key] = plainMatch[2].trim();
+            }
+          }
+        }
+
+        return stats;
+      };
+
+      const phyloStatsRaw =
+        actualResult?.statistics ||
+        rawResult?.result?.statistics ||
+        rawResult?.statistics ||
+        agentOutput?.data?.results?.result?.statistics ||
+        agentOutput?.data?.results?.statistics ||
+        agentOutput?.result?.statistics ||
+        agentResult?.statistics;
+
+      const parsedTextStats = {
+        ...parseStatsFromText(actualResult?.text),
+        ...parseStatsFromText(rawResult?.text),
+        ...parseStatsFromText(agentOutput?.text),
+      };
+
+      const normalizedPhyloStats: Record<string, string> = {};
+      if (phyloStatsRaw && typeof phyloStatsRaw === 'object') {
+        Object.entries(phyloStatsRaw).forEach(([key, value]) => {
+          normalizedPhyloStats[key] = String(value);
+        });
+      }
+      Object.entries(parsedTextStats).forEach(([key, value]) => {
+        if (!(key in normalizedPhyloStats)) {
+          normalizedPhyloStats[key] = value;
+        }
+      });
+
+      const rawVisuals: any[] = [
+        ...(Array.isArray(rawResult?.result?.visuals) ? rawResult.result.visuals : []),
+        ...(Array.isArray(rawResult?.visuals) ? rawResult.visuals : []),
+        ...(Array.isArray(actualResult?.visuals) ? actualResult.visuals : []),
+        ...(Array.isArray(agentOutput?.data?.visuals) ? agentOutput.data.visuals : []),
+      ];
+
+      const staticImageVisuals: Array<{ title: string; src: string }> = [];
+      const seenSources = new Set<string>();
+      const addImageVisual = (title: string, src?: string) => {
+        if (!src || typeof src !== 'string') return;
+        const trimmed = src.trim();
+        if (!trimmed) return;
+        if (seenSources.has(trimmed)) return;
+        seenSources.add(trimmed);
+        staticImageVisuals.push({ title, src: trimmed });
+      };
+
+      // Visuals payload from backend (preferred)
+      rawVisuals.forEach((v: any, idx: number) => {
+        if (!v || typeof v !== 'object') return;
+        const title = v.title || `Plot ${idx + 1}`;
+        if (v.type === 'image_b64' && typeof v.data === 'string') {
+          addImageVisual(title, `data:image/png;base64,${v.data}`);
+          return;
+        }
+        if (v.type === 'image' && typeof v.url === 'string') {
+          addImageVisual(title, v.url);
+          return;
+        }
+        if (typeof v.svg === 'string' && v.svg.trim().startsWith('<svg')) {
+          addImageVisual(title, `data:image/svg+xml;utf8,${encodeURIComponent(v.svg)}`);
+        }
+      });
+
+      // Direct phylo image fields for payloads that omit `visuals`
+      const maybeB64 = (value: any) =>
+        typeof value === 'string' && value.trim() && !value.trim().startsWith('<')
+          ? `data:image/png;base64,${value.trim()}`
+          : undefined;
+      addImageVisual(
+        'Phylogenetic Tree',
+        maybeB64(rawResult?.result?.tree_plot_b64 || actualResult?.tree_plot_b64 || rawResult?.tree_plot_b64),
+      );
+      addImageVisual(
+        'Pairwise Distance Matrix',
+        maybeB64(rawResult?.result?.dist_matrix_b64 || actualResult?.dist_matrix_b64 || rawResult?.dist_matrix_b64),
+      );
+      if (typeof clusteredVisualization === 'string') {
+        if (clusteredVisualization.trim().startsWith('<svg')) {
+          addImageVisual('Clustered Tree View', `data:image/svg+xml;utf8,${encodeURIComponent(clusteredVisualization)}`);
+        } else {
+          addImageVisual('Clustered Tree View', `data:image/png;base64,${clusteredVisualization}`);
+        }
+      } else if (clusteredVisualization?.svg) {
+        addImageVisual('Clustered Tree View', `data:image/svg+xml;utf8,${encodeURIComponent(clusteredVisualization.svg)}`);
+      } else if (clusteredVisualization?.data) {
+        addImageVisual('Clustered Tree View', `data:image/png;base64,${clusteredVisualization.data}`);
+      }
+
+      if (typeof eteVisualization === 'string') {
+        if (eteVisualization.trim().startsWith('<svg')) {
+          addImageVisual('Annotated Tree (ETE3)', `data:image/svg+xml;utf8,${encodeURIComponent(eteVisualization)}`);
+        } else {
+          addImageVisual('Annotated Tree (ETE3)', `data:image/png;base64,${eteVisualization}`);
+        }
+      } else if (eteVisualization?.svg) {
+        addImageVisual('Annotated Tree (ETE3)', `data:image/svg+xml;utf8,${encodeURIComponent(eteVisualization.svg)}`);
+      } else if (eteVisualization?.data) {
+        addImageVisual('Annotated Tree (ETE3)', `data:image/png;base64,${eteVisualization.data}`);
+      }
+
       return (
         <div>
           {actualResult?.text && (
-            <pre className="bg-light p-3 border rounded mb-3">{actualResult.text}</pre>
+            <div className="agent-response-markdown mb-3">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{actualResult.text}</ReactMarkdown>
+            </div>
           )}
-          
+
+          <div className="row g-3 mb-3">
+            <div className="col-12 col-xl-8">
+              <div className="bg-light p-3 border rounded h-100">
+                <h5 className="mb-3">🧬 Interactive Phylogenetic Tree</h5>
+                <PhylogeneticTree newick={treeNewick} />
+              </div>
+            </div>
+            <div className="col-12 col-xl-4">
+              <div className="d-flex flex-column gap-3 h-100">
+                <div className="bg-light p-3 border rounded">
+                  <h5 className="mb-3">📈 Tree Statistics</h5>
+                  {Object.keys(normalizedPhyloStats).length > 0 ? (
+                    <div className="row">
+                      {Object.entries(normalizedPhyloStats).map(([key, value]) => (
+                        <div key={key} className="col-12 mb-2">
+                          <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-muted">Summary metrics unavailable in this response.</div>
+                  )}
+                </div>
+                <div className="bg-light p-3 border rounded flex-grow-1">
+                  <h5 className="mb-2">🌿 Newick Tree</h5>
+                  <pre className="newick-display mb-0">{formatNewickForDisplay(String(treeNewick))}</pre>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {staticImageVisuals.length > 0 && (
+            <div className="bg-light p-3 border rounded mb-3">
+              <h5 className="mb-3">🖼️ Analysis Visuals</h5>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px' }}>
+                {staticImageVisuals.map((v, idx) => (
+                  <div key={`${v.title}-${idx}`} style={{ flex: '1 1 420px', minWidth: '280px', maxWidth: '700px' }}>
+                    <div style={{ fontSize: '0.9rem', fontWeight: 600, color: '#334155', marginBottom: '6px' }}>
+                      {v.title}
+                    </div>
+                    <a href={v.src} target="_blank" rel="noreferrer" title="Open full-size">
+                      <img
+                        src={v.src}
+                        alt={v.title}
+                        style={{ width: '100%', borderRadius: '8px', border: '1px solid #E2E8F0', background: '#fff', cursor: 'pointer' }}
+                      />
+                    </a>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Clustering Results */}
           {clusteringResult && (
             <div className="bg-light p-3 border rounded mb-3">
@@ -916,66 +1165,6 @@ function App() {
               </div>
             </div>
           )}
-
-          {/* Clustered Visualization */}
-          {clusteredVisualization && clusteredVisualization.svg && (
-            <div className="bg-light p-3 border rounded mb-3">
-              <h5>🧬 Clustered Phylogenetic Tree Visualization</h5>
-              <div dangerouslySetInnerHTML={{ __html: clusteredVisualization.svg }} />
-            </div>
-          )}
-
-          {/* ETE3 Visualization */}
-          {eteVisualization && eteVisualization.svg && (
-            <div className="bg-light p-3 border rounded mb-3">
-              <h5>🧬 ETE3 Phylogenetic Tree Visualization</h5>
-              <div dangerouslySetInnerHTML={{ __html: eteVisualization.svg }} />
-            </div>
-          )}
-          
-          {/* D3.js Visualization */}
-          <div className="bg-light p-3 border rounded mb-3">
-            <h5>🧬 Interactive Phylogenetic Tree (D3.js)</h5>
-            <PhylogeneticTree newick={treeNewick} />
-          </div>
-          
-          {actualResult?.statistics && (
-            <div className="bg-light p-3 border rounded mb-3">
-              <h6>Tree Statistics</h6>
-              <div className="row">
-                {Object.entries(actualResult.statistics).map(([key, value]) => (
-                  <div key={key} className="col-md-6 mb-2">
-                    <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* PNG plots embedded in the phylo result (tree_plot_b64, dist_matrix, ete) */}
-          {(() => {
-            const phyloVisuals: any[] = (rawResult?.result?.visuals || rawResult?.visuals || [])
-              .filter((v: any) => v?.type === 'image_b64' && v?.data);
-            if (!phyloVisuals.length) return null;
-            return (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', marginBottom: '16px' }}>
-                {phyloVisuals.map((v: any, idx: number) => (
-                  <div key={idx} style={{ flex: '1 1 420px', minWidth: '280px', maxWidth: '600px' }}>
-                    <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#475569', marginBottom: '4px' }}>
-                      {v.title || `Plot ${idx + 1}`}
-                    </div>
-                    <a href={`data:image/png;base64,${v.data}`} target="_blank" rel="noreferrer" title="Open full-size">
-                      <img
-                        src={`data:image/png;base64,${v.data}`}
-                        alt={v.title || `Plot ${idx + 1}`}
-                        style={{ width: '100%', borderRadius: '6px', border: '1px solid #E2E8F0', background: '#fff', cursor: 'pointer' }}
-                      />
-                    </a>
-                  </div>
-                ))}
-              </div>
-            );
-          })()}
 
           {downloadLinksSection}
 
