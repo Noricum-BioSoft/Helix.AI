@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { MSAView } from 'react-msaview';
 import Plot from 'react-plotly.js';
 import { API_BASE_URL, mcpApi } from './services/mcpApi';
@@ -19,8 +20,10 @@ import { theme } from './theme';
 import { JobsPanel } from './components/JobsPanel';
 import { ExamplesPanel } from './components/ExamplesPanel';
 import { DemoScenariosPanel } from './components/DemoScenariosPanel';
-import { getDemoScenarioById, getDemoScenarioByTool, DataPreviewTable } from './data/demoScenarios';
+import { getDemoScenarioById, getDemoScenarioByTool, getDemoScenarioByCommandAndTool, DataPreviewTable } from './data/demoScenarios';
 import { ThinkingIndicator, ActivityIndicator } from './components/ThinkingIndicator';
+
+const SESSION_STORAGE_KEY = 'helix_session_id';
 
 interface HistoryItem {
   input: string;
@@ -29,6 +32,33 @@ interface HistoryItem {
   timestamp: Date;
   /** Set when the item was triggered by a demo scenario card — links back to followUpPrompt */
   scenarioId?: string;
+  /** Bioinformatics run tracking IDs, populated from BioOrchestrator responses */
+  run_id?: string;
+  parent_run_id?: string;
+}
+
+/** Map backend session history entries to frontend HistoryItem[] (newest first). */
+function sessionHistoryToItems(session: { history?: Array<{ command?: string; tool?: string; result?: any; metadata?: any; run_id?: string; timestamp?: string }> }): HistoryItem[] {
+  const raw = session?.history;
+  if (!Array.isArray(raw) || raw.length === 0) return [];
+  const items: HistoryItem[] = [];
+  for (const entry of raw) {
+    const cmd = entry.command ?? '';
+    const out = entry.result ?? {};
+    const meta = entry.metadata ?? {};
+    const runId = entry.run_id ?? meta.run_id;
+    const parentRunId = meta.parent_run_id;
+    const ts = entry.timestamp || meta.timestamp;
+    items.push({
+      input: cmd,
+      output: out,
+      type: 'agent',
+      timestamp: ts ? new Date(ts) : new Date(0),
+      run_id: runId,
+      parent_run_id: parentRunId,
+    });
+  }
+  return items.reverse(); // backend order is oldest-first; UI shows newest first
 }
 
 interface WorkflowContext {
@@ -139,6 +169,28 @@ function App() {
     }
   };
 
+  const handleNewSession = async () => {
+    try {
+      const res = await mcpApi.createSession() as { session_id: string };
+      setSessionId(res.session_id);
+      try {
+        sessionStorage.setItem(SESSION_STORAGE_KEY, res.session_id);
+      } catch {
+        // ignore storage errors
+      }
+    } catch {
+      setSessionId(null);
+      try {
+        sessionStorage.removeItem(SESSION_STORAGE_KEY);
+      } catch {}
+    }
+    setHistory([]);
+    setExecutedPipelineCommands(new Set());
+    setCommand('');
+    setUploadedFiles([]);
+    setWorkflowContext({});
+  };
+
   const extractJobIds = (obj: any, out: Set<string>) => {
     if (!obj) return;
     if (typeof obj === 'object') {
@@ -155,20 +207,46 @@ function App() {
     for (const item of history) extractJobIds(item.output, s);
     return Array.from(s);
   }, [history]);
-  // Create a session on mount and check server health
+  // On mount: restore session from storage if valid (and restore history), otherwise create new; check server health
   useEffect(() => {
     const initializeApp = async () => {
       if (isInitialized) return; // Prevent duplicate initialization
       
       try {
         setIsInitialized(true);
-        
-        // Check server health first
         await checkServerHealth();
-        // Create session
-        const res = await mcpApi.createSession() as { session_id: string };
-        setSessionId(res.session_id);
-        console.log('Session created:', res.session_id);
+        let id: string | null = null;
+        let sessionData: { session?: { history?: unknown[] } } | null = null;
+        try {
+          const stored = sessionStorage.getItem(SESSION_STORAGE_KEY);
+          if (stored && stored.trim()) {
+            const info = await mcpApi.getSessionInfo(stored) as { session?: { history?: unknown[] } };
+            id = stored;
+            sessionData = info;
+            console.log('Session restored from storage:', stored);
+          }
+        } catch {
+          try {
+            sessionStorage.removeItem(SESSION_STORAGE_KEY);
+          } catch {}
+        }
+        if (!id) {
+          const res = await mcpApi.createSession() as { session_id: string };
+          id = res.session_id;
+          try {
+            sessionStorage.setItem(SESSION_STORAGE_KEY, id);
+          } catch {}
+          console.log('Session created:', id);
+        }
+        setSessionId(id);
+        // Restore conversation history when we re-open the same session (e.g. after refresh)
+        if (sessionData?.session) {
+          const restored = sessionHistoryToItems(sessionData.session as Parameters<typeof sessionHistoryToItems>[0]);
+          if (restored.length > 0) {
+            setHistory(restored);
+            console.log('Restored', restored.length, 'history items from session');
+          }
+        }
       } catch (err) {
         console.error('Failed to initialize app:', err);
         setIsInitialized(false); // Reset on error
@@ -289,8 +367,12 @@ function App() {
       
       // Update session ID if the backend created one automatically
       if ((response as any).session_id && !sessionId) {
-        setSessionId((response as any).session_id);
-        console.log('Session created automatically by backend:', (response as any).session_id);
+        const sid = (response as any).session_id;
+        setSessionId(sid);
+        try {
+          sessionStorage.setItem(SESSION_STORAGE_KEY, sid);
+        } catch {}
+        console.log('Session created automatically by backend:', sid);
       }
       
       // Update workflow context based on the response
@@ -368,12 +450,15 @@ function App() {
       
       // Add to history
       // Since /execute always routes through the agent, all responses are agent responses
+      const _r = response as any;
       const historyItem: HistoryItem = {
         input: commandText,
         output: response,
         type: 'agent',
         timestamp: new Date(),
         scenarioId: scenarioIdOverride ?? pendingScenarioId,
+        run_id: _r?.run_id || _r?.result?.run_id,
+        parent_run_id: _r?.parent_run_id || _r?.result?.parent_run_id,
       };
       
       console.log('🔍 Adding to history:', historyItem);
@@ -439,7 +524,11 @@ function App() {
       const response = await mcpApi.executeCommand(finalCommand, sessionId || undefined);
 
       if ((response as any).session_id && !sessionId) {
-        setSessionId((response as any).session_id);
+        const sid = (response as any).session_id;
+        setSessionId(sid);
+        try {
+          sessionStorage.setItem(SESSION_STORAGE_KEY, sid);
+        } catch {}
       }
 
       const historyItem: HistoryItem = {
@@ -477,7 +566,11 @@ function App() {
     try {
       const response = await mcpApi.executePipelinePlan(originalCommand, sessionId || undefined);
       if ((response as any).session_id && !sessionId) {
-        setSessionId((response as any).session_id);
+        const sid = (response as any).session_id;
+        setSessionId(sid);
+        try {
+          sessionStorage.setItem(SESSION_STORAGE_KEY, sid);
+        } catch {}
       }
       const historyItem: HistoryItem = {
         input: `▶ Execute Pipeline`,
@@ -615,6 +708,34 @@ function App() {
       .replace(/^./, (char) => char.toUpperCase());
   };
 
+  const formatNewickForDisplay = (newick: string): string => {
+    const source = newick.trim();
+    if (!source) return source;
+
+    let depth = 0;
+    let out = '';
+
+    for (let i = 0; i < source.length; i++) {
+      const char = source[i];
+
+      if (char === '(') {
+        out += '(\n' + '  '.repeat(depth + 1);
+        depth += 1;
+      } else if (char === ',') {
+        out += ',\n' + '  '.repeat(depth);
+      } else if (char === ')') {
+        depth = Math.max(0, depth - 1);
+        out += '\n' + '  '.repeat(depth) + ')';
+      } else if (char === ';') {
+        out += ';\n';
+      } else {
+        out += char;
+      }
+    }
+
+    return out.trim();
+  };
+
   const renderStructuredData = (data: any, depth = 0, visited = new WeakSet()): React.ReactNode => {
     if (data === null || data === undefined) return null;
 
@@ -651,7 +772,13 @@ function App() {
           {entries.map(([key, value]) => (
             <div key={key} className="structured-row">
               <div className="structured-label">{formatLabel(key)}</div>
-              <div className="structured-value">{renderStructuredData(value, depth + 1, visited)}</div>
+              <div className="structured-value">
+                {/newick/i.test(key) && typeof value === 'string' ? (
+                  <pre className="newick-display">{formatNewickForDisplay(value)}</pre>
+                ) : (
+                  renderStructuredData(value, depth + 1, visited)
+                )}
+              </div>
             </div>
           ))}
         </div>
@@ -688,18 +815,110 @@ function App() {
     console.log('🔍 agentOutput.tool:', agentOutput?.tool);
     console.log('🔍 ==============================================');
     
+    // Defined here (before any specialized renderers) so downloadLinksSection can use it.
+    const normalizeAssetUrl = (url?: string) => {
+      const u = (url || '').trim();
+      if (!u) return u;
+      if (/^https?:\/\//i.test(u)) return u;
+      if (u.startsWith('/')) return `${API_BASE_URL}${u}`;
+      return u;
+    };
+
+    // ── Download links (computed early so every renderer can include them) ──────
+    // Links come from data.links (build_standard_response) or raw_result.links
+    // (patch_and_rerun / legacy paths).
+    const _earlyLinksRaw: any[] =
+      agentOutput?.data?.links || actualResult?.links || rawResult?.links || [];
+    const _earlyLinks: any[] = Array.isArray(_earlyLinksRaw)
+      ? _earlyLinksRaw.map((l: any) =>
+          l && typeof l === 'object' ? { ...l, url: normalizeAssetUrl(l.url) } : l
+        )
+      : [];
+
+    const downloadLinksSection =
+      _earlyLinks.length > 0 ? (
+        <div className="mt-3 pt-3" style={{ borderTop: '1px solid #E2E8F0' }}>
+          <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#475569', marginBottom: '6px' }}>
+            Download results
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+            {_earlyLinks.map((l: any, idx: number) => {
+              const label: string = l?.label || l?.s3_uri || 'artifact';
+              const isScript = label.endsWith('.py');
+              const isBundle = label.endsWith('.zip');
+              const isDownloadable = isScript || isBundle;
+              const icon = isBundle ? '📦' : isScript ? '📄' : '⬇';
+              const styleMap: React.CSSProperties = isBundle
+                ? { background: '#0f4c81', color: '#e0f0ff', border: '1px solid #1e6bb8', fontWeight: 600 }
+                : isScript
+                ? { background: '#1e293b', color: '#f1f5f9', border: '1px solid #334155', fontFamily: 'monospace' }
+                : { background: 'transparent', color: '#2563eb', border: '1px solid #2563eb' };
+              return (
+                <a
+                  key={`dl-${label}-${idx}`}
+                  href={l.url}
+                  download={isDownloadable ? label : undefined}
+                  target={isDownloadable ? undefined : '_blank'}
+                  rel="noreferrer"
+                  className="btn btn-sm"
+                  style={{ fontSize: '0.78rem', ...styleMap }}
+                >
+                  {icon} {label}
+                </a>
+              );
+            })}
+          </div>
+        </div>
+      ) : null;
+
     // ========== PHYLOGENETIC TREE VISUALIZATIONS ==========
+    const extractNewickFromText = (text?: string): string | undefined => {
+      if (!text || typeof text !== 'string') return undefined;
+
+      // Prefer fenced code blocks if present
+      const fenced = text.match(/```(?:newick)?\s*([\s\S]*?)```/i);
+      if (fenced?.[1]) {
+        const candidate = fenced[1].trim();
+        if (candidate.includes('(') && candidate.includes(')') && candidate.includes(';')) {
+          return candidate;
+        }
+      }
+
+      // Fallback: grab the first Newick-like expression ending in semicolon
+      const inline = text.match(/(\([^;]*\)[^;]*;)/s);
+      if (inline?.[1]) {
+        const candidate = inline[1].trim();
+        if (candidate.includes('(') && candidate.includes(')') && candidate.includes(';')) {
+          return candidate;
+        }
+      }
+
+      return undefined;
+    };
+
     // Check ALL possible locations including top-level, raw_result, data, and nested structures
     // Priority: raw_result.result first (most likely location based on agent execution structure), then raw_result, then top-level
     const treeNewick = rawResult?.result?.tree_newick ||  // Agent execution result structure
+                       rawResult?.result?.newick_tree ||
                        rawResult?.tree_newick ||
+                       rawResult?.newick_tree ||
                        agentOutput?.tree_newick ||
+                       agentOutput?.newick_tree ||
                        agentResult?.tree_newick ||
+                       agentResult?.newick_tree ||
                        actualResult?.tree_newick ||
+                       actualResult?.newick_tree ||
                        agentOutput?.data?.tree_newick ||
+                       agentOutput?.data?.newick_tree ||
                        (agentOutput?.result && agentOutput.result.tree_newick) ||
+                       (agentOutput?.result && agentOutput.result.newick_tree) ||
                        (agentOutput?.raw_result && agentOutput.raw_result.tree_newick) ||
-                       (agentOutput?.raw_result?.result && agentOutput.raw_result.result.tree_newick);
+                       (agentOutput?.raw_result && agentOutput.raw_result.newick_tree) ||
+                       (agentOutput?.raw_result?.result && agentOutput.raw_result.result.tree_newick) ||
+                       (agentOutput?.raw_result?.result && agentOutput.raw_result.result.newick_tree) ||
+                       extractNewickFromText(actualResult?.text) ||
+                       extractNewickFromText(rawResult?.text) ||
+                       extractNewickFromText(agentOutput?.text);
     
     const eteVisualization = rawResult?.result?.ete_visualization ||  // Agent execution result structure
                              agentOutput?.ete_visualization ||
@@ -728,12 +947,191 @@ function App() {
     
     if (treeNewick) {
       console.log('🔍 Rendering phylogenetic tree visualization');
+      const parseStatsFromText = (text?: string): Record<string, string> => {
+        if (!text || typeof text !== 'string') return {};
+        const stats: Record<string, string> = {};
+        const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+
+        for (const line of lines) {
+          // Matches markdown bold form, e.g. "**Sequences analysed:** 3"
+          const boldMatch = line.match(/^\*\*([^*]+)\*\*:\s*(.+)$/);
+          if (boldMatch) {
+            stats[boldMatch[1].trim()] = boldMatch[2].trim();
+            continue;
+          }
+          // Matches plain key:value form
+          const plainMatch = line.match(/^([A-Za-z][A-Za-z0-9 _%()-]+):\s*(.+)$/);
+          if (plainMatch) {
+            const key = plainMatch[1].trim();
+            if (!/^(step|tool|status)$/i.test(key)) {
+              stats[key] = plainMatch[2].trim();
+            }
+          }
+        }
+
+        return stats;
+      };
+
+      const phyloStatsRaw =
+        actualResult?.statistics ||
+        rawResult?.result?.statistics ||
+        rawResult?.statistics ||
+        agentOutput?.data?.results?.result?.statistics ||
+        agentOutput?.data?.results?.statistics ||
+        agentOutput?.result?.statistics ||
+        agentResult?.statistics;
+
+      const parsedTextStats = {
+        ...parseStatsFromText(actualResult?.text),
+        ...parseStatsFromText(rawResult?.text),
+        ...parseStatsFromText(agentOutput?.text),
+      };
+
+      const normalizedPhyloStats: Record<string, string> = {};
+      if (phyloStatsRaw && typeof phyloStatsRaw === 'object') {
+        Object.entries(phyloStatsRaw).forEach(([key, value]) => {
+          normalizedPhyloStats[key] = String(value);
+        });
+      }
+      Object.entries(parsedTextStats).forEach(([key, value]) => {
+        if (!(key in normalizedPhyloStats)) {
+          normalizedPhyloStats[key] = value;
+        }
+      });
+
+      const rawVisuals: any[] = [
+        ...(Array.isArray(rawResult?.result?.visuals) ? rawResult.result.visuals : []),
+        ...(Array.isArray(rawResult?.visuals) ? rawResult.visuals : []),
+        ...(Array.isArray(actualResult?.visuals) ? actualResult.visuals : []),
+        ...(Array.isArray(agentOutput?.data?.visuals) ? agentOutput.data.visuals : []),
+      ];
+
+      const staticImageVisuals: Array<{ title: string; src: string }> = [];
+      const seenSources = new Set<string>();
+      const addImageVisual = (title: string, src?: string) => {
+        if (!src || typeof src !== 'string') return;
+        const trimmed = src.trim();
+        if (!trimmed) return;
+        if (seenSources.has(trimmed)) return;
+        seenSources.add(trimmed);
+        staticImageVisuals.push({ title, src: trimmed });
+      };
+
+      // Visuals payload from backend (preferred)
+      rawVisuals.forEach((v: any, idx: number) => {
+        if (!v || typeof v !== 'object') return;
+        const title = v.title || `Plot ${idx + 1}`;
+        if (v.type === 'image_b64' && typeof v.data === 'string') {
+          addImageVisual(title, `data:image/png;base64,${v.data}`);
+          return;
+        }
+        if (v.type === 'image' && typeof v.url === 'string') {
+          addImageVisual(title, v.url);
+          return;
+        }
+        if (typeof v.svg === 'string' && v.svg.trim().startsWith('<svg')) {
+          addImageVisual(title, `data:image/svg+xml;utf8,${encodeURIComponent(v.svg)}`);
+        }
+      });
+
+      // Direct phylo image fields for payloads that omit `visuals`
+      const maybeB64 = (value: any) =>
+        typeof value === 'string' && value.trim() && !value.trim().startsWith('<')
+          ? `data:image/png;base64,${value.trim()}`
+          : undefined;
+      addImageVisual(
+        'Phylogenetic Tree',
+        maybeB64(rawResult?.result?.tree_plot_b64 || actualResult?.tree_plot_b64 || rawResult?.tree_plot_b64),
+      );
+      addImageVisual(
+        'Pairwise Distance Matrix',
+        maybeB64(rawResult?.result?.dist_matrix_b64 || actualResult?.dist_matrix_b64 || rawResult?.dist_matrix_b64),
+      );
+      if (typeof clusteredVisualization === 'string') {
+        if (clusteredVisualization.trim().startsWith('<svg')) {
+          addImageVisual('Clustered Tree View', `data:image/svg+xml;utf8,${encodeURIComponent(clusteredVisualization)}`);
+        } else {
+          addImageVisual('Clustered Tree View', `data:image/png;base64,${clusteredVisualization}`);
+        }
+      } else if (clusteredVisualization?.svg) {
+        addImageVisual('Clustered Tree View', `data:image/svg+xml;utf8,${encodeURIComponent(clusteredVisualization.svg)}`);
+      } else if (clusteredVisualization?.data) {
+        addImageVisual('Clustered Tree View', `data:image/png;base64,${clusteredVisualization.data}`);
+      }
+
+      if (typeof eteVisualization === 'string') {
+        if (eteVisualization.trim().startsWith('<svg')) {
+          addImageVisual('Annotated Tree (ETE3)', `data:image/svg+xml;utf8,${encodeURIComponent(eteVisualization)}`);
+        } else {
+          addImageVisual('Annotated Tree (ETE3)', `data:image/png;base64,${eteVisualization}`);
+        }
+      } else if (eteVisualization?.svg) {
+        addImageVisual('Annotated Tree (ETE3)', `data:image/svg+xml;utf8,${encodeURIComponent(eteVisualization.svg)}`);
+      } else if (eteVisualization?.data) {
+        addImageVisual('Annotated Tree (ETE3)', `data:image/png;base64,${eteVisualization.data}`);
+      }
+
       return (
         <div>
           {actualResult?.text && (
-            <pre className="bg-light p-3 border rounded mb-3">{actualResult.text}</pre>
+            <div className="agent-response-markdown mb-3">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{actualResult.text}</ReactMarkdown>
+            </div>
           )}
-          
+
+          <div className="row g-3 mb-3">
+            <div className="col-12 col-xl-8">
+              <div className="bg-light p-3 border rounded h-100">
+                <h5 className="mb-3">🧬 Interactive Phylogenetic Tree</h5>
+                <PhylogeneticTree newick={treeNewick} />
+              </div>
+            </div>
+            <div className="col-12 col-xl-4">
+              <div className="d-flex flex-column gap-3 h-100">
+                <div className="bg-light p-3 border rounded">
+                  <h5 className="mb-3">📈 Tree Statistics</h5>
+                  {Object.keys(normalizedPhyloStats).length > 0 ? (
+                    <div className="row">
+                      {Object.entries(normalizedPhyloStats).map(([key, value]) => (
+                        <div key={key} className="col-12 mb-2">
+                          <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-muted">Summary metrics unavailable in this response.</div>
+                  )}
+                </div>
+                <div className="bg-light p-3 border rounded flex-grow-1">
+                  <h5 className="mb-2">🌿 Newick Tree</h5>
+                  <pre className="newick-display mb-0">{formatNewickForDisplay(String(treeNewick))}</pre>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {staticImageVisuals.length > 0 && (
+            <div className="bg-light p-3 border rounded mb-3">
+              <h5 className="mb-3">🖼️ Analysis Visuals</h5>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px' }}>
+                {staticImageVisuals.map((v, idx) => (
+                  <div key={`${v.title}-${idx}`} style={{ flex: '1 1 420px', minWidth: '280px', maxWidth: '700px' }}>
+                    <div style={{ fontSize: '0.9rem', fontWeight: 600, color: '#334155', marginBottom: '6px' }}>
+                      {v.title}
+                    </div>
+                    <a href={v.src} target="_blank" rel="noreferrer" title="Open full-size">
+                      <img
+                        src={v.src}
+                        alt={v.title}
+                        style={{ width: '100%', borderRadius: '8px', border: '1px solid #E2E8F0', background: '#fff', cursor: 'pointer' }}
+                      />
+                    </a>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Clustering Results */}
           {clusteringResult && (
             <div className="bg-light p-3 border rounded mb-3">
@@ -768,41 +1166,8 @@ function App() {
             </div>
           )}
 
-          {/* Clustered Visualization */}
-          {clusteredVisualization && clusteredVisualization.svg && (
-            <div className="bg-light p-3 border rounded mb-3">
-              <h5>🧬 Clustered Phylogenetic Tree Visualization</h5>
-              <div dangerouslySetInnerHTML={{ __html: clusteredVisualization.svg }} />
-            </div>
-          )}
+          {downloadLinksSection}
 
-          {/* ETE3 Visualization */}
-          {eteVisualization && eteVisualization.svg && (
-            <div className="bg-light p-3 border rounded mb-3">
-              <h5>🧬 ETE3 Phylogenetic Tree Visualization</h5>
-              <div dangerouslySetInnerHTML={{ __html: eteVisualization.svg }} />
-            </div>
-          )}
-          
-          {/* D3.js Visualization */}
-          <div className="bg-light p-3 border rounded mb-3">
-            <h5>🧬 Interactive Phylogenetic Tree (D3.js)</h5>
-            <PhylogeneticTree newick={treeNewick} />
-          </div>
-          
-          {actualResult?.statistics && (
-            <div className="bg-light p-3 border rounded mb-3">
-              <h6>Tree Statistics</h6>
-              <div className="row">
-                {Object.entries(actualResult.statistics).map(([key, value]) => (
-                  <div key={key} className="col-md-6 mb-2">
-                    <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-          
           {/* Debug Section - Consistent across all commands */}
           {renderDebugInfo(agentOutput, actualResult)}
         </div>
@@ -927,7 +1292,10 @@ function App() {
                           (agentOutput?.result && agentOutput.result.summary) ||
                           (agentOutput?.raw_result?.result && agentOutput.raw_result.result.summary);
     
-    if (qualityMetrics || qualityPlotData || qualitySummary) {
+    // Skip legacy quality-assessment renderer when the response already uses the
+    // modern `results_viewer` path (which handles FastQC via BioOrchestrator).
+    const isResultsViewer = agentOutput?.visualization_type === 'results_viewer';
+    if (!isResultsViewer && (qualityMetrics || qualityPlotData || qualitySummary)) {
       console.log('🔍 Rendering quality assessment visualization');
       return (
         <div>
@@ -941,7 +1309,10 @@ function App() {
               <div className="row">
                 {Object.entries(qualitySummary).map(([key, value]) => (
                   <div key={key} className="col-md-6 mb-2">
-                    <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> {String(value)}
+                    <strong>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong>{' '}
+                    {typeof value === 'object' && value !== null
+                      ? <code style={{fontSize: '0.78rem'}}>{JSON.stringify(value)}</code>
+                      : String(value)}
                   </div>
                 ))}
               </div>
@@ -1020,6 +1391,8 @@ function App() {
             </div>
           )}
           
+          {downloadLinksSection}
+
           {/* Debug Section - Consistent across all commands */}
           {renderDebugInfo(agentOutput, actualResult)}
         </div>
@@ -1357,22 +1730,9 @@ function App() {
     }
 
     // Results viewer (S3 / FastQC HTML)
-    const normalizeAssetUrl = (url?: string) => {
-      const u = (url || '').trim();
-      if (!u) return u;
-      // Absolute URLs (S3 presigned, external) should remain untouched
-      if (/^https?:\/\//i.test(u)) return u;
-      // Relative API paths (e.g. /session/.../download) should go to the backend in dev
-      if (u.startsWith('/')) return `${API_BASE_URL}${u}`;
-      return u;
-    };
-
-    const resultsLinksRaw = agentOutput?.data?.links || actualResult?.links || rawResult?.links || [];
+    // resultsLinks already computed above as _earlyLinks (before specialized renderers)
+    const resultsLinks = _earlyLinks;
     const resultsVisualsRaw = agentOutput?.data?.visuals || actualResult?.visuals || rawResult?.visuals || [];
-
-    const resultsLinks = Array.isArray(resultsLinksRaw)
-      ? resultsLinksRaw.map((l: any) => (l && typeof l === 'object' ? { ...l, url: normalizeAssetUrl(l.url) } : l))
-      : [];
 
     const resultsVisuals = Array.isArray(resultsVisualsRaw)
       ? resultsVisualsRaw.map((v: any) => (v && typeof v === 'object' ? { ...v, url: normalizeAssetUrl(v.url) } : v))
@@ -1477,7 +1837,7 @@ function App() {
         return (
           <div>
             <div className="agent-response-markdown">
-              <ReactMarkdown>{finalText}</ReactMarkdown>
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{finalText}</ReactMarkdown>
             </div>
           </div>
         );
@@ -1487,7 +1847,7 @@ function App() {
       return (
         <div>
           <div className="agent-response-markdown">
-            <ReactMarkdown>{finalText}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{finalText}</ReactMarkdown>
           </div>
 
           {/* Results Viewer (embed main HTML report + links) */}
@@ -1504,57 +1864,35 @@ function App() {
                 </div>
               )}
 
-              {/* Image visuals (e.g. volcano plots, PCA) */}
-              {Array.isArray(resultsVisuals) && resultsVisuals.some((v: any) => v?.type === 'image') && (
+              {/* Image visuals — supports both url-based ('image') and inline base64 ('image_b64') */}
+              {Array.isArray(resultsVisuals) && resultsVisuals.some((v: any) => v?.type === 'image' || v?.type === 'image_b64') && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', marginBottom: '16px' }}>
                   {resultsVisuals
-                    .filter((v: any) => v?.type === 'image' && v?.url)
-                    .map((v: any, idx: number) => (
-                      <div key={idx} style={{ flex: '1 1 420px', minWidth: '280px', maxWidth: '600px' }}>
-                        <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#475569', marginBottom: '4px' }}>
-                          {v.title || `Plot ${idx + 1}`}
+                    .filter((v: any) => (v?.type === 'image' && v?.url) || (v?.type === 'image_b64' && v?.data))
+                    .map((v: any, idx: number) => {
+                      const imgSrc = v.type === 'image_b64'
+                        ? `data:image/png;base64,${v.data}`
+                        : v.url;
+                      return (
+                        <div key={idx} style={{ flex: '1 1 420px', minWidth: '280px', maxWidth: '600px' }}>
+                          <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#475569', marginBottom: '4px' }}>
+                            {v.title || `Plot ${idx + 1}`}
+                          </div>
+                          <a href={imgSrc} target="_blank" rel="noreferrer" title="Open full-size">
+                            <img
+                              src={imgSrc}
+                              alt={v.title || `Plot ${idx + 1}`}
+                              style={{ width: '100%', borderRadius: '6px', border: '1px solid #E2E8F0', background: '#fff', cursor: 'pointer' }}
+                            />
+                          </a>
                         </div>
-                        <a href={v.url} target="_blank" rel="noreferrer" title="Open full-size">
-                          <img
-                            src={v.url}
-                            alt={v.title || `Plot ${idx + 1}`}
-                            style={{ width: '100%', borderRadius: '6px', border: '1px solid #E2E8F0', background: '#fff', cursor: 'pointer' }}
-                          />
-                        </a>
-                      </div>
-                    ))}
-                </div>
-              )}
-
-              {/* No visuals fallback */}
-              {!mainResultsIframe && !(Array.isArray(resultsVisuals) && resultsVisuals.some((v: any) => v?.url)) && (
-                <div className="alert alert-info mb-2">
-                  No plots available yet. Use the links below to download results.
+                      );
+                    })}
                 </div>
               )}
 
               {/* Downloadable artifacts */}
-              {Array.isArray(resultsLinks) && resultsLinks.length > 0 && (
-                <div className="mt-2">
-                  <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#475569', marginBottom: '6px' }}>
-                    Download results
-                  </div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                    {resultsLinks.map((l: any, idx: number) => (
-                      <a
-                        key={`${l?.label || 'artifact'}-${idx}`}
-                        href={l.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="btn btn-outline-primary btn-sm"
-                        style={{ fontSize: '0.78rem' }}
-                      >
-                        ⬇ {l.label || l.s3_uri || 'artifact'}
-                      </a>
-                    ))}
-                  </div>
-                </div>
-              )}
+              {downloadLinksSection}
             </div>
           )}
           
@@ -1582,7 +1920,7 @@ function App() {
             return (
               <div>
                 <div className="agent-response-markdown">
-                  <ReactMarkdown>{extracted}</ReactMarkdown>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{extracted}</ReactMarkdown>
                 </div>
               </div>
             );
@@ -1614,7 +1952,7 @@ function App() {
               return (
                 <div>
                   <div className="agent-response-markdown">
-                    <ReactMarkdown>{extracted}</ReactMarkdown>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{extracted}</ReactMarkdown>
                   </div>
                 </div>
               );
@@ -1638,7 +1976,7 @@ function App() {
           return (
             <div>
               <div className="agent-response-markdown">
-                <ReactMarkdown>{foundText}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{foundText}</ReactMarkdown>
               </div>
             </div>
           );
@@ -1777,6 +2115,16 @@ function App() {
       return <div className="alert alert-danger mb-0">{message}</div>;
     }
 
+    // Resolve scenario by explicit scenarioId first, then by command/tool match.
+    // We do this early so rendering can stay deterministic for demo cards.
+    const responseTool =
+      output?.tool || output?.tool_name || output?.result?.tool;
+    const scenario =
+      (item.scenarioId ? getDemoScenarioById(item.scenarioId) : undefined) ??
+      (responseTool
+        ? getDemoScenarioByCommandAndTool(item.input ?? '', responseTool)
+        : undefined);
+
     // Detect a workflow plan response so we can append the "Execute Pipeline" button
     const isWorkflowPlan =
       output?.execute_ready === true ||
@@ -1815,11 +2163,19 @@ function App() {
       /please provide|required information|required inputs|before .* can .* proceed/i.test(agentText) &&
       /count matrix|sample metadata|design formula/i.test(agentText);
 
-    const isNeedsInputs = explicitNeedsInputs || looksLikeNeedsInputsFromAgent;
+    // Some demo scenarios are explicitly authored as "needs_inputs". If backend
+    // emits workflow_planned for these, keep the demo UX consistent and prefer
+    // the scenario's follow-up data path.
+    const scenarioForcesNeedsInputs =
+      isWorkflowPlan &&
+      !!scenario?.followUpPrompt &&
+      scenario?.expectedBehavior === 'needs_inputs';
+
+    const isNeedsInputs = explicitNeedsInputs || looksLikeNeedsInputsFromAgent || scenarioForcesNeedsInputs;
 
     const renderedResponse = renderAgentResponse(output);
 
-    if (isWorkflowPlan) {
+    if (isWorkflowPlan && !scenarioForcesNeedsInputs) {
       const alreadyExecuted = executedPipelineCommands.has(item.input);
       return (
         <div>
@@ -1850,14 +2206,6 @@ function App() {
     }
 
     if (isNeedsInputs) {
-      // Resolve scenario by explicit scenarioId first, then fall back to matching the
-      // backend's reported tool name so the button appears even when the prompt was
-      // typed directly (not loaded via the demo modal).
-      const needsInputsTool =
-        output?.tool || output?.tool_name || output?.result?.tool;
-      const scenario =
-        (item.scenarioId ? getDemoScenarioById(item.scenarioId) : undefined) ??
-        (needsInputsTool ? getDemoScenarioByTool(needsInputsTool) : undefined);
       if (scenario?.followUpPrompt) {
         return (
           <div>
@@ -1875,7 +2223,16 @@ function App() {
                   Example data available for this demo
                 </div>
                 <div style={{ fontSize: '0.8rem', color: '#475569', marginBottom: '10px' }}>
-                  Helix provides a synthetic {scenario.domain} dataset on S3 that matches this study design.
+                  {(() => {
+                    const domainPhrases: Record<string, string> = {
+                      'Bulk RNA-seq':   'bulk RNA-seq count matrix + sample metadata',
+                      'Single-Cell':    'single-cell gene-expression matrix (10x HDF5)',
+                      'Sequencing QC':  'paired-end FASTQ files',
+                      'Phylogenetics':  'aligned FASTA sequences',
+                    };
+                    const dataDesc = domainPhrases[scenario.domain] ?? `${scenario.domain} dataset`;
+                    return `Example ${dataDesc} hosted on S3 — ready to load and run.`;
+                  })()}
                 </div>
                 <div className="d-flex align-items-center gap-2 flex-wrap">
                   {scenario.dataPreview && (
@@ -1994,13 +2351,43 @@ function App() {
                   style={{ maxWidth: '50%', wordBreak: 'break-word', overflowWrap: 'anywhere' }}
                 >
                   <div className="text-muted small text-uppercase fw-semibold mb-1">Prompt</div>
-                  <div style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{item.input}</div>
+                  <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{item.input}</div>
                   <div className="text-muted small mt-1">{timestamp.toLocaleTimeString()} • {item.type}</div>
                 </div>
                 <Card className="border-0 shadow-sm">
                   <Card.Body>
                     <div className="text-muted small text-uppercase fw-semibold mb-2">Response</div>
                     {renderOutput(item)}
+                    {item.run_id && (
+                      <div className="mt-3 d-flex align-items-center gap-2 flex-wrap" style={{ borderTop: '1px solid #e9ecef', paddingTop: '0.6rem' }}>
+                        <span
+                          className="badge rounded-pill"
+                          style={{ background: '#EFF6FF', color: '#1D4ED8', fontFamily: 'monospace', fontSize: '0.72rem', fontWeight: 500 }}
+                          title={`Run ID: ${item.run_id}`}
+                        >
+                          🔬 run:{item.run_id.slice(0, 8)}
+                        </span>
+                        {item.parent_run_id && (
+                          <>
+                            <span className="text-muted" style={{ fontSize: '0.72rem' }}>←</span>
+                            <span
+                              className="badge rounded-pill"
+                              style={{ background: '#F0FDF4', color: '#166534', fontFamily: 'monospace', fontSize: '0.72rem', fontWeight: 500 }}
+                              title={`Parent Run ID: ${item.parent_run_id}`}
+                            >
+                              parent:{item.parent_run_id.slice(0, 8)}
+                            </span>
+                            <button
+                              className="btn btn-link btn-sm p-0"
+                              style={{ fontSize: '0.72rem', color: '#6B7280' }}
+                              onClick={() => executeCommand(`what changed between the runs?`)}
+                            >
+                              diff ↗
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )}
                   </Card.Body>
                 </Card>
               </div>
@@ -2095,21 +2482,6 @@ function App() {
             <Button
               variant="outline-secondary"
               className="prompt-toolbar-button"
-              onClick={() => setDemoOpen(true)}
-              aria-label="Open demo scenarios"
-              style={{
-                background: 'linear-gradient(135deg, #3A60A8, #7B3FA8)',
-                color: '#FFFFFF',
-                border: 'none',
-                fontWeight: 700,
-                letterSpacing: '0.02em',
-              }}
-            >
-              🧬 Demo
-            </Button>
-            <Button
-              variant="outline-secondary"
-              className="prompt-toolbar-button"
               onClick={handleToggleExamples}
               aria-label="Toggle examples"
               style={{
@@ -2121,6 +2493,21 @@ function App() {
               }}
             >
               📚 Examples
+            </Button>
+            <Button
+              variant="outline-secondary"
+              className="prompt-toolbar-button"
+              onClick={() => setDemoOpen(true)}
+              aria-label="Open demo scenarios"
+              style={{
+                background: 'linear-gradient(135deg, #3A60A8, #7B3FA8)',
+                color: '#FFFFFF',
+                border: 'none',
+                fontWeight: 700,
+                letterSpacing: '0.02em',
+              }}
+            >
+              🧬 Demo
             </Button>
             <Button
               variant="outline-secondary"
@@ -2219,6 +2606,16 @@ function App() {
             )}
           </Modal.Body>
           <Modal.Footer>
+            <Button
+              variant="outline-primary"
+              onClick={() => {
+                handleNewSession();
+                setSessionModalOpen(false);
+              }}
+              aria-label="Start a new session"
+            >
+              ＋ New Session
+            </Button>
             <Button variant="secondary" onClick={() => setSessionModalOpen(false)}>
               Close
             </Button>
@@ -2434,12 +2831,35 @@ function App() {
           {history.map((item, index) => (
         <div className="mt-4" key={index}>
           <div className="mb-2">
-                <strong>Command:</strong> {item.input}
+                <strong>Command:</strong> <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{item.input}</span>
                 <small className="text-muted ms-2">
                   ({item.type}) - {item.timestamp.toLocaleTimeString()}
                 </small>
               </div>
               {renderOutput(item)}
+              {item.run_id && (
+                <div className="mt-2 d-flex align-items-center gap-2 flex-wrap">
+                  <span
+                    className="badge rounded-pill"
+                    style={{ background: '#EFF6FF', color: '#1D4ED8', fontFamily: 'monospace', fontSize: '0.72rem', fontWeight: 500 }}
+                    title={`Run ID: ${item.run_id}`}
+                  >
+                    🔬 run:{item.run_id.slice(0, 8)}
+                  </span>
+                  {item.parent_run_id && (
+                    <>
+                      <span className="text-muted" style={{ fontSize: '0.72rem' }}>←</span>
+                      <span
+                        className="badge rounded-pill"
+                        style={{ background: '#F0FDF4', color: '#166534', fontFamily: 'monospace', fontSize: '0.72rem', fontWeight: 500 }}
+                        title={`Parent Run ID: ${item.parent_run_id}`}
+                      >
+                        parent:{item.parent_run_id.slice(0, 8)}
+                      </span>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           ))}
 
@@ -2649,6 +3069,16 @@ function App() {
           )}
         </Modal.Body>
         <Modal.Footer>
+          <Button
+            variant="outline-primary"
+            onClick={() => {
+              handleNewSession();
+              setSessionModalOpen(false);
+            }}
+            aria-label="Start a new session"
+          >
+            ＋ New Session
+          </Button>
           <Button variant="secondary" onClick={() => setSessionModalOpen(false)}>
             Close
           </Button>

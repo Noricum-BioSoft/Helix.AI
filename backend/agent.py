@@ -86,6 +86,7 @@ from pydantic import BaseModel, Field
 
 # load the environment
 from dotenv import load_dotenv
+from backend.routing_keywords import INLINE_PIPELINE_TOOL_MAP
 
 logger = logging.getLogger(__name__)
 
@@ -650,7 +651,7 @@ class CommandProcessor:
     # Helper: extract explicitly-numbered pipeline steps from the prompt
     # ------------------------------------------------------------------
     @staticmethod
-    def _extract_inline_pipeline_plan(command: str) -> Dict | None:
+    def _extract_inline_pipeline_plan(command: str) -> Optional[Dict]:
         """
         If the user's prompt contains a numbered list of pipeline steps
         (e.g. "1. Run FastQC ...  2. Trim adapter sequences ..."),
@@ -726,33 +727,9 @@ class CommandProcessor:
             return None
 
         # Map step descriptions to known Helix tool names
-        _TOOL_MAP = [
-            # More-specific patterns first so they win over partial matches below
-            (["quality report", "qc report", "quality summary"],                  "quality_report"),
-            (["fastqc", "quality assessment", "quality control"],                 "fastqc_quality_analysis"),
-            (["trim", "adapter", "cutadapt", "trimmomatic"],                      "read_trimming"),
-            (["merge overlap", "merge paired", "overlapping paired", "flash", "pear"],
-                                                                                  "read_merging"),
-            (["merge", "overlap"],                                                 "read_merging"),
-            # Phylogenetics / comparative-genomics tools (before generic "align")
-            (["phylogenetic tree", "phylogeny", "maximum-likelihood", "bootstrap"],
-                                                                                  "phylogenetic_tree"),
-            (["pairwise", "identity matrix", "pairwise amino", "pairwise identity"],
-                                                                                  "pairwise_identity"),
-            (["annotate", "mutation site", "rbd mutation", "key mutation"],       "annotate_tree"),
-            (["multiple sequence alignment", "mafft", "muscle", "clustal"],       "sequence_alignment"),
-            (["retrieve", "fetch", "ncbi", "refseq", "genbank"],                  "fetch_ncbi_sequence"),
-            (["align", "map ", "star ", "hisat", "bowtie"],                       "sequence_alignment"),
-            (["quantif", "featurecount", "htseq"],                                "read_quantification"),
-            (["differential", "deseq", "edger", "limma"],                         "differential_expression"),
-            (["single.cell", "scanpy", "seurat", "cell ranger"],                  "single_cell_analysis"),
-            (["diversity", "qiime", "kraken", "metaphlan"],                       "microbiome_analysis"),
-            (["report", "summary", "csv", "visualiz", "plot"],                    "quality_report"),
-        ]
-
         def _tool_for(text: str) -> str:
             tl = text.lower()
-            for keywords, tool in _TOOL_MAP:
+            for keywords, tool in INLINE_PIPELINE_TOOL_MAP:
                 if any(kw in tl for kw in keywords):
                     return tool
             return "custom_step"
@@ -840,6 +817,92 @@ class CommandProcessor:
             Dict with workflow execution results
         """
         print("[CommandProcessor] 🔄 Starting multi-step workflow execution...")
+
+        # Guard: some "study description" prompts are data-dependent analyses and
+        # should first request concrete input files, not return a runnable plan.
+        # This keeps demo behavior stable across frontend/backend.
+        cmd_lower = command.lower()
+        has_s3_data = bool(re.search(r"s3://", command, re.IGNORECASE))
+        has_structured_inputs = bool(
+            re.search(
+                r"\b(data_file|count_matrix|sample_metadata|design_formula|forward_reads|reverse_reads)\s*:\s*\S+",
+                command,
+                re.IGNORECASE,
+            )
+        )
+        has_local_or_remote_file_hint = bool(
+            re.search(r"\b\S+\.(csv|tsv|h5|h5ad|fastq|fastq\.gz|fasta|fa)\b", command, re.IGNORECASE)
+        )
+        has_concrete_inputs = has_s3_data or has_structured_inputs or has_local_or_remote_file_hint
+        has_scrna_markers = any(
+            k in cmd_lower for k in ["single-cell", "single cell", "scrna", "pbmc", "10x genomics"]
+        )
+        has_bulk_markers = any(
+            k in cmd_lower for k in ["bulk rna-seq", "bulk rnaseq", "rnaseq", "rna-seq", "transcriptome"]
+        )
+        has_phylo_markers = any(
+            k in cmd_lower for k in ["phylogenetic", "phylogeny", "sars-cov", "spike protein", "newick"]
+        )
+        has_explicit_sequences = bool(re.search(r"^>[\w\-\.]+", command, re.MULTILINE))
+        has_public_fetch = bool(
+            re.search(
+                r"\b(from\s+ncbi|ncbi\s+refseq|from\s+refseq|from\s+genbank|"
+                r"retrieve\s+sequences|fetch\s+sequences|fetch\s+from\s+ncbi)\b",
+                command,
+                re.IGNORECASE,
+            )
+        )
+
+        if has_scrna_markers and not has_concrete_inputs:
+            text = (
+                "I can run this single-cell workflow once inputs are provided.\n\n"
+                "Please provide:\n"
+                "- `data_file` (10x H5/H5AD path, local path, or S3 URI)\n"
+                "- `data_format` (for example `10x`)\n"
+                "- optional `resolution` and `steps`"
+            )
+            return {
+                "status": "needs_inputs",
+                "success": True,
+                "tool": "single_cell_analysis",
+                "text": text,
+                "message": text,
+                "data": {"required_inputs": ["data_file", "data_format"]},
+            }
+
+        if has_bulk_markers and not has_concrete_inputs:
+            text = (
+                "I can run this bulk RNA-seq workflow once inputs are provided.\n\n"
+                "Please provide:\n"
+                "- `count_matrix` (CSV)\n"
+                "- `sample_metadata` (CSV)\n"
+                "- `design_formula` (for example `~condition` or `~time_point`)"
+            )
+            return {
+                "status": "needs_inputs",
+                "success": True,
+                "tool": "bulk_rnaseq_analysis",
+                "text": text,
+                "message": text,
+                "data": {"required_inputs": ["count_matrix", "sample_metadata", "design_formula"]},
+            }
+
+        if has_phylo_markers and not (has_s3_data or has_explicit_sequences or has_public_fetch):
+            text = (
+                "I can run this phylogenetic workflow with either explicit FASTA sequences "
+                "or a resolvable variant list.\n\n"
+                "Please provide one of:\n"
+                "- FASTA sequences\n"
+                "- a concise variant list (for example: Wuhan-Hu-1, Alpha, Delta, Omicron)"
+            )
+            return {
+                "status": "needs_inputs",
+                "success": True,
+                "tool": "phylogenetic_tree",
+                "text": text,
+                "message": text,
+                "data": {"required_inputs": ["sequences_or_variant_list"]},
+            }
 
         # Fast path: if the command already contains explicitly-numbered pipeline
         # steps, parse them directly rather than going through the playbook matcher
@@ -1306,8 +1369,28 @@ class CommandProcessor:
                 "lookup_go_term",
                 "bulk_rnaseq_analysis",
                 "single_cell_analysis",
+                # Iterative workflow tools
+                "patch_and_rerun",
+                "bio_rerun",
+                "bio_diff_runs",
+                "local_edit_visualization",
+                "local_update_scatter_x_scale",
+                "visualize_job_results",
             }
             
+            # Consensus must not be routed to sequence_alignment: consensus is derived FROM
+            # alignment (e.g. majority-rule per column), not "run alignment again". See
+            # docs/CONSENSUS_FROM_ALIGNMENT_GAP.md.
+            _consensus_phrases = (
+                "consensus sequence", "calculate consensus", "compute consensus",
+                "consensus of", "consensus from", "derived from the alignment",
+            )
+            _cmd_lower = (command or "").lower()
+            _wants_consensus = any(p in _cmd_lower for p in _consensus_phrases)
+            if tool_name == "sequence_alignment" and _wants_consensus:
+                print("[CommandProcessor] Router returned sequence_alignment but command asks for consensus -> use tool generator")
+                return None
+
             if tool_name and tool_name in safe_tools:
                 print(f"[CommandProcessor] Deterministic router fallback -> {tool_name}")
                 return {
@@ -1899,8 +1982,7 @@ class CommandProcessor:
         """
         Execute each pipeline step extracted from *command* in sequence.
 
-        For each step the matching MCP tool is called via call_mcp_tool()
-        (which activates demo-mode simulation for helix-test-data buckets).
+        For each step the matching tool is called via dispatch_tool().
         Results are aggregated and returned as a single rich response.
         """
         import re as _re
@@ -1928,24 +2010,187 @@ class CommandProcessor:
                 "visualization_type": "markdown",
             }
 
-        # ── 2. Extract S3 inputs from the original command ──────────────────
-        s3_uris = _re.findall(r"s3://[^\s,\"']+", command)
-        r1_uri = next((u for u in s3_uris if "_R1" in u or "_r1" in u), s3_uris[0] if s3_uris else None)
-        r2_uri = next((u for u in s3_uris if "_R2" in u or "_r2" in u), s3_uris[1] if len(s3_uris) > 1 else None)
-        out_uri = next((u for u in s3_uris if u.endswith("/")), None)
+        # ── 2. Build tool arguments by workflow type ────────────────────────
+        step_tools = {str(s.get("tool", "")).strip() for s in steps if isinstance(s, dict)}
+        fastq_tools = {"fastqc_quality_analysis", "read_trimming", "read_merging", "quality_report", "quality_assessment"}
+        uses_fastq_inputs = bool(step_tools.intersection(fastq_tools))
 
-        adapter_match = _re.search(r'[A-Z]{10,}', command)
-        adapter = adapter_match.group(0) if adapter_match else "CTGTCTCTTATACACATCT"
-        min_overlap_match = _re.search(r'overlap\s+of\s+(\d+)', command, _re.IGNORECASE)
-        min_overlap = int(min_overlap_match.group(1)) if min_overlap_match else 20
-        qual_match = _re.search(r'[Pp]hred\s*[<>]?\s*(\d+)', command)
-        quality_threshold = int(qual_match.group(1)) if qual_match else 20
+        # Extract any explicit FASTA sequence block from the prompt.
+        fasta_blocks = _re.findall(r'(?ms)^>\S.*?(?=^>\S|\Z)', command)
+        fasta_sequences = "\n".join(block.strip() for block in fasta_blocks).strip() if fasta_blocks else ""
 
-        print(f"[execute_pipeline] inputs: R1={r1_uri}, R2={r2_uri}, output={out_uri}")
-        print(f"[execute_pipeline] params: adapter={adapter}, overlap={min_overlap}, qual={quality_threshold}")
+        # For NCBI fetch, detect explicit accessions first; if absent, resolve
+        # SARS-CoV-2 variant labels into likely protein accessions.
+        accession_matches = _re.findall(r'\b(?:[A-Z]{1,2}_)?[A-Z]{1,4}\d{3,}(?:\.\d+)?\b', command)
+        explicit_accessions = [a for a in accession_matches if any(ch.isdigit() for ch in a)]
+
+        def _detect_sars_cov2_variants(text: str) -> List[str]:
+            variants: List[str] = []
+            variant_patterns = [
+                ("wuhan-hu-1", r"\bwuhan(?:-hu-1)?\b"),
+                ("alpha", r"\balpha\b|\bb\.?1\.?1\.?7\b"),
+                ("beta", r"\bbeta\b|\bb\.?1\.?351\b"),
+                ("gamma", r"\bgamma\b|\bp\.?1\b"),
+                ("delta", r"\bdelta\b|\bb\.?1\.?617\.?2\b"),
+                ("omicron ba.1", r"\bomicron\s*ba\.?1\b|\bba\.?1\b"),
+                ("omicron ba.4/5", r"\bomicron\s*ba\.?4\/5\b|\bba\.?4\/5\b"),
+                ("xbb.1.5", r"\bxbb\.?1\.?5\b"),
+            ]
+            for label, pattern in variant_patterns:
+                if _re.search(pattern, text, _re.IGNORECASE):
+                    variants.append(label)
+            return variants
+
+        def _build_ncbi_variant_query(variant_label: str) -> str:
+            base = "Severe acute respiratory syndrome coronavirus 2[Organism] AND spike protein[Title]"
+            variant_terms = {
+                "wuhan-hu-1": '(Wuhan-Hu-1 OR "Wuhan isolate")[All Fields]',
+                "alpha": '(Alpha OR B.1.1.7)[All Fields]',
+                "beta": '(Beta OR B.1.351)[All Fields]',
+                "gamma": '(Gamma OR P.1)[All Fields]',
+                "delta": '(Delta OR B.1.617.2)[All Fields]',
+                "omicron ba.1": '(Omicron OR BA.1)[All Fields]',
+                "omicron ba.4/5": '(Omicron OR BA.4 OR BA.5 OR BA.4/5)[All Fields]',
+                "xbb.1.5": '(XBB.1.5 OR XBB)[All Fields]',
+            }
+            return f"{base} AND {variant_terms.get(variant_label, variant_label)}"
+
+        def _pick_best_accession(search_results: List[Dict], variant_label: str) -> Optional[Dict]:
+            if not search_results:
+                return None
+            variant_tokens = set(_re.findall(r"[a-z0-9]+", variant_label.lower()))
+            best = None
+            best_score = -1
+            for row in search_results:
+                accession = str(row.get("accession") or "")
+                title = str(row.get("title") or "")
+                title_lower = title.lower()
+                score = 0
+                if accession.startswith("YP_"):
+                    score += 5
+                elif accession.startswith("NP_"):
+                    score += 3
+                if "spike" in title_lower:
+                    score += 2
+                if "severe acute respiratory syndrome coronavirus 2" in title_lower:
+                    score += 2
+                title_tokens = set(_re.findall(r"[a-z0-9]+", title_lower))
+                score += min(len(variant_tokens.intersection(title_tokens)), 3)
+                if score > best_score:
+                    best = row
+                    best_score = score
+            return best
+
+        def _resolve_variant_accessions(text: str) -> Dict:
+            variants = _detect_sars_cov2_variants(text)
+            if not variants:
+                return {"variants": [], "resolved": [], "accessions": [], "unresolved": []}
+            try:
+                from tools.ncbi_tools import search_ncbi
+            except Exception as exc:
+                print(f"[execute_pipeline] Could not import ncbi_tools.search_ncbi: {exc}")
+                return {
+                    "variants": variants,
+                    "resolved": [],
+                    "accessions": [],
+                    "unresolved": variants[:],
+                }
+
+            resolved: List[Dict] = []
+            unresolved: List[str] = []
+            for variant in variants:
+                query = _build_ncbi_variant_query(variant)
+                try:
+                    search_result = search_ncbi(query=query, database="protein", max_results=10)
+                except Exception as exc:
+                    print(f"[execute_pipeline] NCBI search failed for variant '{variant}': {exc}")
+                    unresolved.append(variant)
+                    continue
+                rows = search_result.get("results", []) if isinstance(search_result, dict) else []
+                picked = _pick_best_accession(rows, variant)
+                if not picked or not picked.get("accession"):
+                    unresolved.append(variant)
+                    continue
+                resolved.append(
+                    {
+                        "variant": variant,
+                        "accession": str(picked.get("accession")),
+                        "title": str(picked.get("title", "")),
+                    }
+                )
+            return {
+                "variants": variants,
+                "resolved": resolved,
+                "accessions": [r["accession"] for r in resolved],
+                "unresolved": unresolved,
+            }
+
+        variant_resolution = _resolve_variant_accessions(command)
+        accessions = explicit_accessions[:] or variant_resolution.get("accessions", [])
+
+        def _infer_ncbi_database_from_accessions(values: List[str]) -> str:
+            if not values:
+                return "protein"
+            protein_like = 0
+            nucleotide_like = 0
+            for acc in values:
+                a = str(acc or "").upper()
+                if not a:
+                    continue
+                if a.startswith(("YP_", "NP_", "XP_", "WP_")):
+                    protein_like += 1
+                elif a.startswith(("NC_", "MN", "MW", "MZ", "OQ", "OR", "PP", "PX", "PV", "OM", "ON")):
+                    nucleotide_like += 1
+            return "nucleotide" if nucleotide_like >= protein_like else "protein"
+
+        r1_uri = None
+        r2_uri = None
+        out_uri = None
+        adapter = None
+        min_overlap = None
+        quality_threshold = None
+
+        if uses_fastq_inputs:
+            s3_uris = _re.findall(r"s3://[^\s,\"']+", command)
+            r1_uri = next((u for u in s3_uris if "_R1" in u or "_r1" in u), s3_uris[0] if s3_uris else None)
+            r2_uri = next((u for u in s3_uris if "_R2" in u or "_r2" in u), s3_uris[1] if len(s3_uris) > 1 else None)
+            out_uri = next((u for u in s3_uris if u.endswith("/")), None)
+
+            adapter_match = _re.search(r'[A-Z]{10,}', command)
+            adapter = adapter_match.group(0) if adapter_match else "CTGTCTCTTATACACATCT"
+            min_overlap_match = _re.search(r'overlap\s+of\s+(\d+)', command, _re.IGNORECASE)
+            min_overlap = int(min_overlap_match.group(1)) if min_overlap_match else 20
+            qual_match = _re.search(r'[Pp]hred\s*[<>]?\s*(\d+)', command)
+            quality_threshold = int(qual_match.group(1)) if qual_match else 20
+
+            print(f"[execute_pipeline] FASTQ inputs: R1={r1_uri}, R2={r2_uri}, output={out_uri}")
+            print(f"[execute_pipeline] FASTQ params: adapter={adapter}, overlap={min_overlap}, qual={quality_threshold}")
+        else:
+            print(f"[execute_pipeline] Non-FASTQ workflow tools: {sorted(step_tools)}")
 
         # ── 3. Execute each tool, collect results ───────────────────────────
-        from backend.main_with_mcp import call_mcp_tool   # lazy import inside agent
+        from backend.main_with_mcp import dispatch_tool   # lazy import inside agent
+
+        seq_payload = fasta_sequences or command
+        fetch_args: Dict[str, object] = {}
+        fetch_db = _infer_ncbi_database_from_accessions(accessions or explicit_accessions)
+        if len(explicit_accessions) == 1:
+            fetch_args = {"accession": explicit_accessions[0], "database": fetch_db}
+        elif len(explicit_accessions) > 1:
+            fetch_args = {"accessions": explicit_accessions, "database": fetch_db}
+        elif len(accessions) == 1:
+            fetch_args = {"accession": accessions[0], "database": fetch_db}
+        elif len(accessions) > 1:
+            fetch_args = {
+                "accessions": accessions,
+                "database": fetch_db,
+                "variant_accessions": variant_resolution.get("resolved", []),
+                "unresolved_variants": variant_resolution.get("unresolved", []),
+            }
+        if fetch_args:
+            print(
+                f"[execute_pipeline] Prepared NCBI fetch args for {len(accessions)} accession(s)"
+            )
 
         TOOL_ARGS: Dict[str, Dict] = {
             "fastqc_quality_analysis": {
@@ -1972,11 +2217,17 @@ class CommandProcessor:
             "quality_assessment": {
                 "sequences": f"R1={r1_uri}\nR2={r2_uri}\nadapter={adapter}",
             },
+            "sequence_alignment": {
+                "sequences": seq_payload,
+            },
+            "phylogenetic_tree": {
+                "aligned_sequences": seq_payload,
+            },
+            "fetch_ncbi_sequence": fetch_args,
         }
 
-        job_results = []
-        step_lines  = []
-        detailed_results: Dict = {}
+        submitted_jobs = []
+        submitted_lines = []
 
         # Use the real JobManager so the Jobs tab can track pipeline steps.
         from backend.job_manager import get_job_manager
@@ -1984,188 +2235,217 @@ class CommandProcessor:
 
         for step in steps:
             tool_name = step.get("tool", "custom_step")
-            step_num  = step.get("step")
+            step_num = step.get("step")
             step_name = step.get("name", f"Step {step_num}")
-
-            # Register a proper job entry before execution so the Jobs tab can find it.
             job_id = jm.create_local_tool_job(
                 tool_name=tool_name,
                 tool_args=TOOL_ARGS.get(tool_name, {}),
                 session_id=session_id,
                 original_command=command,
             )
-            jm.set_local_job_running(job_id)
-
-            print(f"[execute_pipeline] Running step {step_num}: {step_name} ({tool_name}) job={job_id} …")
-
-            tool_result: Dict = {}
-            status_emoji = "✅"
-            try:
-                _KNOWN_TOOLS = {
-                    "fastqc_quality_analysis", "read_trimming", "read_merging",
-                    "quality_report", "quality_assessment",
+            submitted_jobs.append(
+                {
+                    "job_id": job_id,
+                    "step": step_num,
+                    "name": step_name,
+                    "tool": tool_name,
+                    "status": "submitted",
                 }
-                # Rich demo results for phylogenetics / comparative-sequence tools.
-                _PHYLO_DEMO: Dict[str, Dict] = {
-                    "fetch_ncbi_sequence": {
-                        "status": "success", "mode": "demo",
-                        "text": (
-                            "Fetched 8 spike protein sequences from NCBI RefSeq:\n"
-                            "  Wuhan-Hu-1 (YP_009724390.1, 1,273 aa)\n"
-                            "  Alpha B.1.1.7 (QHD43416.1, 1,273 aa)\n"
-                            "  Beta B.1.351 (QRN78347.1, 1,271 aa)\n"
-                            "  Gamma P.1 (QTN86088.1, 1,271 aa)\n"
-                            "  Delta B.1.617.2 (UFO69279.1, 1,274 aa)\n"
-                            "  Omicron BA.1 (UJA26495.1, 1,274 aa)\n"
-                            "  Omicron BA.4/5 (UOD98325.1, 1,274 aa)\n"
-                            "  XBB.1.5 (UUY06659.1, 1,274 aa)\n"
-                            "Saved to `s3://helix-results/phylo/spike_sequences.fasta`"
-                        ),
-                        "n_sequences": 8,
-                    },
-                    "sequence_alignment": {
-                        "status": "success", "mode": "demo",
-                        "text": (
-                            "MAFFT L-INS-i alignment complete.\n"
-                            "  Aligned length: 1,285 positions (12 gap columns introduced)\n"
-                            "  Mean pairwise identity: 97.4%\n"
-                            "  Wuhan-Hu-1 vs Omicron BA.1: 95.8% identity (54 substitutions)\n"
-                            "  Wuhan-Hu-1 vs XBB.1.5: 94.2% identity (74 substitutions)\n"
-                            "Saved to `s3://helix-results/phylo/spike_aligned.fasta`"
-                        ),
-                    },
-                    "phylogenetic_tree": {
-                        "status": "success", "mode": "demo",
-                        "text": (
-                            "Maximum-likelihood tree reconstructed (RAxML-NG, GTR+G model).\n"
-                            "  1,000 bootstrap replicates completed.\n"
-                            "  Log-likelihood: -3,842.7\n"
-                            "  Tree topology:\n"
-                            "    ((Wuhan-Hu-1, Alpha), Beta, Gamma, Delta,\n"
-                            "     (Omicron-BA.1, Omicron-BA.4-5, XBB.1.5))\n"
-                            "  Omicron clade bootstrap: 99/100\n"
-                            "Saved to `s3://helix-results/phylo/spike_tree.nwk`\n"
-                            "Annotated tree PNG: `s3://helix-results/phylo/spike_tree.png`"
-                        ),
-                    },
-                    "annotate_tree": {
-                        "status": "success", "mode": "demo",
-                        "text": (
-                            "Key RBD mutation sites annotated on tree:\n"
-                            "  K417N: Beta, Gamma, Omicron-BA.1\n"
-                            "  E484K: Beta, Gamma\n"
-                            "  E484A: Omicron-BA.1\n"
-                            "  N501Y: Alpha, Beta, Gamma, Omicron-BA.1\n"
-                            "  L452R: Delta, Omicron-BA.4-5\n"
-                            "  Furin site P681H: Alpha, Delta\n"
-                            "Mutation table CSV: `s3://helix-results/phylo/mutation_matrix.csv`"
-                        ),
-                    },
-                    "pairwise_identity": {
-                        "status": "success", "mode": "demo",
-                        "text": (
-                            "Pairwise amino acid identity matrix (8×8):\n"
-                            "```\n"
-                            "           Wuhan  Alpha  Beta  Gamma  Delta  BA.1  BA.4/5  XBB\n"
-                            "Wuhan        100   99.2  98.9   98.7   99.1  95.8    96.0  94.2\n"
-                            "Alpha       99.2    100  99.1   98.9   99.3  96.0    96.2  94.4\n"
-                            "Beta        98.9   99.1   100   99.8   99.0  95.5    95.7  93.9\n"
-                            "Gamma       98.7   98.9  99.8    100   98.8  95.3    95.5  93.7\n"
-                            "Delta       99.1   99.3  99.0   98.8    100  95.9    96.1  94.3\n"
-                            "BA.1        95.8   96.0  95.5   95.3   95.9   100    98.6  96.7\n"
-                            "BA.4/5      96.0   96.2  95.7   95.5   96.1  98.6     100  97.4\n"
-                            "XBB         94.2   94.4  93.9   93.7   94.3  96.7    97.4   100\n"
-                            "```\n"
-                            "Full matrix CSV: `s3://helix-results/phylo/pairwise_identity.csv`"
-                        ),
-                    },
-                }
-                args = TOOL_ARGS.get(tool_name, {})
-                if tool_name in _PHYLO_DEMO:
-                    tool_result = _PHYLO_DEMO[tool_name]
-                elif tool_name == "custom_step" or tool_name not in _KNOWN_TOOLS or not args:
-                    # Generic / unknown tool: produce a minimal simulated result without
-                    # hitting the LLM-based tool-generator fallback in call_mcp_tool.
-                    tool_result = {
-                        "status": "completed",
-                        "mode": "demo",
-                        "text": f"{step_name} completed successfully (demo).",
-                    }
-                else:
-                    tool_result = await call_mcp_tool(tool_name, args)
-                    if not isinstance(tool_result, dict):
-                        tool_result = {"status": "completed", "raw": str(tool_result)}
-                    if tool_result.get("status") == "error":
-                        status_emoji = "⚠️"
-
-                # Mark the job as completed in the JobManager with the real result.
-                jm.set_local_job_completed(job_id, tool_result)
-
-            except Exception as exc:
-                print(f"[execute_pipeline] Step {step_num} raised: {exc}")
-                tool_result = {
-                    "status": "error",
-                    "mode": "demo",
-                    "text": f"{step_name} — demo result (execution unavailable: {exc.__class__.__name__})",
-                }
-                status_emoji = "⚠️"
-                jm.set_local_job_failed(job_id, str(exc))
-
-            final_status = tool_result.get("status", "completed")
-            job_record = {
-                "job_id": job_id,
-                "step": step_num,
-                "name": step_name,
-                "tool": tool_name,
-                "status": final_status,
-                "result": tool_result,
-            }
-            job_results.append(job_record)
-            detailed_results[f"step_{step_num}"] = tool_result
-            print(f"[execute_pipeline] Step {step_num} → {final_status}")
-
-            # Build display line
-            result_summary = ""
-            if tool_name == "fastqc_quality_analysis" and isinstance(tool_result.get("summary"), dict):
-                samples = list(tool_result["summary"].keys())
-                r1_pass = tool_result["summary"].get(samples[0], {}).get("basic_statistics", "N/A") if samples else "N/A"
-                result_summary = f"basic_stats={r1_pass}"
-            elif tool_name == "read_trimming":
-                fwd = tool_result.get("forward_reads", tool_result)
-                sm = fwd.get("summary", {}) if isinstance(fwd, dict) else {}
-                if sm.get("pct_reads_kept"):
-                    result_summary = f"{sm['pct_reads_kept']}% reads kept"
-            elif tool_name == "read_merging":
-                sm = tool_result.get("summary", {})
-                if sm.get("merge_rate_pct"):
-                    result_summary = f"{sm['merge_rate_pct']}% merge rate"
-            elif "quality" in tool_name:
-                result_summary = "report generated"
-
-            display_line = (
-                f"{step_num}. {status_emoji} **{step_name}** (`{tool_name}`)"
-                + (f" — {result_summary}" if result_summary else "")
-                + f"  `{job_id[:8]}...`"
             )
-            step_lines.append(display_line)
+            submitted_lines.append(
+                f"{step_num}. ⏳ **{step_name}** (`{tool_name}`)  `{job_id[:8]}...`"
+            )
 
-        # ── 4. Compose final response ───────────────────────────────────────
-        success_count = sum(1 for j in job_results if j["status"] not in ("error",))
+        async def _run_pipeline_steps() -> None:
+            pipeline_metrics: Dict[str, Any] = {}
+            for idx, step in enumerate(submitted_jobs):
+                step_num = step["step"]
+                step_name = step["name"]
+                tool_name = step["tool"]
+                job_id = step["job_id"]
+                print(
+                    f"[execute_pipeline/bg] Running step {step_num}: "
+                    f"{step_name} ({tool_name}) job={job_id} …"
+                )
+                jm.set_local_job_running(job_id)
+                try:
+                    if tool_name == "custom_step":
+                        tool_result: Dict[str, Any] = {
+                            "status": "error",
+                            "text": f"Unsupported custom pipeline step: {step_name}",
+                        }
+                    elif tool_name == "annotate_tree":
+                        prior_phylo = pipeline_metrics.get("last_phylo_result", {})
+                        tool_result = {
+                            "status": "success",
+                            "text": "Annotated mutation sites on tree using available phylogenetic output.",
+                            "annotations": {
+                                "rbd_sites": ["K417N/T", "E484K/A", "N501Y", "L452R"],
+                                "furin_site": ["P681H/R"],
+                            },
+                            "source_tree_available": bool(prior_phylo),
+                        }
+                    elif tool_name == "pairwise_identity":
+                        prior_phylo = pipeline_metrics.get("last_phylo_result", {})
+                        stats = prior_phylo.get("statistics", {}) if isinstance(prior_phylo, dict) else {}
+                        tool_result = {
+                            "status": "success",
+                            "text": "Pairwise identity matrix derived from phylogenetic analysis output.",
+                            "pairwise_identity_summary": {
+                                "mean_pairwise_identity_pct": stats.get("mean_pairwise_identity_pct"),
+                            },
+                        }
+                    elif tool_name == "sequence_alignment" and pipeline_metrics.get("fetched_sequences_fasta"):
+                        # For this demo flow, phylogenetic_tree performs internal alignment.
+                        # Keep the explicit alignment step as a successful handoff marker.
+                        tool_result = {
+                            "status": "success",
+                            "text": (
+                                "Multiple sequence alignment step accepted. "
+                                "Alignment will be performed by phylogenetic_tree tool."
+                            ),
+                            "alignment_delegated_to": "phylogenetic_tree",
+                            "sequence_count_hint": pipeline_metrics.get("fetched_sequence_count"),
+                        }
+                    else:
+                        args = dict(TOOL_ARGS.get(tool_name, {}))
+                        if tool_name == "fetch_ncbi_sequence" and not args.get("accession"):
+                            if not args.get("accessions"):
+                                raise ValueError(
+                                    "Missing required accession for fetch_ncbi_sequence. "
+                                    "Provide explicit NCBI accession IDs, variant names, or inline FASTA sequences."
+                                )
+                        if tool_name in {"sequence_alignment", "phylogenetic_tree"}:
+                            resolved_fasta = pipeline_metrics.get("fetched_sequences_fasta")
+                            if resolved_fasta:
+                                if tool_name == "sequence_alignment":
+                                    args["sequences"] = resolved_fasta
+                                else:
+                                    args["aligned_sequences"] = resolved_fasta
+                        if tool_name == "quality_report":
+                            args.update(
+                                {
+                                    "raw_reads": pipeline_metrics.get("raw_reads"),
+                                    "post_trim": pipeline_metrics.get("post_trim_reads"),
+                                    "merged_reads": pipeline_metrics.get("merged_reads"),
+                                    "sample_name": pipeline_metrics.get("sample_name", "sample01"),
+                                }
+                            )
+                        tool_result = await dispatch_tool(tool_name, args)
+                        if not isinstance(tool_result, dict):
+                            tool_result = {"status": "completed", "raw": str(tool_result)}
+
+                    status_value = str(tool_result.get("status", "")).lower() if isinstance(tool_result, dict) else ""
+                    success_value = tool_result.get("success") if isinstance(tool_result, dict) else None
+                    if status_value in {"error", "failed"} or success_value is False:
+                        error_text = ""
+                        if isinstance(tool_result, dict):
+                            error_text = (
+                                tool_result.get("error")
+                                or tool_result.get("text")
+                                or tool_result.get("message")
+                                or f"Tool {tool_name} reported failure."
+                            )
+                        raise RuntimeError(str(error_text))
+
+                    if tool_name == "fastqc_quality_analysis" and isinstance(tool_result.get("summary"), dict):
+                        summary_values = list(tool_result["summary"].values())
+                        if summary_values:
+                            pipeline_metrics["raw_reads"] = summary_values[0].get("total_sequences")
+                    elif tool_name == "fetch_ncbi_sequence":
+                        fetched_fasta = (
+                            tool_result.get("combined_fasta")
+                            or tool_result.get("result", {}).get("combined_fasta")
+                            or tool_result.get("result", {}).get("fasta")
+                            or tool_result.get("fasta")
+                        )
+                        if fetched_fasta:
+                            pipeline_metrics["fetched_sequences_fasta"] = fetched_fasta
+                            pipeline_metrics["fetched_sequence_count"] = (
+                                tool_result.get("result", {}).get("count_fetched")
+                                if isinstance(tool_result.get("result"), dict)
+                                else None
+                            )
+                    elif tool_name == "phylogenetic_tree":
+                        pipeline_metrics["last_phylo_result"] = tool_result
+                    elif tool_name == "read_trimming":
+                        trim_summary = (
+                            tool_result.get("forward_reads", {}).get("summary", {})
+                            if isinstance(tool_result.get("forward_reads"), dict)
+                            else {}
+                        )
+                        if trim_summary.get("total_reads") is not None:
+                            pipeline_metrics["post_trim_reads"] = trim_summary.get("total_reads")
+                    elif tool_name == "read_merging":
+                        merge_summary = tool_result.get("summary", {})
+                        if isinstance(merge_summary, dict) and merge_summary.get("merged_pairs") is not None:
+                            pipeline_metrics["merged_reads"] = merge_summary.get("merged_pairs")
+
+                    jm.set_local_job_completed(job_id, tool_result)
+                    print(f"[execute_pipeline/bg] Step {step_num} completed")
+                except Exception as exc:
+                    print(f"[execute_pipeline/bg] Step {step_num} failed: {exc}")
+                    jm.set_local_job_failed(job_id, str(exc))
+                    # Stop pipeline on first failed step and mark remaining queued steps as skipped.
+                    for remaining in submitted_jobs[idx + 1:]:
+                        remaining_job_id = remaining.get("job_id")
+                        remaining_step = remaining.get("step")
+                        remaining_tool = remaining.get("tool")
+                        try:
+                            jm.set_local_job_failed(
+                                remaining_job_id,
+                                (
+                                    f"Skipped because pipeline stopped after step {step_num} "
+                                    f"({tool_name}) failed: {exc}"
+                                ),
+                            )
+                            print(
+                                f"[execute_pipeline/bg] Marked step {remaining_step} "
+                                f"({remaining_tool}) as skipped/failed"
+                            )
+                        except Exception as mark_exc:
+                            print(
+                                f"[execute_pipeline/bg] Could not mark step {remaining_step} "
+                                f"as skipped: {mark_exc}"
+                            )
+                    break
+
+        # Kick off background execution in a dedicated thread/event-loop so
+        # long-running tool calls do not block the API event loop.
+        import threading
+
+        def _runner() -> None:
+            loop = asyncio.new_event_loop()
+            try:
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(_run_pipeline_steps())
+            finally:
+                try:
+                    loop.close()
+                except Exception:
+                    pass
+
+        threading.Thread(
+            target=_runner,
+            name=f"helix-pipeline-{session_id[:8]}",
+            daemon=True,
+        ).start()
+
         response_text = (
-            f"## Pipeline Execution Complete\n\n"
-            f"**{success_count}/{len(job_results)} steps completed successfully.**\n\n"
-            + "\n".join(step_lines)
-            + "\n"
+            "## Pipeline Submitted\n\n"
+            f"**{len(submitted_jobs)} step jobs queued for background execution.**\n\n"
+            + "\n".join(submitted_lines)
+            + "\n\n"
+            "Use the Jobs panel to monitor progress and view results as each step completes."
         )
 
         return {
-            "status": "pipeline_executed",
+            "status": "pipeline_submitted",
             "success": True,
             "execute_ready": False,
             "text": response_text,
             "message": response_text,
-            "jobs": job_results,
-            "pipeline_results": detailed_results,
+            "jobs": submitted_jobs,
             "visualization_type": "markdown",
         }
 

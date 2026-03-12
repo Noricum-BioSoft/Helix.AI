@@ -17,11 +17,11 @@ project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
 
-def analyze_call_mcp_tool():
-    """Analyze call_mcp_tool to verify refactoring."""
-    call_mcp_tool_path = project_root / "backend" / "main_with_mcp.py"
+def analyze_dispatch_tool():
+    """Analyze dispatch_tool to verify refactoring."""
+    dispatch_tool_path = project_root / "backend" / "main_with_mcp.py"
     
-    with open(call_mcp_tool_path, 'r') as f:
+    with open(dispatch_tool_path, 'r') as f:
         source = f.read()
     
     tree = ast.parse(source)
@@ -91,7 +91,7 @@ def main():
     print("=" * 70)
     print()
     
-    analyzer = analyze_call_mcp_tool()
+    analyzer = analyze_dispatch_tool()
     
     print("Analysis Results:")
     print("-" * 70)

@@ -49,6 +49,65 @@
   --warning: #FFC107;
   --danger: #DC3545;
   --info: var(--brand-blue);
+
+  /* Accessible sizing scale */
+  --font-size-base: 1.2rem;
+  --font-size-sm: 1.08rem;
+  --font-size-xs: 1rem;
+  --line-height-base: 1.6;
+  --control-min-height: 3.2rem;
+  --control-padding-y: 0.68rem;
+  --control-padding-x: 1.1rem;
+}
+
+html {
+  font-size: 19px;
+}
+
+body {
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-base);
+  color: var(--text-primary);
+}
+
+h1 {
+  font-size: clamp(2rem, 2.8vw, 2.6rem);
+}
+
+h2 {
+  font-size: clamp(1.75rem, 2.3vw, 2.2rem);
+}
+
+h3 {
+  font-size: clamp(1.5rem, 2vw, 1.9rem);
+}
+
+h4 {
+  font-size: clamp(1.3rem, 1.7vw, 1.6rem);
+}
+
+h5 {
+  font-size: clamp(1.15rem, 1.4vw, 1.35rem);
+}
+
+h6 {
+  font-size: clamp(1.05rem, 1.1vw, 1.2rem);
+}
+
+p,
+li,
+label,
+input,
+textarea,
+select,
+button {
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-base);
+}
+
+small,
+.small {
+  font-size: var(--font-size-sm) !important;
 }
 
 /* Bootstrap Overrides */
@@ -56,6 +115,30 @@
   background-color: var(--brand-gold) !important;
   border-color: var(--brand-gold) !important;
   color: var(--text-on-gold) !important;
+}
+
+.btn {
+  min-height: var(--control-min-height);
+  padding: var(--control-padding-y) var(--control-padding-x);
+  font-size: var(--font-size-base);
+  font-weight: 600;
+}
+
+.btn-sm {
+  min-height: 2.8rem;
+  font-size: var(--font-size-sm);
+}
+
+.form-control,
+.form-select,
+.form-check-input {
+  min-height: var(--control-min-height);
+  font-size: var(--font-size-base);
+  padding: var(--control-padding-y) var(--control-padding-x);
+}
+
+.form-check-label {
+  font-size: var(--font-size-base);
 }
 
 .btn-primary:hover,
@@ -183,7 +266,7 @@ a:hover {
 }
 
 .prompt-hero-subtitle {
-  font-size: 0.95rem;
+  font-size: 1.12rem;
 }
 
 .prompt-input-wrapper {
@@ -212,7 +295,7 @@ a:hover {
   background: transparent;
   resize: none;
   outline: none;
-  font-size: 1rem;
+  font-size: 1.18rem;
   line-height: 1.5;
   min-height: 2.5rem;
   max-height: calc(1.5em * 15);
@@ -225,15 +308,15 @@ a:hover {
 }
 
 .prompt-icon-button {
-  width: 40px;
-  height: 40px;
+  width: 46px;
+  height: 46px;
   border-radius: 999px;
   border: 1px solid var(--border-color);
   background: var(--brand-white);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.1rem;
+  font-size: 1.2rem;
   cursor: pointer;
   transition: background 0.2s ease, transform 0.2s ease;
 }
@@ -268,12 +351,12 @@ a:hover {
   border-radius: 12px !important;
   box-shadow: 0 8px 16px rgba(58, 96, 168, 0.08);
   min-width: 160px;
-  height: 44px;
+  height: 48px;
   display: inline-flex !important;
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
-  font-size: 1.05rem;
+  font-size: 1.12rem;
   font-weight: 600;
   padding: 0 1rem;
   /* Override Bootstrap's outline-secondary blue text so the gradient Demo button
@@ -334,7 +417,7 @@ a:hover {
 }
 
 .expanded-sidebar-label {
-  font-size: 0.95rem;
+  font-size: 1.12rem;
   font-weight: 600;
   color: var(--text-secondary);
 }
@@ -371,8 +454,8 @@ a:hover {
 }
 
 .collapsed-sidebar-button {
-  width: 40px;
-  height: 40px;
+  width: 46px;
+  height: 46px;
   border-radius: 12px;
   border: 1px solid var(--brand-gold);
   background: var(--brand-white);
@@ -407,7 +490,7 @@ a:hover {
 .collapsed-sidebar-label {
   writing-mode: vertical-rl;
   text-orientation: mixed;
-  font-size: 0.9rem;
+  font-size: 1rem;
   font-weight: 600;
   letter-spacing: 0.08em;
   color: var(--text-secondary);
@@ -419,14 +502,14 @@ a:hover {
 
 .prompt-agent-button {
   border-radius: 50%;
-  width: 48px;
-  height: 48px;
+  width: 54px;
+  height: 54px;
   padding: 0;
   font-weight: 600;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.1rem;
+  font-size: 1.2rem;
   transition: transform 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
 }
 
@@ -446,14 +529,14 @@ a:hover {
 
 .prompt-submit-button {
   border-radius: 50%;
-  width: 48px;
-  height: 48px;
+  width: 54px;
+  height: 54px;
   padding: 0;
   font-weight: 600;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.15rem;
+  font-size: 1.25rem;
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
@@ -498,7 +581,7 @@ a:hover {
 }
 
 .prompt-hint {
-  font-size: 0.85rem;
+  font-size: 1.06rem;
 }
 
 .prompt-hint kbd {
@@ -506,7 +589,7 @@ a:hover {
   border-radius: 4px;
   border: 1px solid var(--border-color);
   background: #f9fafb;
-  font-size: 0.75rem;
+  font-size: 0.9rem;
   color: var(--text-primary);
   font-weight: 600;
   box-shadow: inset 0 1px 1px rgba(0,0,0,0.05);
@@ -544,7 +627,22 @@ pre {
 }
 
 .structured-value {
+  font-size: 1.08rem;
+}
+
+.newick-display {
+  margin: 0;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: #F8FAFC;
+  color: #0F172A;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.95rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
 }
 
 .structured-list {
@@ -562,7 +660,7 @@ pre {
   border-radius: 1rem;
   padding: 1.5rem;
   box-shadow: 0 12px 24px rgba(42, 74, 136, 0.08);
-  font-size: 0.95rem;
+  font-size: 1.12rem;
   line-height: 1.6;
   color: var(--text-primary);
 }
@@ -596,11 +694,23 @@ pre {
 }
 
 .agent-response-markdown pre {
-  background: #0f172a;
-  color: #e2e8f0;
+  background: #F8FAFC;
+  color: #0F172A;
   padding: 1rem;
   border-radius: 8px;
   overflow-x: auto;
+  border: 1px solid #E2E8F0;
+}
+
+.agent-response-markdown pre code {
+  background: transparent;
+  color: inherit;
+}
+
+.agent-response-markdown pre::selection,
+.agent-response-markdown pre *::selection {
+  background: #BFDBFE;
+  color: #0F172A;
 }
 
 .agent-response-markdown a {
@@ -608,4 +718,50 @@ pre {
   text-decoration: underline;
 }
 
+/* ── GFM table styles ────────────────────────────────────────────────── */
+.agent-response-markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0;
+  font-size: 0.98rem;
+  overflow-x: auto;
+  display: block;
+}
+
+.agent-response-markdown thead tr {
+  background: #F1F5F9;
+}
+
+.agent-response-markdown th,
+.agent-response-markdown td {
+  border: 1px solid #E2E8F0;
+  padding: 0.45rem 0.75rem;
+  text-align: left;
+  vertical-align: top;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.agent-response-markdown th {
+  font-weight: 600;
+  color: #1E293B;
+  background: #F1F5F9;
+}
+
+.agent-response-markdown tbody tr:nth-child(even) {
+  background: #F8FAFC;
+}
+
+.agent-response-markdown tbody tr:hover {
+  background: #EFF6FF;
+}
+
+/* ── GFM strikethrough / task-list extras ───────────────────────────── */
+.agent-response-markdown del {
+  opacity: 0.6;
+}
+
+.agent-response-markdown input[type='checkbox'] {
+  margin-right: 0.4rem;
+}
 

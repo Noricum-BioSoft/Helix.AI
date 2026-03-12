@@ -374,8 +374,10 @@ class HistoryManager:
         
         try:
             import boto3
-            # Try to create S3 client - will use default AWS credentials from environment/IAM role
-            self._s3_client = boto3.client('s3')
+            from botocore.config import Config as _BotoConfig
+            # Short timeouts so blocking S3 calls don't stall the asyncio event loop.
+            _cfg = _BotoConfig(connect_timeout=3, read_timeout=5, retries={"max_attempts": 1})
+            self._s3_client = boto3.client('s3', config=_cfg)
             return self._s3_client
         except ImportError:
             logger.warning("boto3 not available - S3 path creation will be skipped")
@@ -419,36 +421,51 @@ class HistoryManager:
             return None
     
     def _ensure_sessions_loaded(self):
-        """Lazily load existing session data from disk on first access."""
-        # In mock mode / unit tests we want deterministic, fast behavior and should
-        # not scan or parse potentially large on-disk session history.
-        if os.getenv("PYTEST_CURRENT_TEST") is not None:
-            self._sessions_loaded = True
-            return
-        if os.getenv("HELIX_MOCK_MODE") == "1":
-            self._sessions_loaded = True
-            return
-        if self._sessions_loaded:
-            return
-        self._load_existing_sessions()
+        """Mark sessions as ready without scanning all files.
+
+        Loading every session JSON at startup is O(n_sessions) and can block
+        the event loop for minutes when thousands of session files accumulate.
+        Instead, sessions are loaded on-demand in ensure_session_exists via
+        _load_single_session_from_disk.
+        """
         self._sessions_loaded = True
-    
+
+    def _load_single_session_from_disk(self, session_id: str) -> bool:
+        """Attempt to load a single session JSON file into self.sessions.
+
+        Returns True if the file existed and was loaded successfully.
+        """
+        session_file = self.storage_dir / f"{session_id}.json"
+        if not session_file.exists():
+            return False
+        try:
+            with open(session_file, "r") as f:
+                self.sessions[session_id] = json.load(f)
+            return True
+        except json.JSONDecodeError as e:
+            logger.error(f"Corrupted session file {session_file}: {e}")
+            backup = session_file.with_suffix(".json.corrupted")
+            try:
+                session_file.rename(backup)
+            except Exception:
+                pass
+            return False
+        except Exception as e:
+            logger.error(f"Failed to load session {session_file}: {e}")
+            return False
+
     def _load_existing_sessions(self):
-        """Load existing session data from disk."""
+        """Load existing session data from disk (used by tests / maintenance tasks only)."""
         for session_file in self.storage_dir.glob("*.json"):
-            # Skip temporary files
             if session_file.name.endswith('.tmp'):
                 continue
-            
             try:
                 with open(session_file, 'r') as f:
                     session_data = json.load(f)
                     session_id = session_file.stem
                     self.sessions[session_id] = session_data
             except json.JSONDecodeError as e:
-                # Handle corrupted JSON files
                 logger.error(f"Failed to load session {session_file} due to JSON corruption: {e}")
-                # Try to create a backup of the corrupted file
                 backup_file = session_file.with_suffix('.json.corrupted')
                 try:
                     session_file.rename(backup_file)
@@ -500,7 +517,21 @@ class HistoryManager:
             self._save_session(session_id)
             logger.info(f"Created new session: {session_id}" + (f" with S3 path: {s3_path}" if s3_path else " (S3 path creation skipped)"))
             return session_id
-    
+
+    def get_session_storage_paths(self, session_id: str) -> Dict[str, str]:
+        """Return absolute paths where this session's inputs, prompts, and results are stored.
+
+        - storage_root: base directory (e.g. sessions/)
+        - session_file: session state JSON (history, results, prompts)
+        - session_dir: per-session directory (artifacts, runs)
+        """
+        root = self.storage_dir.resolve()
+        return {
+            "storage_root": str(root),
+            "session_file": str(root / f"{session_id}.json"),
+            "session_dir": str(root / session_id),
+        }
+
     def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Get session data by ID.
         
@@ -801,6 +832,10 @@ class HistoryManager:
         
         with session_lock:
             if session_id not in self.sessions:
+                # Try to restore from disk before creating a fresh session
+                if self._load_single_session_from_disk(session_id):
+                    return  # Session was already on disk – nothing more to do
+
                 # Auto-create session if missing
                 session_dir = self.storage_dir / session_id
                 session_dir.mkdir(exist_ok=True)

@@ -73,6 +73,8 @@ _EXEC_VERBS = (
     "generate ",
     "submit ",
     "build ",
+    "calculate ",
+    "compute ",
 )
 
 

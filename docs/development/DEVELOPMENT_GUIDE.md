@@ -107,6 +107,12 @@ tools/
 └── command_handler.py       # Combined parser/executor
 ```
 
+## 📋 Release Readiness Roadmap
+
+For a structured plan to address stability, routing consolidation, and release-readiness issues, see [**RELEASE_READINESS_ROADMAP.md**](RELEASE_READINESS_ROADMAP.md). The roadmap is designed for coding agents and includes phases for documentation, MCP renaming, routing consolidation, keyword fragility reduction, unknown-prompt behavior, and eval expansion.
+
+---
+
 ## 🔧 Development Workflow
 
 ### 1. **Feature Development**

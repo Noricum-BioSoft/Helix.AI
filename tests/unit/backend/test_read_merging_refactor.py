@@ -16,7 +16,7 @@ from pathlib import Path
 project_root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from backend.main_with_mcp import call_mcp_tool
+from backend.main_with_mcp import dispatch_tool
 from backend.agent_tools import read_merging
 from backend.execution_broker import ExecutionBroker, ExecutionRequest
 
@@ -35,7 +35,7 @@ class TestReadMergingRefactor:
             "_from_broker": True  # Simulate call from execution broker
         }
         
-        # Mock the read_merging module import inside call_mcp_tool
+        # Mock the read_merging module import inside dispatch_tool
         with patch('read_merging.merge_reads_from_s3') as mock_merge_from_s3:
             mock_merge_from_s3.return_value = {
                 "status": "success",
@@ -46,7 +46,7 @@ class TestReadMergingRefactor:
             
             # Ensure tool-generator-agent is NOT called
             with patch('backend.tool_generator_agent.generate_and_execute_tool') as mock_tool_gen:
-                result = await call_mcp_tool("read_merging", arguments)
+                result = await dispatch_tool("read_merging", arguments)
                 
                 # Verify merge_reads_from_s3 was called directly
                 mock_merge_from_s3.assert_called_once_with(
@@ -81,7 +81,7 @@ class TestReadMergingRefactor:
             }
             
             with patch('read_merging.merge_reads_from_s3') as mock_merge_from_s3:
-                result = await call_mcp_tool("read_merging", arguments)
+                result = await dispatch_tool("read_merging", arguments)
                 
                 # Verify run_read_merging_raw was called directly
                 mock_run_raw.assert_called_once_with(
@@ -111,7 +111,7 @@ class TestReadMergingRefactor:
                 "output_path": "s3://bucket/data_R1_merged.fq"
             }
             
-            result = await call_mcp_tool("read_merging", arguments)
+            result = await dispatch_tool("read_merging", arguments)
             
             # Verify merge_reads_from_s3 was called with inferred output path
             call_args = mock_merge_from_s3.call_args
@@ -151,8 +151,8 @@ class TestReadMergingRefactor:
         import ast
         import inspect
         
-        # Read the call_mcp_tool function source
-        source = inspect.getsource(call_mcp_tool)
+        # Read the dispatch_tool function source
+        source = inspect.getsource(dispatch_tool)
         
         # Parse and analyze the AST
         tree = ast.parse(source)

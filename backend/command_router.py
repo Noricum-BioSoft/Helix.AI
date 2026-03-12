@@ -1,12 +1,55 @@
+import json
+import os
 import re
 from typing import Dict, Any, Optional, Tuple
-import os
 
 # Import directed evolution handler
 from backend.directed_evolution_handler import DirectedEvolutionHandler
 
+# Tools the router may return; must match agent's safe_tools + handle_natural_command.
+# Used by LLM-based routing. Order does not matter.
+ROUTER_TOOLS = [
+    ("toolbox_inventory", "List available tools and capabilities"),
+    ("read_merging", "Merge paired-end reads"),
+    ("read_trimming", "Trim reads by quality or adapter"),
+    ("fastqc_quality_analysis", "Run FastQC quality control on reads"),
+    ("sequence_alignment", "Align DNA/RNA sequences (MSA)"),
+    ("mutate_sequence", "Create sequence variants / mutations"),
+    ("plasmid_visualization", "Visualize plasmid/vector constructs"),
+    ("phylogenetic_tree", "Build phylogenetic/evolutionary tree"),
+    ("clustering_analysis", "Cluster sequences and get representatives"),
+    ("variant_selection", "Select N sequences or top/diverse variants"),
+    ("fetch_ncbi_sequence", "Fetch sequence from NCBI by accession"),
+    ("query_uniprot", "Query UniProt for protein sequences"),
+    ("lookup_go_term", "Look up Gene Ontology terms"),
+    ("bulk_rnaseq_analysis", "Bulk RNA-seq / DESeq2 differential expression"),
+    ("single_cell_analysis", "Single-cell RNA-seq (scPipeline, Seurat)"),
+    ("patch_and_rerun", "Change result/parameters and re-run"),
+    ("bio_rerun", "Re-run analysis with parameter changes"),
+    ("bio_diff_runs", "Compare two runs or iterations"),
+    ("local_edit_visualization", "Edit plot title or axis labels"),
+    ("local_update_scatter_x_scale", "Change plot axis scale (log/linear)"),
+    ("visualize_job_results", "Visualize results for an existing job ID"),
+    ("handle_natural_command", "No specific tool; use general assistant/tool generator"),
+]
+
+# JSON schema for the LLM router response (for planning and debugging).
+# Example: {"problem-description": "...", "intent": "...", "suggested-steps": ["Step one", "Step two"], "tool": "..."}
+ROUTER_LLM_RESPONSE_SCHEMA = {
+    "tool": "string (required): one of the tool names from the list",
+    "problem-description": "string (required): one-line summary of the user request",
+    "intent": "string (required): e.g. multi-step, single-tool, qa",
+    "suggested-steps": "array of strings (required): e.g. [\"Align sequences\", \"Compute consensus\"] or [\"Single tool\"]",
+}
+
+
 class CommandRouter:
-    """Simple keyword-based command router to replace ChatGPT."""
+    """Hybrid router: a few high-confidence keyword checks, then LLM-based tool selection.
+
+    Keyword-based matching is intentionally minimal and used as a fallback when the LLM
+    is off or fails; it cannot cover the full range of how scientists phrase requests.
+    Prefer enabling HELIX_USE_LLM_ROUTER and extending ROUTER_TOOLS / prompts over
+    adding more hard-coded phrases. See docs/PROMPT_NORMALIZATION.md."""
     
     def __init__(self):
         self.tool_mappings = {
@@ -70,13 +113,96 @@ class CommandRouter:
         
         # Initialize directed evolution handler
         self.de_handler = DirectedEvolutionHandler()
+
+    @staticmethod
+    def _scrub_for_keyword_matching(command: str) -> str:
+        """Scrub URIs and absolute paths to reduce keyword false positives."""
+        scrubbed = (command or "").lower()
+        scrubbed = re.sub(r"s3://[^\s]+", " ", scrubbed)
+        scrubbed = re.sub(r"(?:^|\s)(/[^\s]+)", " ", scrubbed)
+        scrubbed = re.sub(r"\s+", " ", scrubbed).strip()
+        return scrubbed
+
+    def _route_with_llm(
+        self, command: str, session_context: Dict[str, Any]
+    ) -> Optional[Tuple[str, Dict[str, Any]]]:
+        """
+        Use the same LLM as the intent classifier to pick the best tool for the command.
+        Returns (tool_name, base_params) or None if LLM is disabled/unavailable or on error.
+        Only returns tool names from ROUTER_TOOLS; otherwise returns handle_natural_command.
+        """
+        if os.getenv("HELIX_USE_LLM_ROUTER", "1").lower() not in ("1", "true", "yes"):
+            return None
+        if os.getenv("HELIX_MOCK_MODE") == "1":
+            return None
+        try:
+            from backend.intent_classifier import _get_llm
+            llm = _get_llm()
+        except Exception:
+            return None
+
+        allowed = {t[0] for t in ROUTER_TOOLS}
+        tools_text = "\n".join(f"- {name}: {desc}" for name, desc in ROUTER_TOOLS)
+        schema_desc = ", ".join(f"\"{k}\": {v}" for k, v in ROUTER_LLM_RESPONSE_SCHEMA.items())
+        system = (
+            "You are a router. Given a user command and a list of tools, respond with a single JSON object "
+            "with these keys: " + schema_desc + ". "
+            "For \"tool\", use exactly one of the tool names from the list, or \"handle_natural_command\" "
+            "if no single tool fits (e.g. multi-step or composite requests). Use only the exact tool names given."
+        )
+        user = f"User command:\n{command.strip()}\n\nTools:\n{tools_text}"
+        messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+        try:
+            response = llm.invoke(messages)
+            content = (response.content or "").strip()
+        except Exception:
+            return None
+        # Parse JSON
+        start = content.find("{")
+        end = content.rfind("}") + 1
+        if start < 0 or end <= start:
+            return None
+        try:
+            out = json.loads(content[start:end])
+            tool = (out.get("tool") or "").strip()
+        except (json.JSONDecodeError, TypeError):
+            return None
+        if not tool or tool not in allowed:
+            tool = "handle_natural_command"
+        base = {"session_id": session_context.get("session_id", "")}
+        if tool == "handle_natural_command":
+            base["command"] = command
+        # Attach parsed schema fields for planning/debugging (keys may have hyphens -> use safe keys)
+        raw_steps = out.get("suggested-steps")
+        if isinstance(raw_steps, list):
+            suggested_steps = [str(s).strip() for s in raw_steps if s]
+        elif isinstance(raw_steps, str) and raw_steps.strip():
+            suggested_steps = [raw_steps.strip()]
+        else:
+            suggested_steps = []
+        base["router_reasoning"] = {
+            "problem_description": out.get("problem-description") or "",
+            "intent": out.get("intent") or "",
+            "suggested_steps": suggested_steps,
+        }
+        return (tool, base)
     
     def route_command(self, command: str, session_context: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
         """
         Route a command to the appropriate tool based on keywords.
         Returns (tool_name, parameters)
         """
-        command_lower = command.lower()
+        command_lower = self._scrub_for_keyword_matching(command)
+
+        if os.getenv("HELIX_LLM_ROUTER_FIRST", "0").lower() in ("1", "true", "yes"):
+            llm_result = self._route_with_llm(command, session_context)
+            if llm_result is not None:
+                tool_name, base_params = llm_result
+                params = self._extract_parameters(command, tool_name, session_context)
+                for k, v in base_params.items():
+                    params.setdefault(k, v)
+                print(f"🔧 Command router: LLM-first routed -> {tool_name}")
+                return (tool_name, params)
         
         # Tool inventory / "what tools do you have?" (HIGHEST PRIORITY)
         if any(
@@ -95,17 +221,15 @@ class CommandRouter:
             print("🔧 Command router: Matched 'toolbox inventory' -> toolbox_inventory")
             return "toolbox_inventory", {}
 
-        # ── LOCAL ITERATION DEMO (HIGHEST PRIORITY in dev/mock) ────────────────
-        # Deterministic tools to prove iterative workflows locally.
-        # IMPORTANT: keep these routes limited to mock mode so production deployments
-        # do not attempt to run local-only demo tools (which may require Docker).
-        if os.getenv("HELIX_MOCK_MODE") == "1":
-            if any(p in command_lower for p in ["demo plot", "demo scatter", "local demo plot", "create demo plot", "generate demo plot"]):
-                print("🔧 Command router: Matched 'local demo plot' -> local_demo_plot_script")
-                # Extract x-scale if present
-                x_scale = "log" if ("log" in command_lower and "linear" not in command_lower) else ("linear" if "linear" in command_lower else "log")
-                return "local_demo_plot_script", {"x_scale": x_scale}
+        # ── LOCAL ITERATION DEMO ────────────────────────────────────────────────
+        # local_demo_plot_script uses only matplotlib — safe in all environments.
+        if any(p in command_lower for p in ["demo plot", "demo scatter", "local demo plot", "create demo plot", "generate demo plot"]):
+            print("🔧 Command router: Matched 'local demo plot' -> local_demo_plot_script")
+            x_scale = "log" if ("log" in command_lower and "linear" not in command_lower) else ("linear" if "linear" in command_lower else "log")
+            return "local_demo_plot_script", {"x_scale": x_scale}
 
+        # Script edit + rerun (was inside mock-mode guard; works in all modes)
+        if os.getenv("HELIX_MOCK_MODE") == "1":
             # Script edit + rerun (explicit deterministic syntax for mock mode)
             if "apply code patch" in command_lower or "apply patch" in command_lower:
                 # Prefer fenced diff block; else take everything after the marker.
@@ -135,13 +259,80 @@ class CommandRouter:
                     return "local_edit_and_rerun_script", {"new_code": new_code, "target_run": "latest"}
 
         # Update plot axis scale (log <-> linear)
-        if (
-            ("x axis" in command_lower or "x-axis" in command_lower or "xaxis" in command_lower) and
-            any(w in command_lower for w in ["linear", "log", "scale"])
-        ) or any(p in command_lower for p in ["change x axis", "change x-axis", "set x axis", "set x-axis", "update x axis", "update x-axis"]):
+        # Matches: "update x-axis to linear", "change the plots from log to linear scale",
+        # "switch to log scale", "use linear scale", etc.
+        _has_scale_word  = any(w in command_lower for w in ["linear", "log scale", "logarithmic"])
+        # "to log" / "to linear" are unambiguous axis-scale references
+        _has_scale_to    = bool(re.search(r"\bto\s+(log|linear)\b", command_lower))
+        _has_axis_ref    = any(w in command_lower for w in ["x axis", "x-axis", "xaxis", "y axis", "y-axis", "yaxis"])
+        _has_plot_ref    = any(w in command_lower for w in ["plot", "plots", "chart", "charts", "graph", "graphs", "axis", "scale"])
+        _has_change_verb = any(w in command_lower for w in ["change", "switch", "update", "set", "use", "convert", "make"])
+        _explicit_axis_phrase = any(p in command_lower for p in [
+            "change x axis", "change x-axis", "set x axis", "set x-axis",
+            "update x axis", "update x-axis", "log scale", "linear scale",
+            "switch to log", "switch to linear",
+        ])
+        if _explicit_axis_phrase or _has_scale_to or (_has_scale_word and (_has_axis_ref or (_has_plot_ref and _has_change_verb))):
             x_scale = "linear" if "linear" in command_lower else ("log" if "log" in command_lower else "linear")
-            print(f"🔧 Command router: Matched 'update x axis' -> local_edit_visualization (x_scale={x_scale})")
-            return "local_edit_visualization", {"patch": {"x_scale": x_scale}, "target_run": "latest"}
+            print(f"🔧 Command router: Matched 'update axis scale' -> patch_and_rerun (x_scale={x_scale})")
+            return "patch_and_rerun", {"change_request": command, "target_run": "latest"}
+
+        # ── GENERIC RESULT CHANGE / PARAMETER UPDATE ────────────────────────────
+        # "change alpha to 0.01", "use resolution 0.8", "change color scheme",
+        # "add a heatmap", "show only significant genes", etc.
+        _change_phrases = [
+            "change the ", "change alpha", "change resolution", "change color",
+            "update alpha", "update the ", "set alpha", "set resolution",
+            "add a heatmap", "add heatmap", "show only", "filter to",
+            "increase alpha", "decrease alpha", "stricter threshold",
+            "less strict", "more clusters", "fewer clusters",
+        ]
+        if any(p in command_lower for p in _change_phrases):
+            print(f"🔧 Command router: Matched 'change result' -> patch_and_rerun")
+            return "patch_and_rerun", {"change_request": command, "target_run": "latest"}
+
+        # ── BIO ITERATIVE RE-RUN ────────────────────────────────────────────────
+        # Patterns: "re-run", "run again", "redo analysis", "repeat with alpha=0.01"
+        _rerun_phrases = [
+            "re-run", "rerun", "run again", "redo", "repeat with",
+            "run with", "try again", "re-analyse", "reanalyze",
+            "change parameter", "update parameter", "set resolution",
+        ]
+        if any(p in command_lower for p in _rerun_phrases):
+            # Extract parameter changes from the command
+            changes: Dict[str, Any] = {}
+            _alpha_m = re.search(r"\balpha\s*[=:]\s*([\d.]+)", command_lower)
+            if _alpha_m:
+                changes["alpha"] = float(_alpha_m.group(1))
+            _res_m = re.search(r"\bresolution\s*[=:]\s*([\d.]+)", command_lower)
+            if _res_m:
+                changes["resolution"] = float(_res_m.group(1))
+            _formula_m = re.search(r"design.formula\s*[=:]\s*(\S+)", command_lower)
+            if _formula_m:
+                changes["design_formula"] = _formula_m.group(1)
+            print(f"🔧 Command router: Matched bio re-run -> bio_rerun (changes={changes})")
+            return "bio_rerun", {"changes": changes, "target_run": "latest"}
+
+        # ── BIO DIFF RUNS ───────────────────────────────────────────────────────
+        # Patterns: "compare run X and Y", "diff runs", "what changed between runs"
+        _diff_phrases = [
+            "compare run", "diff run", "what changed", "compare results",
+            "show differences", "how did it change", "compare iterations",
+            "compare the runs", "what's different", "show the difference",
+        ]
+        if any(p in command_lower for p in _diff_phrases):
+            # Try to extract UUID run IDs from command
+            _uuid_pattern = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+            _uuids = re.findall(_uuid_pattern, command_lower)
+            params: Dict[str, Any] = {}
+            if len(_uuids) >= 2:
+                params["run_id_a"] = _uuids[0]
+                params["run_id_b"] = _uuids[1]
+            else:
+                params["run_id_a"] = "latest"
+                params["run_id_b"] = "prior"
+            print(f"🔧 Command router: Matched bio diff -> bio_diff_runs ({params})")
+            return "bio_diff_runs", params
 
         # Rename / retitle plot (example of generalized viz edit)
         if any(p in command_lower for p in ["rename plot", "rename the plot", "retitle plot", "set plot title", "change plot title", "update plot title"]) or (
@@ -200,13 +391,36 @@ class CommandRouter:
             print(f"🔧 Command router: Matched 'run io summary' -> session_run_io_summary ({run_ref})")
             return "session_run_io_summary", {"run_ref": run_ref}
 
+        # ── HYBRID: LLM-based routing for everything not matched by high-confidence keywords above ──
+        llm_result = self._route_with_llm(command, session_context)
+        if llm_result is not None:
+            tool_name, base_params = llm_result
+            params = self._extract_parameters(command, tool_name, session_context)
+            for k, v in base_params.items():
+                params.setdefault(k, v)
+            print(f"🔧 Command router: LLM routed -> {tool_name}")
+            return (tool_name, params)
+
+        # Fallback: keyword-based routing when LLM is off or failed
         # Priority-based matching to avoid conflicts
         # Check for specific phrases first, then general keywords
 
-        # ── BULK RNA-SEQ (HIGHEST PRIORITY) ──────────────────────────────────────
-        # Must come before clustering and single-cell checks because RNA-seq prompts
-        # legitimately use terms like "clustering", "differential expression", etc.
-        # in an EDA/statistics context, not as sequence-biology operations.
+        # ── CONSENSUS / COMPOSITE (before alignment so "align + consensus" -> handle_natural_command) ──
+        if any(phrase in command_lower for phrase in [
+            'consensus sequence', 'consensus of', 'calculate consensus', 'compute consensus',
+            'consensus from', 'consensus from the', 'consensus of the following'
+        ]):
+            print(f"🔧 Command router: Consensus/composite request -> handle_natural_command (tool generator)")
+            return "handle_natural_command", {"command": command, "session_id": session_context.get("session_id", "")}
+
+        # ── SINGLE-CELL RNA-SEQ (must precede bulk RNA-seq check) ────────────────
+        # Single-cell prompts contain bulk RNA-seq vocabulary (rna-seq, DE, PCA…)
+        # so single-cell routing must win before the bulk catch-all fires.
+        if self._is_single_cell_command(command_lower):
+            print(f"🔧 Command router: Matched 'single-cell RNA-seq' -> single_cell_analysis (early guard)")
+            return 'single_cell_analysis', self._extract_parameters(command, 'single_cell_analysis', session_context)
+
+        # ── BULK RNA-SEQ ──────────────────────────────────────────────────────────
         if self._is_rnaseq_transcriptomics_command(command_lower):
             print(f"🔧 Command router: Matched 'bulk RNA-seq transcriptomics' -> bulk_rnaseq_analysis")
             return 'bulk_rnaseq_analysis', self._extract_parameters(command, 'bulk_rnaseq_analysis', session_context)
@@ -326,6 +540,30 @@ class CommandRouter:
             print(f"🔧 Command router: Matched 'read trimming' -> read_trimming")
             return 'read_trimming', self._extract_parameters(command, 'read_trimming', session_context)
         
+        # ── DATA SCIENCE PIPELINE ─────────────────────────────────────────────
+        # Route data analysis requests to the ds_pipeline orchestrator.
+        # Must come before alignment fallback to avoid sequence-related false matches.
+        if self._is_ds_run_command(command_lower):
+            print("🔧 Command router: Matched 'data science run' -> ds_run_analysis")
+            return "ds_run_analysis", self._extract_ds_run_params(command, session_context)
+
+        if any(p in command_lower for p in ["list runs", "show runs", "run history", "experiment log", "list experiments"]):
+            print("🔧 Command router: Matched 'list ds runs' -> ds_list_runs")
+            return "ds_list_runs", {"session_id": session_context.get("session_id", "")}
+
+        if any(p in command_lower for p in ["diff run", "compare run", "diff experiment"]):
+            print("🔧 Command router: Matched 'diff runs' -> ds_diff_runs")
+            return "ds_diff_runs", self._extract_ds_diff_params(command, session_context)
+
+        if any(p in command_lower for p in ["reproduce run", "rerun", "re-run"]):
+            print("🔧 Command router: Matched 'reproduce run' -> ds_reproduce_run")
+            m = re.search(r"run[_\s](\w+)", command_lower)
+            run_id = m.group(0).replace(" ", "_") if m else "latest"
+            return "ds_reproduce_run", {
+                "session_id": session_context.get("session_id", ""),
+                "run_id": run_id,
+            }
+
         # Default fallback - try to route to sequence_alignment for alignment-like commands
         if any(phrase in command_lower for phrase in ['align', 'alignment', 'sequences']):
             print(f"🔧 Command router: Defaulting to sequence_alignment for alignment command")
@@ -358,9 +596,43 @@ class CommandRouter:
         'sample distance',
     )
 
+    # Strong single-cell signals — any of these present means the request is
+    # for single-cell analysis, not bulk RNA-seq.
+    _SCRNA_PHRASES = (
+        'single cell',
+        'single-cell',
+        'scrna-seq',
+        'scrnaseq',
+        'scRNA',
+        '10x genomics',
+        '10x chromium',
+        'leiden algorithm',
+        'umap',
+        'seurat',
+        'scanpy',
+        'anndata',
+        'pbmc',
+        'cell cluster',
+        'cell type annotation',
+        'cell-type',
+        'cell type composition',
+        'marker gene',
+        'leiden',
+        'louvain',
+    )
+
+    def _is_single_cell_command(self, command_lower: str) -> bool:
+        """Return True when the command clearly describes a single-cell RNA-seq
+        analysis.  Used to prevent single-cell prompts from being swallowed by
+        the bulk RNA-seq catch-all."""
+        return any(phrase in command_lower for phrase in self._SCRNA_PHRASES)
+
     def _is_rnaseq_transcriptomics_command(self, command_lower: str) -> bool:
         """Return True when the lowercased command clearly describes a bulk
-        RNA-seq / transcriptomics analysis (with or without file paths)."""
+        RNA-seq / transcriptomics analysis (with or without file paths).
+        Returns False when single-cell signals are present."""
+        if self._is_single_cell_command(command_lower):
+            return False
         return any(phrase in command_lower for phrase in self._RNASEQ_PHRASES)
 
     # ── Helper: does the command contain molecular-sequence biology cues? ────────
@@ -408,19 +680,38 @@ class CommandRouter:
         return Plan(steps=steps).dict()
 
     def _split_workflow_command(self, command: str) -> list[str]:
+        """Split command into workflow steps. Only explicit delimiters are used.
+
+        We do NOT split on bare newlines, so FASTA (and other newline-heavy payloads)
+        stay as one chunk. See docs/PROMPT_NORMALIZATION.md.
+        """
         if not command:
             return []
-        # Normalize separators
-        text = command.replace("->", "\n").replace("→", "\n")
-        # Split on "then"/"and then" plus newlines/semicolons
-        chunks = re.split(r"(?:\bthen\b|\band then\b|;|\n)+", text, flags=re.IGNORECASE)
+        # Split only on explicit workflow delimiters (not newline — avoids 7-step FASTA bug)
+        chunks = re.split(
+            r"(?:\s+and\s+then\s+|\s+then\s+|;|->|→)+",
+            command,
+            flags=re.IGNORECASE,
+        )
         parts = [c.strip() for c in chunks if c and c.strip()]
-        # If no real split happened, return the original as a single step
         return parts or [command.strip()]
     
     def _extract_parameters(self, command: str, tool_name: str, session_context: Dict[str, Any]) -> Dict[str, Any]:
         """Extract parameters for the specific tool."""
         command_lower = command.lower()
+
+        if tool_name == "visualize_job_results":
+            uuid_match = re.search(
+                r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+                command_lower,
+            )
+            params: Dict[str, Any] = {}
+            if uuid_match:
+                params["job_id"] = uuid_match.group(0)
+            # Preserve session context so tool can fall back to latest session job.
+            if session_context.get("session_id"):
+                params["session_id"] = session_context.get("session_id")
+            return params
         
         if tool_name == "mutate_sequence":
             # Extract sequence and number of variants
@@ -1293,7 +1584,7 @@ class CommandRouter:
             
             # Extract additional parameters
             resolution = 0.5
-            resolution_match = re.search(r'resolution[:\s]+([\d.]+)', command, re.IGNORECASE)
+            resolution_match = re.search(r'resolution[:\s]+([\d]+(?:\.[\d]+)?)', command, re.IGNORECASE)
             if resolution_match:
                 resolution = float(resolution_match.group(1))
             
@@ -1412,4 +1703,62 @@ class CommandRouter:
             return params
         
         else:
-            return {"command": command} 
+            return {"command": command}
+
+    # ── Data science routing helpers ──────────────────────────────────────────
+
+    _DS_PHRASES = (
+        "analyze my data", "analyse my data",
+        "run eda", "exploratory data analysis",
+        "run analysis", "analyze dataset", "analyse dataset",
+        "train model", "fit model", "baseline model",
+        "data analysis", "run pipeline", "run ds pipeline",
+        "analyze csv", "analyse csv",
+        "data science run", "start analysis",
+    )
+
+    def _is_ds_run_command(self, command_lower: str) -> bool:
+        return any(phrase in command_lower for phrase in self._DS_PHRASES)
+
+    def _extract_ds_run_params(self, command: str, session_context: Dict[str, Any]) -> Dict[str, Any]:
+        command_lower = command.lower()
+        session_id = session_context.get("session_id", "")
+
+        # Data file path
+        data_path = ""
+        path_match = re.search(r'[\w./\\-]+\.csv', command, re.IGNORECASE)
+        if path_match:
+            data_path = path_match.group(0)
+
+        # Target column
+        target_col = ""
+        target_match = re.search(r'target[:\s]+["\']?(\w+)["\']?', command, re.IGNORECASE)
+        if target_match:
+            target_col = target_match.group(1)
+        elif re.search(r'predict[:\s]+["\']?(\w+)["\']?', command, re.IGNORECASE):
+            m2 = re.search(r'predict[:\s]+["\']?(\w+)["\']?', command, re.IGNORECASE)
+            if m2:
+                target_col = m2.group(1)
+
+        # Objective
+        objective = "Analyze dataset"
+        obj_match = re.search(r'objective[:\s]+"?([^".\n]+)"?', command, re.IGNORECASE)
+        if obj_match:
+            objective = obj_match.group(1).strip()
+
+        return {
+            "session_id": session_id,
+            "data_path": data_path,
+            "target_col": target_col,
+            "task_type": "auto",
+            "objective": objective,
+        }
+
+    def _extract_ds_diff_params(self, command: str, session_context: Dict[str, Any]) -> Dict[str, Any]:
+        session_id = session_context.get("session_id", "")
+        run_ids = re.findall(r"run_\w+", command)
+        return {
+            "session_id": session_id,
+            "run_id_a": run_ids[0] if len(run_ids) > 0 else "",
+            "run_id_b": run_ids[1] if len(run_ids) > 1 else "",
+        }

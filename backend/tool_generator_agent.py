@@ -120,7 +120,7 @@ def _get_llm():
         # LangChain init_chat_model expects provider-prefixed names like "openai:<model>".
         # Default to a chat-capable model. Some code-focused models are *not* exposed via chat-completions
         # and will 404 when called through the Chat Completions endpoint.
-        openai_model = os.getenv("HELIX_TOOLGEN_OPENAI_MODEL", "openai:gpt-4o").strip()
+        openai_model = os.getenv("HELIX_TOOLGEN_OPENAI_MODEL", "openai:gpt-5.2").strip()
         
         openai_enabled = openai_key and openai_key not in ["", "disabled", "your_openai_api_key_here", "none"]
         deepseek_enabled = deepseek_key and deepseek_key not in ["", "disabled", "your_deepseek_api_key_here", "none"]
@@ -128,7 +128,7 @@ def _get_llm():
         if openai_enabled:
             # Local import to avoid importing optional SSL/cert deps during test collection.
             from langchain.chat_models import init_chat_model
-            # Be forgiving: allow HELIX_TOOLGEN_OPENAI_MODEL="gpt-4o" as well.
+            # Be forgiving: allow HELIX_TOOLGEN_OPENAI_MODEL="gpt-5.2" as well (add prefix if missing).
             if ":" not in openai_model:
                 openai_model = f"openai:{openai_model}"
             return init_chat_model(openai_model, temperature=0)
@@ -694,9 +694,29 @@ IMPORTANT: Generate ONLY executable Python code that can be run directly. Includ
         if error_message:
             result["error"] = error_message
 
+        # Clean up temp FASTA files created from previous_plan_steps
+        for inp in (inputs or []):
+            if isinstance(inp, dict) and inp.get("source") == "previous_plan_step":
+                uri = inp.get("uri")
+                if uri and os.path.isfile(uri):
+                    try:
+                        os.unlink(uri)
+                        logger.debug("Removed temp alignment file from previous_plan_steps: %s", uri)
+                    except Exception:
+                        pass
+
         return result
         
     except Exception as e:
+        # Clean up temp FASTA from previous_plan_steps on error path too
+        for inp in (inputs or []):
+            if isinstance(inp, dict) and inp.get("source") == "previous_plan_step":
+                uri = inp.get("uri")
+                if uri and os.path.isfile(uri):
+                    try:
+                        os.unlink(uri)
+                    except Exception:
+                        pass
         logger.error(f"❌ Tool Generator Agent error: {e}", exc_info=True)
         return {
             "status": "error",

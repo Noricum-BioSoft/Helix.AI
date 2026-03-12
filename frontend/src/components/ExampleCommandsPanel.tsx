@@ -3,7 +3,6 @@ import Button from 'react-bootstrap/Button';
 import Card from 'react-bootstrap/Card';
 import { theme } from '../theme';
 import { getExampleWithSequences, sampleSequences } from '../utils/sampleSequences';
-import { demoScenarios } from '../data/demoScenarios';
 
 interface ExampleCommand {
   command: string;
@@ -27,14 +26,6 @@ export const ExampleCommandsPanel: React.FC<ExampleCommandsPanelProps> = ({
 
   const exampleCategories: ExampleCategory[] = [
     {
-      category: "Demo Scenarios",
-      icon: "🧬",
-      commands: demoScenarios.map((s) => ({
-        command: s.prompt,
-        description: `${s.icon} ${s.title} — ${s.subtitle}`,
-      })),
-    },
-    {
       category: "Getting Started",
       icon: "🚀",
       commands: [
@@ -43,7 +34,7 @@ export const ExampleCommandsPanel: React.FC<ExampleCommandsPanelProps> = ({
           description: "Learn about typical Bioinformatics problems and how AI can help."
         },
         {
-          command: "List all tools Helix.AI has access to (registered MCP tools, discovered @tool functions, and local/EC2 CLI tools)",
+          command: "List all tools Helix.AI has access to (registered tools, discovered @tool functions, and local/EC2 CLI tools)",
           description: "Discover available tools and capabilities"
         }
       ]

@@ -528,6 +528,196 @@ class TestSessionConfig:
         assert "mapping" in config["configurable"]["thread_id"]
 
 
+class TestExecutePipelineArgs:
+    """Test execute_pipeline argument construction by workflow type."""
+
+    @pytest.mark.asyncio
+    async def test_phylo_pipeline_does_not_inject_fastq_defaults(self, processor):
+        command = """You are conducting a comparative evolutionary analysis of the SARS-CoV-2 spike protein.
+
+Objectives
+  1. Retrieve spike protein sequences from NCBI for each variant.
+  2. Perform multiple sequence alignment (MAFFT L-INS-i algorithm).
+  3. Reconstruct a maximum-likelihood phylogenetic tree with 1,000 bootstrap replicates.
+"""
+
+        class _FakeJobManager:
+            def __init__(self):
+                self.created = []
+
+            def create_local_tool_job(self, tool_name, tool_args, session_id, original_command):
+                self.created.append(
+                    {
+                        "tool_name": tool_name,
+                        "tool_args": dict(tool_args or {}),
+                        "session_id": session_id,
+                        "original_command": original_command,
+                    }
+                )
+                return f"job-{len(self.created)}"
+
+            def set_local_job_running(self, job_id):
+                return None
+
+            def set_local_job_completed(self, job_id, tool_result):
+                return None
+
+            def set_local_job_failed(self, job_id, error):
+                return None
+
+        fake_jm = _FakeJobManager()
+
+        class _NoopThread:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def start(self):
+                # Prevent background execution during unit test.
+                return None
+
+        with patch("backend.job_manager.get_job_manager", return_value=fake_jm), patch("threading.Thread", _NoopThread):
+            result = await processor.execute_pipeline(command=command, session_id="s-test", session_context={})
+
+        assert result["status"] == "pipeline_submitted"
+        created_by_tool = {entry["tool_name"]: entry["tool_args"] for entry in fake_jm.created}
+
+        # Pipeline tools should be phylo-relevant, not read-processing defaults.
+        assert "sequence_alignment" in created_by_tool
+        assert "phylogenetic_tree" in created_by_tool
+        assert "read_trimming" not in created_by_tool
+        assert "read_merging" not in created_by_tool
+
+        alignment_args = created_by_tool["sequence_alignment"]
+        phylo_args = created_by_tool["phylogenetic_tree"]
+        assert "sequences" in alignment_args
+        assert alignment_args["sequences"]
+        assert "aligned_sequences" in phylo_args
+        assert phylo_args["aligned_sequences"]
+
+    @pytest.mark.asyncio
+    async def test_variant_prompt_resolves_ncbi_accessions_for_fetch_step(self, processor):
+        command = """Comparative spike analysis across variants:
+Wuhan-Hu-1, Alpha (B.1.1.7), Delta (B.1.617.2), and XBB.1.5.
+
+Objectives
+  1. Retrieve spike protein sequences from NCBI for each variant.
+  2. Perform multiple sequence alignment (MAFFT L-INS-i algorithm).
+  3. Reconstruct a maximum-likelihood phylogenetic tree.
+"""
+
+        class _FakeJobManager:
+            def __init__(self):
+                self.created = []
+
+            def create_local_tool_job(self, tool_name, tool_args, session_id, original_command):
+                self.created.append({"tool_name": tool_name, "tool_args": dict(tool_args or {})})
+                return f"job-{len(self.created)}"
+
+            def set_local_job_running(self, job_id):
+                return None
+
+            def set_local_job_completed(self, job_id, tool_result):
+                return None
+
+            def set_local_job_failed(self, job_id, error):
+                return None
+
+        class _NoopThread:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def start(self):
+                return None
+
+        def _mock_search_ncbi(query: str, database: str = "protein", max_results: int = 10):
+            return {
+                "status": "success",
+                "results": [
+                    {
+                        "accession": "YP_009724390.1",
+                        "title": f"SARS-CoV-2 spike glycoprotein ({query})",
+                    }
+                ],
+            }
+
+        fake_jm = _FakeJobManager()
+        with patch("backend.job_manager.get_job_manager", return_value=fake_jm), patch(
+            "tools.ncbi_tools.search_ncbi", side_effect=_mock_search_ncbi
+        ), patch("threading.Thread", _NoopThread):
+            result = await processor.execute_pipeline(command=command, session_id="s-variant-resolver", session_context={})
+
+        assert result["status"] == "pipeline_submitted"
+        created_by_tool = {entry["tool_name"]: entry["tool_args"] for entry in fake_jm.created}
+        fetch_args = created_by_tool["fetch_ncbi_sequence"]
+        assert "accessions" in fetch_args
+        assert isinstance(fetch_args["accessions"], list)
+        assert len(fetch_args["accessions"]) >= 1
+        assert fetch_args["database"] == "protein"
+
+
+class TestExecutePipelineFailureBehavior:
+    """Ensure pipeline execution fails fast on step errors."""
+
+    @pytest.mark.asyncio
+    async def test_pipeline_stops_after_first_failed_step(self, processor):
+        command = """Pipeline Steps:
+1. Retrieve spike protein sequences from NCBI.
+2. Perform multiple sequence alignment.
+3. Reconstruct a maximum-likelihood phylogenetic tree.
+"""
+        import threading as _threading
+        _real_thread_cls = _threading.Thread
+
+        class _FakeJobManager:
+            def __init__(self):
+                self.created = []
+                self.running = []
+                self.completed = []
+                self.failed = []
+
+            def create_local_tool_job(self, tool_name, tool_args, session_id, original_command):
+                job_id = f"job-{len(self.created) + 1}"
+                self.created.append({"job_id": job_id, "tool_name": tool_name, "tool_args": dict(tool_args or {})})
+                return job_id
+
+            def set_local_job_running(self, job_id):
+                self.running.append(job_id)
+
+            def set_local_job_completed(self, job_id, tool_result):
+                self.completed.append((job_id, tool_result))
+
+            def set_local_job_failed(self, job_id, error):
+                self.failed.append((job_id, str(error)))
+
+        class _InlineThread:
+            def __init__(self, target=None, **kwargs):
+                self._target = target
+
+            def start(self):
+                if self._target:
+                    t = _real_thread_cls(target=self._target)
+                    t.start()
+                    t.join(timeout=3)
+
+        fake_jm = _FakeJobManager()
+
+        async def _mock_dispatch_tool(tool_name, args):
+            return {"status": "success", "text": f"{tool_name} ok"}
+
+        with patch("backend.job_manager.get_job_manager", return_value=fake_jm), patch(
+            "backend.main_with_mcp.dispatch_tool", new=AsyncMock(side_effect=_mock_dispatch_tool)
+        ), patch("threading.Thread", _InlineThread):
+            result = await processor.execute_pipeline(command=command, session_id="s-fail-fast", session_context={})
+
+        assert result["status"] == "pipeline_submitted"
+        # Step 1 should fail before dispatch because accession is required for fetch_ncbi_sequence.
+        assert fake_jm.running == ["job-1"]
+        assert len(fake_jm.completed) == 0
+        assert len(fake_jm.failed) == 3
+        assert "Missing required accession for fetch_ncbi_sequence" in fake_jm.failed[0][1]
+        assert "Skipped because pipeline stopped after step 1" in fake_jm.failed[1][1]
+        assert "Skipped because pipeline stopped after step 1" in fake_jm.failed[2][1]
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 

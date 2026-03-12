@@ -4,6 +4,7 @@ import asyncio
 import os
 import re
 import logging
+import tempfile
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -329,6 +330,45 @@ class ExecutionBroker:
                     )
                 )
 
+        # 3) From previous plan steps (e.g. step 1 alignment → input for step 2 consensus)
+        prev_steps = (session_context or {}).get("previous_plan_steps") or {}
+        if isinstance(prev_steps, dict):
+            for key in sorted(prev_steps.keys()):
+                step = prev_steps.get(key)
+                if not isinstance(step, dict):
+                    continue
+                result = step.get("result") or {}
+                alignment = result.get("alignment")
+                if isinstance(alignment, list) and len(alignment) > 0:
+                    lines = []
+                    for rec in alignment:
+                        name = (rec.get("name") or rec.get("id") or "seq")
+                        seq = (rec.get("sequence") or "").strip()
+                        if seq:
+                            lines.append(f">{name}\n{seq}")
+                    if lines:
+                        fasta_content = "\n".join(lines)
+                        fd, path = tempfile.mkstemp(suffix=".fasta", prefix="alignment_from_plan_", text=True)
+                        try:
+                            os.write(fd, fasta_content.encode("utf-8"))
+                        finally:
+                            os.close(fd)
+                        size = len(fasta_content.encode("utf-8"))
+                        assets.append(InputAsset(uri=path, size_bytes=size, source="previous_plan_step"))
+                        logger.info("Discovered alignment from previous_plan_steps as input for generated tool")
+                    break
+                aligned_str = result.get("aligned_sequences")
+                if isinstance(aligned_str, str) and aligned_str.strip():
+                    fd, path = tempfile.mkstemp(suffix=".fasta", prefix="alignment_from_plan_", text=True)
+                    try:
+                        os.write(fd, aligned_str.strip().encode("utf-8"))
+                    finally:
+                        os.close(fd)
+                    size = len(aligned_str.strip().encode("utf-8"))
+                    assets.append(InputAsset(uri=path, size_bytes=size, source="previous_plan_step"))
+                    logger.info("Discovered aligned_sequences from previous_plan_steps as input for generated tool")
+                    break
+
         # De-dupe by uri (keep first non-null size if available)
         dedup: Dict[str, InputAsset] = {}
         for a in assets:
@@ -613,6 +653,10 @@ class ExecutionBroker:
 
         for step in plan.steps:
             resolved_args = self._resolve_refs(step.arguments, context)
+            # So step 2+ can use step 1 output (e.g. consensus from alignment); see CONSENSUS_FROM_ALIGNMENT_GAP.md
+            if step.tool_name == "handle_natural_command" and context.get("steps"):
+                resolved_args = dict(resolved_args)
+                resolved_args["previous_plan_steps"] = dict(context["steps"])
             out = await self._tool_executor(step.tool_name, resolved_args)
             step_record = {
                 "id": step.id,

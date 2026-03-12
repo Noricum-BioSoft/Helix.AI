@@ -22,3 +22,6 @@
 {"id":"bio.intent.execute.fetch_ncbi_accession","tags":["intent","execute","ncbi"],"input":{"text":"Fetch sequence for NM_000546"},"expect":{"intent":"execute"}}
 {"id":"bio.intent.execute.query_uniprot","tags":["intent","execute","uniprot"],"input":{"text":"Query UniProt P04637 and return FASTA"},"expect":{"intent":"execute"}}
 {"id":"bio.intent.execute.lookup_go","tags":["intent","execute","ontology"],"input":{"text":"Fetch details for GO:0008150"},"expect":{"intent":"execute"}}
+{"id":"bio.intent.execute.polite_fastqc","tags":["intent","execute","fastqc","ambiguous"],"input":{"text":"Can you run FastQC on sample_R1.fastq.gz and sample_R2.fastq.gz?"},"expect":{"intent":"execute"}}
+{"id":"bio.intent.qa.fastqc_definition","tags":["intent","qa","fastqc","ambiguous"],"input":{"text":"What is FastQC and when should I use it?"},"expect":{"intent":"qa"}}
+{"id":"bio.intent.qa.how_to_run_fastqc","tags":["intent","qa","fastqc","howto"],"input":{"text":"How do I run FastQC on paired-end reads?"},"expect":{"intent":"qa"}}

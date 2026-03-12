@@ -23,6 +23,7 @@ Use one or more of:
   - Data task: ["action","data"]
   - Composite data pipeline: ["action","data","workflow"]
   - Multi-step non-data task: ["action","workflow"]
+  - Compute/calculate on provided data (e.g. "calculate the consensus sequence of the following sequences"): ["action","data"]
 
 ### Output format (strict)
 Return **only** JSON in exactly this shape:
