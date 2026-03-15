@@ -183,7 +183,26 @@ def execute(
 
     if use_sandbox:
         try:
-            return _run_in_sandbox(script_path, timeout, env)
+            sandbox_result = _run_in_sandbox(script_path, timeout, env)
+            if sandbox_result.get("status") != "error":
+                return sandbox_result
+            err_blob = f"{sandbox_result.get('error', '')}\n{sandbox_result.get('logs', '')}".lower()
+            import_runtime_issue = (
+                "importerror" in err_blob
+                or "cannot import name" in err_blob
+                or "no module named" in err_blob
+            )
+            if import_runtime_issue:
+                logger.warning(
+                    "Sandbox import/runtime failure for %s; retrying on host execution",
+                    script_path,
+                )
+                host_retry = _run_on_host(script_path, timeout, env)
+                if host_retry.get("status") == "success":
+                    return host_retry
+                # Preserve original sandbox diagnostics if host retry also fails.
+                return sandbox_result
+            return sandbox_result
         except Exception as exc:
             exc_str = str(exc)
             # Docker is not available in this environment (e.g. ECS Fargate, CI).

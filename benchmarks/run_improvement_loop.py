@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import argparse
-import json
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
 import requests
 import yaml
 
+from backend.orchestration.benchmark_controller import (
+    BenchmarkLoopConfig,
+    run_benchmark_iteration_loop,
+)
 from benchmarks.bio_benchmark_scorer import score_benchmark_run
 
 
@@ -40,37 +42,14 @@ def _run_once(api_base: str, benchmark_yaml: Path) -> Dict[str, Any]:
     return {"session_id": sid, "scenario_id": scenario.get("id"), "rows": rows}
 
 
-def _write_markdown_report(scored: Dict[str, Any], out_file: Path) -> None:
-    lines = [
-        f"# Iteration Report ({out_file.stem})",
-        "",
-        f"- Generated: {datetime.now(timezone.utc).isoformat()}",
-        f"- Session: {scored.get('session_id')}",
-        f"- Scenario: {scored.get('scenario_id')}",
-        f"- Raw Score: {scored.get('raw_score')} / {scored.get('max_score')}",
-        f"- Overall Percentage: {scored.get('overall_percentage')}%",
-        f"- Threshold Met: {'Yes' if scored.get('threshold_met') else 'No'}",
-        f"- Critical failures: {len(scored.get('critical_failures') or [])}",
-        "",
-        "## Critical Failures",
-    ]
-    cfs = scored.get("critical_failures") or []
-    if not cfs:
-        lines.append("- None")
-    else:
-        for cf in cfs:
-            lines.append(
-                f"- `{cf.get('turn_id')}` tool=`{cf.get('tool')}` status=`{cf.get('status')}`: {cf.get('reason')}"
-            )
-    out_file.write_text("\n".join(lines) + "\n")
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run benchmark improvement loop.")
     parser.add_argument("--api-base", default="http://localhost:8001")
     parser.add_argument("--benchmark-yaml", default="tests/bioinformatics_benchmark.yaml")
     parser.add_argument("--out-dir", default="benchmarks/runs")
     parser.add_argument("--max-iters", type=int, default=3)
+    parser.add_argument("--stall-iters", type=int, default=2)
+    parser.add_argument("--stall-delta-pct", type=float, default=0.5)
     args = parser.parse_args()
 
     out_dir = Path(args.out_dir)
@@ -78,23 +57,22 @@ def main() -> None:
     bench_yaml = Path(args.benchmark_yaml)
     spec = yaml.safe_load(bench_yaml.read_text()) or {}
 
-    for i in range(1, args.max_iters + 1):
-        raw = _run_once(args.api_base, bench_yaml)
-        raw_file = out_dir / f"iteration_{i}_raw.json"
-        scored_file = out_dir / f"iteration_{i}_scored.json"
-        report_file = out_dir / f"iteration_{i}_report.md"
-
-        raw_file.write_text(json.dumps(raw, indent=2))
-        scored = score_benchmark_run(raw, spec)
-        scored_file.write_text(json.dumps(scored, indent=2))
-        _write_markdown_report(scored, report_file)
-
-        print(f"Iteration {i}: Raw Score: {scored['raw_score']} / {scored['max_score']}")
-        print(f"Iteration {i}: Overall Percentage: {scored['overall_percentage']}%")
-        print(f"Iteration {i}: Threshold Met: {'Yes' if scored['threshold_met'] else 'No'}")
-
-        if scored.get("threshold_met"):
-            break
+    cfg = BenchmarkLoopConfig(
+        max_iters=args.max_iters,
+        threshold_pct=80.0,
+        stall_delta_pct=args.stall_delta_pct,
+        stall_iters=args.stall_iters,
+    )
+    loop_result = run_benchmark_iteration_loop(
+        run_once=lambda: _run_once(args.api_base, bench_yaml),
+        score_once=lambda raw: score_benchmark_run(raw, spec),
+        out_dir=out_dir,
+        config=cfg,
+    )
+    history = loop_result.get("history") or []
+    for h in history:
+        print(f"Iteration {h['iteration']}: Overall Percentage: {h['percentage']}%")
+    print(f"Stop reason: {loop_result.get('stop_reason')}")
 
 
 if __name__ == "__main__":

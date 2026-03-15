@@ -1,13 +1,19 @@
 # Iteration Report (iteration_1_report)
 
-- Generated: 2026-03-15T17:11:21.495149+00:00
-- Session: 2c285940-1a04-40e7-b5b3-282ea29901e1
+- Generated: 2026-03-15T20:40:32.200778+00:00
+- Session: 5f55cea0-5f64-40ec-9a51-980068cd31fd
 - Scenario: bulk-rnaseq-e2e
-- Raw Score: 36 / 40
-- Overall Percentage: 90.0%
-- Threshold Met: No
-- Critical failures: 2
+- Raw Score: 35 / 40
+- Overall Percentage: 87.5%
+- Threshold Met: Yes
+- Critical failures: 0
+- Stop reason: threshold_met_and_no_critical_failures
+
+## Lessons Learned
+- No critical failures in this iteration.
+
+## Remediation Targets
+- Preserve behavior with regression tests.
 
 ## Critical Failures
-- `turn_08` tool=`None` status=`None`: hard error or malformed response
-- `turn_09` tool=`patch_and_rerun` status=`error`: hard error or malformed response
+- None

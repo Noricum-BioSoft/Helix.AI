@@ -41,6 +41,25 @@ logger.info("Backend application starting up...")
 from backend.history_manager import history_manager
 from backend.tool_schemas import list_tool_schemas
 from backend.context_builder import _truncate_sequence
+from backend.orchestration.action_planner import (
+    build_single_step_plan as build_single_step_action_plan,
+    infer_action,
+)
+from backend.orchestration.approval_policy import (
+    READ_ONLY_ROUTER_TOOLS,
+    has_explicit_execute_intent as approval_has_explicit_execute_intent,
+    is_approval_command as approval_is_approval_command,
+    requires_approval_semantics as approval_requires_approval_semantics,
+    should_stage_for_approval as approval_should_stage_for_approval,
+)
+from backend.orchestration.execution_router import (
+    normalize_tool_selection,
+    normalize_fastqc_parameters,
+    preflight_tool_bindings as router_preflight_tool_bindings,
+)
+from backend.orchestration.artifact_resolver import resolve_semantic_reference
+from backend.orchestration.tool_registry import dispatch_via_registry
+from backend.orchestration.visualization_resolver import determine_visualization_type
 
 from backend.execution_broker import ExecutionBroker, ExecutionRequest
 
@@ -165,137 +184,54 @@ async def _run_agent_with_retry(coro_factory, timeout_s: int, retries: int = 1, 
     }, diagnostics
 
 
-_APPROVAL_COMMANDS = {
-    "approve",
-    "approve.",
-    "approved",
-    "approved.",
-    "yes, approve",
-    "yes approve",
-    "yes, run it",
-    "yes run it",
-    "proceed",
-    "proceed.",
-    "run it",
-    "run it.",
-}
-_READ_ONLY_ROUTER_TOOLS = {
-    "toolbox_inventory",
-    "session_run_io_summary",
-    "visualize_job_results",
-    "fetch_ncbi_sequence",
-    "query_uniprot",
-    "lookup_go_term",
-    "unsupported_tool",
-    "bio_diff_runs",
-}
+_READ_ONLY_ROUTER_TOOLS = READ_ONLY_ROUTER_TOOLS
 
 
 def _is_approval_command(command: str) -> bool:
-    normalized = " ".join((command or "").strip().lower().split())
-    return normalized in _APPROVAL_COMMANDS or normalized.startswith("approve ")
+    return approval_is_approval_command(command)
 
 
 def _has_explicit_execute_intent(command: str) -> bool:
-    c = (command or "").lower()
-    # Word-boundary detection handles punctuation ("rerun.", "execute,")
-    # and avoids brittle exact-space matching.
-    import re
-    return bool(
-        re.search(
-            r"\b(run|execute|rerun|re-run|regenerate|start|launch|fix|update|exclude|highlight|color|make|generate|plot|heatmap|show)\b",
-            c,
-        )
-    )
+    return approval_has_explicit_execute_intent(command)
 
 
 def _requires_approval_semantics(command: str) -> bool:
-    """
-    High-impact scientific changes that should stage for approval even when
-    the user uses execution verbs.
-    """
-    c = (command or "").lower()
-    triggers = (
-        "mislabeled",
-        "should be",
-        "looks wrong",
-        "reversed",
-        "focus only",
-        "only female",
-        "only male",
-        "adjusting for",
-        "design formula",
-        "correction",
-    )
-    return any(t in c for t in triggers)
+    return approval_requires_approval_semantics(command)
 
 
 def _should_stage_for_approval(tool_name: str, command: str, params: Optional[Dict[str, Any]] = None) -> bool:
-    """
-    Decide whether to stage a plan and request approval before execution.
-    This is action-based (state/cost/scientific-impact oriented), not tied to
-    assay/workflow names.
-    """
-    if not tool_name or tool_name in _READ_ONLY_ROUTER_TOOLS:
+    return approval_should_stage_for_approval(
+        tool_name,
+        command,
+        params,
+        action_type=infer_action(command, tool_name),
+    )
+
+
+def _historical_recreation_ready_for_execution(
+    command: str,
+    tool_name: str,
+    session_context: Optional[Dict[str, Any]],
+) -> bool:
+    c = (command or "").lower()
+    if tool_name not in {"bio_diff_runs", "bio_rerun"}:
         return False
-    if tool_name == "__plan__":
+    if not any(k in c for k in ("recreate", "reconstruct", "reproduce")):
         return False
-    if isinstance(params, dict) and params.get("session_resolution_error"):
-        # Validation/clarification paths should return immediately.
+    if not any(k in c for k in ("before", "first", "original", "prior", "version", "state")):
         return False
-    if _is_approval_command(command):
+    if not isinstance(session_context, dict):
         return False
-    if tool_name == "handle_natural_command" and not _requires_approval_semantics(command):
-        return False
-    if _requires_approval_semantics(command):
-        return True
-    if _has_explicit_execute_intent(command):
-        return False
-    return True
+    resolved = resolve_semantic_reference(session_context, command)
+    return str(resolved.get("status") or "") == "resolved"
 
 
 def _preflight_tool_bindings(tool_name: str, parameters: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """
-    Validate non-plan tool arguments before execution.
-    Returns a needs-inputs response payload when required bindings are missing.
-    """
-    if not tool_name:
-        return None
-    if tool_name in _READ_ONLY_ROUTER_TOOLS:
-        return None
-    params = parameters if isinstance(parameters, dict) else {}
-    try:
-        from backend.plan_binding import validate_tool_bindings
-
-        issues = validate_tool_bindings(tool_name, params)
-        if not issues:
-            return None
-        payload = _build_needs_inputs_response(tool_name, {**params, "needs_inputs": True})
-        payload["binding_diagnostics"] = {
-            "status": "error",
-            "error_type": "artifact_binding_failed",
-            "issues": issues,
-        }
-        return payload
-    except Exception:
-        return None
+    return router_preflight_tool_bindings(tool_name, parameters, _build_needs_inputs_response)
 
 
 def _build_single_step_plan(command: str, tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
-    from backend.action_plan import infer_action_type
-
-    return {
-        "version": "v1",
-        "steps": [
-            {
-                "id": "step1",
-                "action_type": infer_action_type(command, tool_name),
-                "tool_name": tool_name,
-                "arguments": params or {},
-                "description": (command or "").strip(),
-            }
-        ],
-    }
+    return build_single_step_action_plan(command, tool_name, params)
 
 
 def _autobind_plan_inputs(plan: Dict[str, Any], session_context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -438,12 +374,46 @@ def _store_pending_plan(session_id: str, command: str, plan: Dict[str, Any]) -> 
     }
 
 
-def _pop_pending_plan(session_id: str) -> Optional[Dict[str, Any]]:
+def _get_pending_plan(session_id: str) -> Optional[Dict[str, Any]]:
     if not (hasattr(history_manager, "sessions") and session_id in history_manager.sessions):
         return None
     pending = history_manager.sessions[session_id].get("pending_plan")
-    history_manager.sessions[session_id].pop("pending_plan", None)
     return pending if isinstance(pending, dict) else None
+
+
+def _clear_pending_plan(session_id: str) -> None:
+    if not (hasattr(history_manager, "sessions") and session_id in history_manager.sessions):
+        return
+    history_manager.sessions[session_id].pop("pending_plan", None)
+
+
+def _pop_pending_plan(session_id: str) -> Optional[Dict[str, Any]]:
+    pending = _get_pending_plan(session_id)
+    _clear_pending_plan(session_id)
+    return pending
+
+
+def _should_clear_pending_plan_after_execution(result: Any) -> bool:
+    """
+    Keep pending plans around when execution still needs inputs, but clear them
+    once execution was actually submitted/completed or hard-failed.
+    """
+    if not isinstance(result, dict):
+        return False
+    inner = result.get("result") or result
+    if isinstance(inner, dict) and inner.get("type") == "execution_result" and isinstance(inner.get("result"), dict):
+        inner = inner["result"]
+    if isinstance(inner, dict) and inner.get("type") == "job":
+        return True
+    if isinstance(inner, dict) and inner.get("type") == "plan_result" and isinstance(inner.get("steps"), list):
+        plan_exec = _analyze_plan_execution(inner.get("steps") or [])
+        return bool(plan_exec.get("executed")) and str(plan_exec.get("status", "")).lower() in {"success", "error"}
+    status = str(
+        (inner.get("status") if isinstance(inner, dict) else "")
+        or result.get("status")
+        or ""
+    ).lower()
+    return status in {"success", "completed", "pipeline_submitted", "submitted"}
 
 
 app = FastAPI(
@@ -1003,6 +973,82 @@ async def _dispatch_result(
     return CustomJSONResponse(std)
 
 
+async def _execute_routed_tool(
+    req: CommandRequest,
+    *,
+    tool_name: str,
+    parameters: Dict[str, Any],
+    session_context: Dict[str, Any],
+    execution_path: str,
+    validation_execution_path: str,
+) -> "CustomJSONResponse":
+    """
+    Shared execution path for both agent-mapped and fallback-routed tool calls.
+    """
+    selection = normalize_tool_selection(
+        command=req.command,
+        tool_name=tool_name,
+        parameters=parameters,
+        session_context=session_context or {},
+    )
+    selected_tool = selection.tool_name
+    selected_args = selection.arguments
+
+    norm = normalize_fastqc_parameters(
+        tool_name=selected_tool,
+        arguments=selected_args,
+        command=req.command,
+        session_context=session_context or {},
+    )
+    params = norm.arguments
+    if not norm.ok and isinstance(norm.result, dict):
+        std = build_standard_response(
+            prompt=req.command,
+            tool=selected_tool,
+            result=norm.result,
+            session_id=req.session_id,
+            mcp_route="/execute",
+            success=True,
+            execution_path=validation_execution_path,
+        )
+        return CustomJSONResponse(std)
+
+    preflight = _preflight_tool_bindings(selected_tool, params)
+    if isinstance(preflight, dict):
+        std = build_standard_response(
+            prompt=req.command,
+            tool=selected_tool,
+            result=preflight,
+            session_id=req.session_id,
+            mcp_route="/execute",
+            success=True,
+            execution_path=f"{validation_execution_path}_binding",
+        )
+        return CustomJSONResponse(std)
+
+    if selected_tool == "fastqc_quality_analysis":
+        if "session_id" not in params:
+            params["session_id"] = req.session_id
+        for param_name in ["input_r1", "input_r2", "output"]:
+            if param_name in params and params[param_name]:
+                uri = params[param_name]
+                if isinstance(uri, str) and uri.startswith("//") and not uri.startswith("s3://"):
+                    params[param_name] = "s3:" + uri
+
+    broker = _get_execution_broker()
+    result = await broker.execute_tool(
+        ExecutionRequest(
+            tool_name=selected_tool,
+            arguments=params,
+            session_id=req.session_id,
+            original_command=req.command,
+            session_context=session_context,
+        )
+    )
+    _apply_session_context_side_effects(req.session_id, selected_tool, result)
+    return await _dispatch_result(req, selected_tool, result, tool_args=params, execution_path=execution_path)
+
+
 def _build_pipeline_execution_storage_result(result: Any, session_id: str) -> Any:
     """
     Build a trimmed plan result for session storage: pipeline execution info only,
@@ -1169,97 +1215,7 @@ def _apply_session_context_side_effects(
 
 
 def _determine_visualization_type(tool: str, result: Any, prompt: str) -> str:
-    """
-    Intelligently determine the appropriate visualization type based on:
-    - Tool name
-    - Result structure
-    - Prompt content
-    
-    Returns one of:
-    - 'sequence_viewer': For DNA/RNA/protein sequences (fetch_ncbi_sequence, query_uniprot)
-    - 'alignment_viewer': For sequence alignments (sequence_alignment)
-    - 'go_term_viewer': For GO term lookups (lookup_go_term)
-    - 'markdown': For informational/educational queries and agent responses
-    - 'plasmid_viewer': For plasmid visualizations
-    - 'phylogenetic_tree': For phylogenetic trees
-    - 'quality_plot': For quality assessment plots
-    - 'default': Fallback to default rendering
-    """
-    tool_lower = tool.lower()
-
-    # Prefer explicit result/artifact metadata over tool identity.
-    if isinstance(result, dict):
-        artifact_kind = str(result.get("artifact_kind") or result.get("result_type") or "").lower()
-        plot_family = str(result.get("plot_family") or "").lower()
-        if artifact_kind in {"deg_table", "enrichment", "results_viewer"}:
-            return "results_viewer"
-        if plot_family in {"pca", "volcano", "heatmap"}:
-            return "results_viewer"
-        if artifact_kind in {"sequence", "fasta"}:
-            return "sequence_viewer"
-        if artifact_kind in {"alignment"}:
-            return "alignment_viewer"
-        if artifact_kind in {"phylogenetic_tree", "newick"}:
-            return "phylogenetic_tree"
-    
-    # Agent responses always render as markdown
-    if tool_lower == 'agent':
-        return 'markdown'
-
-    # Results browsing / report viewer
-    if isinstance(result, dict) and result.get("visualization_type") == "results_viewer":
-        return "results_viewer"
-    if tool_lower in ("s3_browse_results", "bulk_rnaseq_analysis"):
-        return "results_viewer"
-    if tool_lower in ("single_cell_analysis", "quality_assessment"):
-        if isinstance(result, dict) and (result.get("visuals") or result.get("links")):
-            return "results_viewer"
-    
-    if not isinstance(result, dict):
-        # Check prompt for informational queries
-        prompt_lower = prompt.lower()
-        if any(q in prompt_lower for q in ['what is', 'what are', 'explain', 'tell me about', 'describe', 'how does']):
-            return 'markdown'
-        return 'default'
-    
-    prompt_lower = prompt.lower()
-    
-    # Sequence-related tools
-    if tool_lower in ['fetch_ncbi_sequence', 'query_uniprot']:
-        # Check if result contains sequences
-        if result.get('sequence') or result.get('sequences') or result.get('output'):
-            return 'sequence_viewer'
-    
-    # Alignment tool
-    if tool_lower == 'sequence_alignment':
-        if result.get('alignment') or result.get('output'):
-            return 'alignment_viewer'
-    
-    # GO term lookup
-    if tool_lower == 'lookup_go_term':
-        return 'go_term_viewer'
-    
-    # Plasmid visualization
-    if tool_lower == 'plasmid_visualization' or result.get('plasmid_data'):
-        return 'plasmid_viewer'
-    
-    # Phylogenetic tree
-    if tool_lower == 'phylogenetic_tree' or result.get('tree_data') or result.get('newick'):
-        return 'phylogenetic_tree'
-    
-    # Quality assessment
-    if tool_lower in ['quality_assessment', 'read_trimming'] or result.get('plot_data') or result.get('metrics'):
-        return 'quality_plot'
-    
-    # Check for sequences in result structure (fallback)
-    if result.get('sequence') or result.get('sequences'):
-        return 'sequence_viewer'
-    
-    # Check prompt for informational queries (fallback)
-    if any(q in prompt_lower for q in ['what is', 'what are', 'explain', 'tell me about', 'describe', 'how does', 'definition']):
-        return 'markdown'
-    
-    return 'default'
+    return determine_visualization_type(tool, result, prompt)
 
 
 def _extract_execution_logs(result: Any) -> List[Dict[str, str]]:
@@ -1310,6 +1266,53 @@ def _extract_execution_logs(result: Any) -> List[Dict[str, str]]:
             add_log("stderr", exec_result.get("stderr", ""))
     
     return logs
+
+
+def _build_actionable_fallback_text(
+    tool: str,
+    status: str,
+    text: str,
+    truncated_result: Any,
+) -> str:
+    """
+    Guard against empty/non-actionable success text in benchmark-critical paths.
+    """
+    if isinstance(text, str) and text.strip():
+        return text
+    status_l = str(status or "").lower()
+    if status_l in {"error", "failed"}:
+        return text or "Execution failed before an actionable response could be produced."
+
+    diagnostics = {}
+    if isinstance(truncated_result, dict):
+        diagnostics = truncated_result.get("diagnostics") if isinstance(truncated_result.get("diagnostics"), dict) else {}
+        if not diagnostics:
+            maybe_result = truncated_result.get("result")
+            if isinstance(maybe_result, dict) and isinstance(maybe_result.get("selector_diagnostics"), dict):
+                diagnostics = maybe_result.get("selector_diagnostics") or {}
+
+    if tool in {"bio_rerun", "bio_diff_runs", "patch_and_rerun"}:
+        unresolved = diagnostics.get("unresolved") if isinstance(diagnostics.get("unresolved"), list) else []
+        unresolved_msg = ""
+        if unresolved:
+            unresolved_msg = f" Unresolved selectors: {', '.join(str(x) for x in unresolved[:3])}."
+        return (
+            "The request did not produce an executable historical state yet. "
+            "Please specify an explicit reference such as `first DEG results` vs `current DEG results`, "
+            "or provide the concrete `run_id` to continue."
+            + unresolved_msg
+        )
+
+    if tool == "go_enrichment_analysis":
+        return (
+            "GO enrichment was requested but no actionable gene list was available. "
+            "Provide a `gene_list` directly or reference a DEG state (for example `current DEG results`)."
+        )
+
+    return (
+        "The request returned without actionable output. "
+        "Please provide the target artifact/state or required inputs so Helix can execute deterministically."
+    )
 
 
 def build_standard_response(
@@ -1384,16 +1387,18 @@ def build_standard_response(
                 status = "workflow_planned"
         elif isinstance(inner, dict) and inner.get("type") == "job":
             text = (
-                "## Pipeline submitted\n\n"
-                "Your pipeline has been submitted for execution. Track progress in the **Jobs** panel."
+                "## Pipeline Execution Submitted\n\n"
+                "The approved workflow is now running asynchronously. Track progress in the **Jobs** panel."
             )
-            status = "workflow_planned"
+            status = "pipeline_submitted"
         elif not text:
             text = (
                 "## Pipeline Plan\n\n"
                 "Your workflow has been planned. Use **Execute Pipeline** to run it, or **Load & run** to use example data."
             )
             status = "workflow_planned"
+
+    text = _build_actionable_fallback_text(tool, status, text, truncated_result)
 
     # Download links should only be surfaced for completed/executed outputs.
     # Planning, needs-inputs, and in-progress states should not expose downloads.
@@ -1866,7 +1871,7 @@ async def score_benchmark_session(
     By default, uses the latest run file in benchmarks/runs.
     """
     try:
-        from benchmarks.bio_benchmark_scorer import score_run_file
+        from backend.orchestration.benchmark_evaluator import evaluate_benchmark_run_file
 
         if run_file:
             run_path = Path(run_file)
@@ -1882,7 +1887,7 @@ async def score_benchmark_session(
 
         if not run_path.exists():
             raise HTTPException(status_code=404, detail=f"Run file not found: {run_path}")
-        scored = score_run_file(run_path, Path(benchmark_yaml))
+        scored = evaluate_benchmark_run_file(run_path, Path(benchmark_yaml))
         if scored.get("session_id") and scored.get("session_id") != session_id:
             # Session-specific endpoint should not accidentally score another session silently.
             raise HTTPException(
@@ -2213,7 +2218,7 @@ async def execute(req: CommandRequest, request: Request):
 
         # Approval shortcut: execute a pending workflow plan (if one was prepared earlier).
         if _is_approval_command(req.command):
-            pending_plan = _pop_pending_plan(req.session_id)
+            pending_plan = _get_pending_plan(req.session_id)
             if isinstance(pending_plan, dict) and isinstance(pending_plan.get("plan"), dict):
                 plan = _autobind_plan_inputs(pending_plan["plan"], session_context)
                 binding_check = _validate_plan_bindings(plan)
@@ -2244,6 +2249,8 @@ async def execute(req: CommandRequest, request: Request):
                 )
                 _apply_session_context_side_effects(req.session_id, "__plan__", result)
                 storage_result = _build_pipeline_execution_storage_result(result, req.session_id)
+                if _should_clear_pending_plan_after_execution(storage_result):
+                    _clear_pending_plan(req.session_id)
                 return await _dispatch_result(
                     req, "__plan__", storage_result,
                     tool_args={"plan": plan, "session_id": req.session_id},
@@ -2326,7 +2333,12 @@ async def execute(req: CommandRequest, request: Request):
 
                 _approval_router = _ApprovalRouter()
                 _approval_tool, _approval_params = _approval_router.route_command(req.command, session_context)
-                if _should_stage_for_approval(_approval_tool, req.command, _approval_params):
+                _ready_hist_recreate = _historical_recreation_ready_for_execution(
+                    req.command,
+                    _approval_tool,
+                    session_context,
+                )
+                if _should_stage_for_approval(_approval_tool, req.command, _approval_params) and not _ready_hist_recreate:
                     _approval_params = _approval_params or {}
                     _approval_params.setdefault("session_id", req.session_id)
                     pending_plan = _build_single_step_plan(req.command, _approval_tool, _approval_params)
@@ -2384,6 +2396,7 @@ async def execute(req: CommandRequest, request: Request):
         # Also handle FastQC validation and MultiQC unsupported BEFORE agent to ensure
         # clear, immediate responses for these common follow-up requests.
         _phase2c_allowlist = {"toolbox_inventory", "session_run_io_summary", "visualize_job_results"}
+        _phase2c_semantic_allowlist = {"bio_diff_runs", "bio_rerun", "patch_and_rerun"}
         _phase2c_validation_tools = {"fastqc_quality_analysis", "unsupported_tool"}
         try:
             import time as _t
@@ -2412,6 +2425,18 @@ async def execute(req: CommandRequest, request: Request):
                 return await _dispatch_result(
                     req, _pre_tool, _pre_result, tool_args=_pre_params, execution_path="phase2c_router"
                 )
+            if _pre_tool in _phase2c_semantic_allowlist:
+                _action = infer_action(req.command, _pre_tool)
+                if _action in {"compare_versions", "generate_plot", "rerun_downstream_steps", "subset_data"}:
+                    _pre_start = _t.time()
+                    if _pre_params is None:
+                        _pre_params = {}
+                    _pre_params.setdefault("session_id", req.session_id)
+                    _pre_result = await dispatch_tool(_pre_tool, _pre_params)
+                    logger.info(f"[Phase2c] '{_pre_tool}' semantic fast-path in {_t.time()-_pre_start:.2f}s")
+                    return await _dispatch_result(
+                        req, _pre_tool, _pre_result, tool_args=_pre_params, execution_path="phase2c_semantic_router"
+                    )
         except Exception as _pre_err:
             logger.warning(f"[Phase2c] fast path raised exception ({_pre_err}), falling through to agent")
 
@@ -2481,103 +2506,13 @@ async def execute(req: CommandRequest, request: Request):
                 if _check_tool == "fastqc_quality_analysis" and (_check_params or {}).get("session_resolution_error"):
                     parameters["session_resolution_error"] = _check_params["session_resolution_error"]
 
-                # Session-aware FastQC: resolve "merged reads" / "raw reads" from session (agent may not set this)
-                if tool_name == "fastqc_quality_analysis" and not parameters.get("session_resolution_error"):
-                    from backend.session_param_extractor import get_fastqc_inputs_from_session
-                    sess_r1, sess_r2, sess_out, sess_err = get_fastqc_inputs_from_session(
-                        session_context or {}, req.command
-                    )
-                    if sess_err:
-                        parameters["session_resolution_error"] = sess_err
-                    elif sess_r1 and sess_r2:
-                        parameters["input_r1"] = parameters.get("input_r1") or sess_r1
-                        parameters["input_r2"] = parameters.get("input_r2") or sess_r2
-                        if sess_out and not parameters.get("output"):
-                            parameters["output"] = sess_out
-
-                # Return validation/session-resolution messages immediately (no job submission)
-                if tool_name == "fastqc_quality_analysis" and parameters.get("session_resolution_error"):
-                    std = build_standard_response(
-                        prompt=req.command,
-                        tool=tool_name,
-                        result={
-                            "status": "success",
-                            "text": parameters["session_resolution_error"],
-                            "validation_message": True,
-                        },
-                        session_id=req.session_id,
-                        mcp_route="/execute",
-                        success=True,
-                        execution_path="agent_validation_message",
-                    )
-                    return CustomJSONResponse(std)
-                if tool_name == "fastqc_quality_analysis":
-                    from backend.input_validation import validate_fastqc_inputs
-                    r1, r2 = parameters.get("input_r1", ""), parameters.get("input_r2", "")
-                    val = validate_fastqc_inputs(r1, r2)
-                    if not val.valid:
-                        msg = val.message or "Invalid FastQC inputs."
-                        if val.suggestion:
-                            msg += "\n\n**What to do:**\n" + val.suggestion
-                        std = build_standard_response(
-                            prompt=req.command,
-                            tool=tool_name,
-                            result={"status": "success", "text": msg, "validation_message": True},
-                            session_id=req.session_id,
-                            mcp_route="/execute",
-                            success=True,
-                            execution_path="agent_validation_message",
-                        )
-                        return CustomJSONResponse(std)
-
-                preflight = _preflight_tool_bindings(tool_name, parameters)
-                if isinstance(preflight, dict):
-                    std = build_standard_response(
-                        prompt=req.command,
-                        tool=tool_name,
-                        result=preflight,
-                        session_id=req.session_id,
-                        mcp_route="/execute",
-                        success=True,
-                        execution_path="agent_binding_validation",
-                    )
-                    return CustomJSONResponse(std)
-
-                # Validate and fix S3 URIs for FastQC tool
-                if tool_name == "fastqc_quality_analysis":
-                    # Add session_id if needed
-                    if "session_id" not in parameters:
-                        parameters["session_id"] = req.session_id
-                    
-                    # Fix malformed S3 URIs (missing s3: prefix)
-                    for param_name in ["input_r1", "input_r2", "output"]:
-                        if param_name in parameters and parameters[param_name]:
-                            uri = parameters[param_name]
-                            # Fix URIs that start with // instead of s3://
-                            if isinstance(uri, str) and uri.startswith("//") and not uri.startswith("s3://"):
-                                fixed_uri = "s3:" + uri
-                                logger.warning("Fixed malformed S3 URI for %s: %s → %s", param_name, uri, fixed_uri)
-                                parameters[param_name] = fixed_uri
-                    
-                    logger.debug("FastQC parameters: input_r1=%s, input_r2=%s", parameters.get('input_r1'), parameters.get('input_r2'))
-                
-                # Execute the tool via router
-                tool_start_time = time.time()
-                broker = _get_execution_broker()
-                result = await broker.execute_tool(
-                    ExecutionRequest(
-                        tool_name=tool_name,
-                        arguments=parameters,
-                        session_id=req.session_id,
-                        original_command=req.command,
-                        session_context=session_context,
-                    )
-                )
-                
-                tool_done_time = time.time()
-                logger.info("Tool '%s' completed in %.2fs", tool_name, tool_done_time - tool_start_time)
-                return await _dispatch_result(
-                    req, tool_name, result, tool_args=parameters, execution_path="agent_tool_mapped"
+                return await _execute_routed_tool(
+                    req,
+                    tool_name=tool_name,
+                    parameters=parameters,
+                    session_context=session_context,
+                    execution_path="agent_tool_mapped",
+                    validation_execution_path="agent_validation_message",
                 )
             else:
                 # Agent completed full execution (or returned something else)
@@ -2671,72 +2606,13 @@ async def execute(req: CommandRequest, request: Request):
             if tool_name == "fastqc_quality_analysis" and "session_id" not in parameters:
                 parameters["session_id"] = req.session_id
 
-            # Return validation/session-resolution messages immediately (no job submission)
-            if tool_name == "fastqc_quality_analysis" and parameters.get("session_resolution_error"):
-                from backend.input_validation import validate_fastqc_inputs
-                vr = build_standard_response(
-                    prompt=req.command,
-                    tool=tool_name,
-                    result={
-                        "status": "success",
-                        "text": parameters["session_resolution_error"],
-                        "validation_message": True,
-                    },
-                    session_id=req.session_id,
-                    mcp_route="/execute",
-                    success=True,
-                    execution_path="validation_message",
-                )
-                return CustomJSONResponse(vr)
-            if tool_name == "fastqc_quality_analysis":
-                from backend.input_validation import validate_fastqc_inputs
-                r1, r2 = parameters.get("input_r1", ""), parameters.get("input_r2", "")
-                val = validate_fastqc_inputs(r1, r2)
-                if not val.valid:
-                    msg = val.message or "Invalid FastQC inputs."
-                    if val.suggestion:
-                        msg += "\n\n**What to do:**\n" + val.suggestion
-                    vr = build_standard_response(
-                        prompt=req.command,
-                        tool=tool_name,
-                        result={"status": "success", "text": msg, "validation_message": True},
-                        session_id=req.session_id,
-                        mcp_route="/execute",
-                        success=True,
-                        execution_path="validation_message",
-                    )
-                    return CustomJSONResponse(vr)
-
-            preflight = _preflight_tool_bindings(tool_name, parameters)
-            if isinstance(preflight, dict):
-                std = build_standard_response(
-                    prompt=req.command,
-                    tool=tool_name,
-                    result=preflight,
-                    session_id=req.session_id,
-                    mcp_route="/execute",
-                    success=True,
-                    execution_path="fallback_binding_validation",
-                )
-                return CustomJSONResponse(std)
-
-            import time
-            tool_start_time = time.time()
-            broker = _get_execution_broker()
-            result = await broker.execute_tool(
-                ExecutionRequest(
-                    tool_name=tool_name,
-                    arguments=parameters,
-                    session_id=req.session_id,
-                    original_command=req.command,
-                    session_context=session_context,
-                )
-            )
-            logger.info("Tool '%s' completed in %.2fs", tool_name, time.time() - tool_start_time)
-
-            _apply_session_context_side_effects(req.session_id, tool_name, result)
-            return await _dispatch_result(
-                req, tool_name, result, tool_args=parameters, execution_path="fallback_router"
+            return await _execute_routed_tool(
+                req,
+                tool_name=tool_name,
+                parameters=parameters,
+                session_context=session_context,
+                execution_path="fallback_router",
+                validation_execution_path="validation_message",
             )
     except Exception as e:
         return CustomJSONResponse({
@@ -3536,6 +3412,27 @@ _TOOL_INPUT_REQUIREMENTS: Dict[str, Dict[str, Any]] = {
             },
         ],
     },
+    "go_enrichment_analysis": {
+        "display_name": "GO/pathway enrichment analysis",
+        "description": (
+            "Runs Gene Ontology/pathway enrichment on a significant gene list "
+            "from a prior DEG result state."
+        ),
+        "required_inputs": [
+            {
+                "name": "gene_list",
+                "description": "List of gene symbols to test for enrichment.",
+                "example": "STAT1, IRF7, CXCL10, ISG15",
+            },
+        ],
+        "optional_inputs": [
+            {
+                "name": "source_selector",
+                "description": "Historical selector for DEG source (for example 'current DEG results').",
+                "example": "current DEG results",
+            },
+        ],
+    },
 }
 
 
@@ -3714,225 +3611,13 @@ async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
     tools_path = str((Path(__file__).resolve().parent.parent / "tools").resolve())
     # tools/ is injected via PYTHONPATH by start.sh (and by tests/conftest.py in unit tests)
 
-    # ── General needs_inputs gate ────────────────────────────────────────────
-    # When the router sets needs_inputs=True it means the user's prompt
-    # described an analysis but did not supply the required data files.
-    # We return a structured response for *any* tool here, before any
-    # tool-specific dispatch, so this behaviour is universal.
-    if arguments.get("needs_inputs"):
-        return _build_needs_inputs_response(tool_name, arguments)
-
-    if tool_name == "toolbox_inventory":
-        from tool_inventory import build_toolbox_inventory, format_toolbox_inventory_markdown
-        inv = build_toolbox_inventory()
-        return {
-            "status": "success",
-            "text": format_toolbox_inventory_markdown(inv),
-            "result": inv,
-        }
-
-    if tool_name == "visualize_job_results":
-        from backend.job_manager import get_job_manager
-        import re as _re
-
-        jm = get_job_manager()
-        requested_job_id = arguments.get("job_id")
-        original_command = str(arguments.get("original_command") or "")
-        session_id = arguments.get("session_id")
-
-        if not requested_job_id and original_command:
-            m = _re.search(
-                r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
-                original_command.lower(),
-            )
-            if m:
-                requested_job_id = m.group(0)
-
-        if not requested_job_id:
-            # Fallback to latest completed job, optionally scoped to session.
-            candidates = [
-                job for job in jm.jobs.values()
-                if isinstance(job, dict) and job.get("status") == "completed"
-            ]
-            if session_id:
-                scoped = [j for j in candidates if j.get("session_id") == session_id]
-                if scoped:
-                    candidates = scoped
-            candidates.sort(key=lambda j: str(j.get("updated_at") or j.get("completed_at") or ""), reverse=True)
-            if candidates:
-                requested_job_id = candidates[0].get("job_id")
-
-        if not requested_job_id:
-            return {
-                "status": "error",
-                "visualization_type": "text",
-                "text": "No job ID was provided and no completed jobs were found to visualize.",
-                "result": {},
-            }
-
-        try:
-            job = jm.get_job_status(requested_job_id)
-        except Exception as e:
-            return {
-                "status": "error",
-                "visualization_type": "text",
-                "text": f"Could not find job `{requested_job_id}`: {e}",
-                "result": {"job_id": requested_job_id},
-            }
-
-        if job.get("status") != "completed":
-            return {
-                "status": "success",
-                "visualization_type": "text",
-                "text": (
-                    f"Job `{requested_job_id}` is currently `{job.get('status')}`. "
-                    "Please wait for completion, then request visualization again."
-                ),
-                "result": {"job_id": requested_job_id, "job_status": job.get("status"), "job": job},
-            }
-
-        try:
-            results_info = jm.get_job_results(requested_job_id)
-        except Exception as e:
-            return {
-                "status": "error",
-                "visualization_type": "text",
-                "text": f"Failed to load results for job `{requested_job_id}`: {e}",
-                "result": {"job_id": requested_job_id, "job": job},
-            }
-
-        tool_result = results_info.get("result") if isinstance(results_info, dict) else {}
-        if not isinstance(tool_result, dict):
-            tool_result = {"value": tool_result}
-
-        visuals = []
-        if isinstance(tool_result.get("visuals"), list):
-            visuals = tool_result.get("visuals", [])
-        elif isinstance(tool_result.get("plot"), dict):
-            visuals = [{"type": "plotly_json", "data": tool_result.get("plot"), "title": "Job Visualization"}]
-
-        # Some pipeline steps (notably pairwise_identity) may return only summary text
-        # even though the immediately preceding phylogenetic step has the matrix visuals.
-        # In that case, recover visuals from the latest completed phylogenetic job in
-        # the same session so "visualize job results" still renders the matrix.
-        recovered_from_job_id = None
-        if not visuals and str(job.get("tool_name") or "") == "pairwise_identity":
-            session_scope = job.get("session_id")
-            related_phylo_jobs = [
-                j for j in jm.jobs.values()
-                if isinstance(j, dict)
-                and j.get("status") == "completed"
-                and j.get("tool_name") == "phylogenetic_tree"
-                and (not session_scope or j.get("session_id") == session_scope)
-            ]
-            related_phylo_jobs.sort(
-                key=lambda j: str(j.get("updated_at") or j.get("completed_at") or ""),
-                reverse=True,
-            )
-
-            for related in related_phylo_jobs:
-                related_result = related.get("result")
-                if not isinstance(related_result, dict):
-                    continue
-
-                recovered_visuals = []
-                related_visuals = related_result.get("visuals")
-                if isinstance(related_visuals, list):
-                    # Prefer matrix visual first if available.
-                    matrix_first = sorted(
-                        [v for v in related_visuals if isinstance(v, dict)],
-                        key=lambda v: 0 if "matrix" in str(v.get("title", "")).lower() else 1,
-                    )
-                    recovered_visuals.extend(matrix_first)
-
-                dist_matrix_b64 = related_result.get("dist_matrix_b64")
-                if isinstance(dist_matrix_b64, str) and dist_matrix_b64.strip():
-                    recovered_visuals.append(
-                        {
-                            "type": "image_b64",
-                            "data": dist_matrix_b64,
-                            "title": "Pairwise Distance Matrix",
-                        }
-                    )
-
-                if recovered_visuals:
-                    visuals = recovered_visuals
-                    recovered_from_job_id = related.get("job_id")
-                    break
-
-        links = []
-        if results_info.get("session_html_path"):
-            links.append(
-                {
-                    "title": "Session HTML Results",
-                    "url": str(results_info.get("session_html_path")),
-                }
-            )
-        results_path = results_info.get("results_path")
-        if results_path:
-            links.append({"title": "Results JSON", "url": str(results_path)})
-
-        text = (
-            tool_result.get("text")
-            or f"Loaded visualization payload for job `{requested_job_id}`."
-        )
-        if recovered_from_job_id:
-            text = (
-                f"{text}\n\nRecovered matrix visualization from related phylogenetic job "
-                f"`{recovered_from_job_id}`."
-            )
-        return {
-            "status": "success",
-            "visualization_type": "results_viewer" if (visuals or tool_result) else "text",
-            "text": text,
-            "visuals": visuals,
-            "links": links,
-            "result": {
-                "job_id": requested_job_id,
-                "job": job,
-                "results": results_info,
-                "tool_result": tool_result,
-            },
-        }
-
-    # ── Data science pipeline tools ───────────────────────────────────────────
-    if tool_name in {"ds_run_analysis", "ds_reproduce_run", "ds_diff_runs", "ds_list_runs"}:
-        from backend import agent_tools as _agent_tools
-
-        tool_obj = getattr(_agent_tools, tool_name, None)
-        if tool_obj is None:
-            raise ValueError(f"Unknown DS tool: {tool_name}")
-        if hasattr(tool_obj, "invoke"):
-            return tool_obj.invoke(arguments)
-        if hasattr(tool_obj, "func"):
-            return tool_obj.func(**arguments)
-        if callable(tool_obj):
-            return tool_obj(**arguments)
-        raise ValueError(f"DS Tool not callable: {tool_name}")
-
-    # ── Local iteration demo tools (no AWS required) ─────────────────────────
-    if tool_name in {
-        "local_demo_scatter_plot",
-        "local_demo_plot_script",
-        "local_update_scatter_x_scale",
-        "local_edit_visualization",
-        "local_edit_and_rerun_script",
-        "session_run_io_summary",
-        "patch_and_rerun",
-    }:
-        from backend import agent_tools as _agent_tools
-
-        tool_obj = getattr(_agent_tools, tool_name, None)
-        if tool_obj is None:
-            raise ValueError(f"Unknown tool: {tool_name}")
-        # LangChain StructuredTool (@tool) supports invoke()
-        if hasattr(tool_obj, "invoke"):
-            return tool_obj.invoke(arguments)
-        if hasattr(tool_obj, "func"):
-            return tool_obj.func(**arguments)
-        if callable(tool_obj):
-            return tool_obj(**arguments)
-        raise ValueError(f"Tool not callable: {tool_name}")
+    handled, registry_result = await dispatch_via_registry(
+        tool_name,
+        arguments,
+        needs_inputs_builder=_build_needs_inputs_response,
+    )
+    if handled:
+        return registry_result
 
     if tool_name == "sequence_alignment":
         import alignment
@@ -4203,10 +3888,12 @@ async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
     elif tool_name == "bio_rerun":
         # Re-run the last bioinformatics tool with optional parameter overrides.
         from backend.bio_pipeline import BioOrchestrator as _BioOrch
+        from backend.orchestration.state_selection import select_rerun_anchor
         _orch_rerun = _BioOrch(tool_executor=dispatch_tool, history_manager=history_manager)
         _session_id_rr = arguments.get("session_id", "")
         _changes_rr = arguments.get("changes", {})
         _target_run = arguments.get("target_run", "latest")
+        _orig_cmd_rr = str(arguments.get("original_command") or arguments.get("command") or "")
         _rerunnable_tools = {
             "bulk_rnaseq_analysis",
             "single_cell_analysis",
@@ -4223,17 +3910,49 @@ async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
                     return _r
             return None
 
+        def _extract_rerunnable_step_from_plan_run(_run: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+            if not isinstance(_run, dict):
+                return None
+            if _run.get("tool") != "__plan__":
+                return None
+            _result = _run.get("result")
+            if not isinstance(_result, dict):
+                return None
+            _steps = _result.get("steps")
+            if not isinstance(_steps, list):
+                return None
+            for _step in reversed(_steps):
+                if not isinstance(_step, dict):
+                    continue
+                _step_tool = _step.get("tool_name")
+                _step_args = _step.get("arguments") if isinstance(_step.get("arguments"), dict) else {}
+                if _step_tool in _rerunnable_tools and _step_args:
+                    return {
+                        "run_id": _run.get("run_id"),
+                        "tool": _step_tool,
+                        "tool_args": _step_args,
+                        "source": "plan_step",
+                    }
+            return None
+
         def _resolve_session_rerun_candidate(_sid: str, _target: str) -> Optional[Dict[str, Any]]:
             if not _sid:
                 return None
             _runs = history_manager.list_runs(_sid)
-            _candidates = [
-                _r for _r in _runs
-                if isinstance(_r, dict)
-                and _r.get("tool") in _rerunnable_tools
-                and isinstance(_r.get("tool_args"), dict)
-                and len(_r.get("tool_args") or {}) > 0
-            ]
+            _candidates: List[Dict[str, Any]] = []
+            for _r in _runs:
+                if not isinstance(_r, dict):
+                    continue
+                if (
+                    _r.get("tool") in _rerunnable_tools
+                    and isinstance(_r.get("tool_args"), dict)
+                    and len(_r.get("tool_args") or {}) > 0
+                ):
+                    _candidates.append(_r)
+                    continue
+                _plan_candidate = _extract_rerunnable_step_from_plan_run(_r)
+                if _plan_candidate:
+                    _candidates.append(_plan_candidate)
             if not _candidates:
                 return None
             if _target == "latest":
@@ -4242,7 +3961,9 @@ async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
                 return _candidates[-2] if len(_candidates) > 1 else None
             return _session_run_by_id(_sid, _target)
 
+        _session_obj_rr = history_manager.get_session(_session_id_rr) if _session_id_rr else {}
         if _target_run in {"latest", "prior"}:
+            _target_run = select_rerun_anchor(_session_obj_rr or {}, _target_run, _orig_cmd_rr)
             _session_candidate = _resolve_session_rerun_candidate(_session_id_rr, _target_run)
             if isinstance(_session_candidate, dict) and _session_candidate.get("run_id"):
                 _target_run = _session_candidate["run_id"]
@@ -4266,12 +3987,19 @@ async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
                 else:
                     if _session_id_rr:
                         return {
-                            "status": "success",
+                            "status": "needs_inputs",
                             "text": (
-                                "I could not find a prior rerunnable analysis in this session yet. "
-                                "Please run the base analysis first, or provide explicit inputs "
-                                "for the rerun (for example, count matrix and metadata)."
+                                "Rerun target was not executable from current session history. "
+                                "I found no prior run with reusable parameters or artifact-backed config. "
+                                "Provide an explicit `run_id`, or rerun with concrete inputs "
+                                "(for example `count_matrix` and `sample_metadata`)."
                             ),
+                            "diagnostics": {
+                                "issue": "missing_rerunnable_anchor",
+                                "requested_target": arguments.get("target_run", "latest"),
+                                "resolved_target": _target_run,
+                                "available_session_runs": _session_run_ids_raw[-5:],
+                            },
                         }
                     # Fallback for older runs that may only exist in artifacts/.
                     _run_dirs = sorted(
@@ -4307,11 +4035,16 @@ async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
                 )
             else:
                 result = {
-                    "status": "success",
+                    "status": "needs_inputs",
                     "message": (
-                        "No rerunnable prior session run with parameters was found yet. "
-                        "Run a base analysis first, then ask to rerun with changes."
+                        "No deterministic rerun anchor with reusable parameters was found in session history. "
+                        "Provide an explicit run reference (for example `first DEG results`) "
+                        "or rerun with concrete parameters."
                     ),
+                    "diagnostics": {
+                        "issue": "missing_rerunnable_parameters",
+                        "target_run": _target_run,
+                    },
                 }
         else:
             result = await _orch_rerun.rerun(_target_run, _changes_rr, session_id=_session_id_rr)
@@ -4333,11 +4066,12 @@ async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
     elif tool_name == "bio_diff_runs":
         # Return a structured comparison of two bioinformatics runs.
         from backend.bio_pipeline import BioOrchestrator as _BioOrch
+        from backend.orchestration.state_selection import select_diff_anchors
         from pathlib import Path as _Path
         _orch_diff = _BioOrch(tool_executor=dispatch_tool)
         _run_a = arguments.get("run_id_a", "latest")
         _run_b = arguments.get("run_id_b", "prior")
-        _orig_cmd = str(arguments.get("original_command", "") or "").lower()
+        _orig_cmd = str(arguments.get("original_command") or arguments.get("command") or "")
 
         # Resolve "latest" / "prior" pseudo-IDs with session-local preference.
         _sid_diff = arguments.get("session_id", "") or ""
@@ -4352,28 +4086,13 @@ async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
             if (_arts_root_diff / rid / "run.json").exists()
         ]
 
-        # Index session runs by tool for historical reference resolution.
-        _session_runs_valid = [
-            r for r in _session_runs_diff
-            if isinstance(r, dict)
-            and isinstance(r.get("run_id"), str)
-            and (_arts_root_diff / r.get("run_id") / "run.json").exists()
-        ]
-        _bulk_runs = [r for r in _session_runs_valid if r.get("tool") == "bulk_rnaseq_analysis"]
-        _go_runs = [r for r in _session_runs_valid if r.get("tool") in {"lookup_go_term"}]
-
-        # Prompt-aware resolution for benchmark-style historical references.
-        if "first deg" in _orig_cmd and _bulk_runs:
-            _run_a = _bulk_runs[-1]["run_id"]
-            _run_b = _bulk_runs[0]["run_id"]
-        elif "first pathway" in _orig_cmd and (_bulk_runs or _go_runs):
-            _current = (_go_runs[-1]["run_id"] if _go_runs else _bulk_runs[-1]["run_id"])
-            _first = _bulk_runs[0]["run_id"] if _bulk_runs else _go_runs[0]["run_id"]
-            _run_a = _current
-            _run_b = _first
-        elif "before the fold-change bug fix" in _orig_cmd and len(_bulk_runs) >= 2:
-            _run_a = _bulk_runs[-2]["run_id"]
-            _run_b = _bulk_runs[-1]["run_id"]
+        _session_obj_diff = history_manager.get_session(_sid_diff) if _sid_diff else {}
+        _run_a, _run_b, _selector_diag = select_diff_anchors(
+            _session_obj_diff or {},
+            str(_run_a or ""),
+            str(_run_b or ""),
+            _orig_cmd,
+        )
 
         if (_run_a == "latest" or _run_b == "prior") and len(_resolved_ids) < 2:
             if _sid_diff:
@@ -4398,16 +4117,125 @@ async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
 
         if not _run_a or not _run_b:
             return {
-                "status": "success",
+                "status": "needs_inputs",
                 "text": (
-                    "Could not resolve comparable run IDs yet. "
-                    "Please run additional analyses in this session, then retry comparison."
+                    "Historical comparison requires two concrete analysis states. "
+                    "Specify explicit references (for example `first DEG results` vs `current DEG results`) "
+                    "or provide `run_id_a` and `run_id_b`."
                 ),
+                "result": {"selector_diagnostics": _selector_diag, "run_id_a": _run_a, "run_id_b": _run_b},
+            }
+
+        # Ensure run anchors exist in artifact-backed run store expected by diff engine.
+        def _exists_artifact_run(_rid: str) -> bool:
+            if not _rid:
+                return False
+            return (_arts_root_diff / _rid / "run.json").exists()
+
+        def _session_run_by_id(_rid: str) -> Optional[Dict[str, Any]]:
+            for _r in _session_runs_diff:
+                if isinstance(_r, dict) and _r.get("run_id") == _rid:
+                    return _r
+            return None
+
+        def _effective_run_payload(_run: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+            if not isinstance(_run, dict):
+                return {"tool_name": None, "params": {}, "summary": ""}
+            _tool_name = _run.get("tool")
+            _params = _run.get("tool_args") if isinstance(_run.get("tool_args"), dict) else {}
+            _summary = ""
+            _result = _run.get("result")
+            if isinstance(_result, dict):
+                _summary = str(_result.get("text") or _result.get("summary_text") or _result.get("message") or "")
+                if _run.get("tool") == "__plan__" and isinstance(_result.get("steps"), list):
+                    for _step in reversed(_result.get("steps") or []):
+                        if not isinstance(_step, dict):
+                            continue
+                        _step_tool = _step.get("tool_name")
+                        _step_args = _step.get("arguments") if isinstance(_step.get("arguments"), dict) else {}
+                        if _step_tool and _step_args:
+                            _tool_name = _step_tool
+                            _params = _step_args
+                            _step_result = _step.get("result")
+                            if isinstance(_step_result, dict):
+                                _summary = str(
+                                    _step_result.get("text")
+                                    or _step_result.get("summary_text")
+                                    or _step_result.get("message")
+                                    or _summary
+                                )
+                            break
+            return {"tool_name": _tool_name, "params": _params, "summary": _summary}
+
+        if not _exists_artifact_run(_run_a) and _resolved_ids:
+            _run_a = _resolved_ids[-1]
+        if not _exists_artifact_run(_run_b):
+            if len(_resolved_ids) > 1:
+                _run_b = _resolved_ids[-2]
+            elif _resolved_ids:
+                _run_b = _resolved_ids[-1]
+
+        if not _exists_artifact_run(_run_a) or not _exists_artifact_run(_run_b):
+            _run_a_session = _session_run_by_id(_run_a)
+            _run_b_session = _session_run_by_id(_run_b)
+            _payload_a = _effective_run_payload(_run_a_session)
+            _payload_b = _effective_run_payload(_run_b_session)
+            if _payload_a.get("tool_name") and _payload_b.get("tool_name"):
+                _params_a = _payload_a.get("params") if isinstance(_payload_a.get("params"), dict) else {}
+                _params_b = _payload_b.get("params") if isinstance(_payload_b.get("params"), dict) else {}
+                _all_keys = sorted(set(_params_a.keys()) | set(_params_b.keys()))
+                _param_changes = {
+                    _k: {"run_a": _params_a.get(_k), "run_b": _params_b.get(_k)}
+                    for _k in _all_keys
+                    if _params_a.get(_k) != _params_b.get(_k)
+                }
+                _change_lines = "\n".join(
+                    f"- **{k}**: `{v['run_a']}` -> `{v['run_b']}`"
+                    for k, v in _param_changes.items()
+                ) or "- No parameter changes detected from session-ledger params."
+                _text = (
+                    "## Run Comparison (Session Ledger)\n\n"
+                    f"**Run A:** `{_run_a[:8]}...` (`{_payload_a.get('tool_name')}`)  \n"
+                    f"**Run B:** `{_run_b[:8]}...` (`{_payload_b.get('tool_name')}`)\n\n"
+                    f"### Parameter Changes\n{_change_lines}\n\n"
+                    "### Notes\n"
+                    "Artifact-backed run manifests were unavailable, so this comparison uses recorded session parameters/results."
+                )
+                return {
+                    "status": "success",
+                    "visualization_type": "text",
+                    "text": _text,
+                    "result": {
+                        "status": "success",
+                        "run_id_a": _run_a,
+                        "run_id_b": _run_b,
+                        "tool_name": _payload_a.get("tool_name"),
+                        "param_changes": _param_changes,
+                        "narrative_a": _payload_a.get("summary", "")[:300],
+                        "narrative_b": _payload_b.get("summary", "")[:300],
+                        "selector_diagnostics": _selector_diag,
+                        "source": "session_ledger_fallback",
+                    },
+                }
+            return {
+                "status": "needs_inputs",
+                "text": (
+                    "Comparison anchors were identified, but neither state has enough persisted metadata to compute a reliable diff yet. "
+                    "Re-run both target analyses or provide explicit run IDs that include stored parameters."
+                ),
+                "result": {"selector_diagnostics": _selector_diag, "run_id_a": _run_a, "run_id_b": _run_b},
             }
 
         diff = await _orch_diff.diff_runs(_run_a, _run_b)
         if diff.get("status") == "error":
-            return {"status": "error", "text": diff.get("message", "Diff failed.")}
+            return {
+                "status": "needs_inputs",
+                "text": (
+                    "Comparison anchors were selected, but persisted run manifests are incomplete for strict artifact diffing. "
+                    "Please rerun the compared analyses so both states include saved run manifests."
+                ),
+                "result": {"selector_diagnostics": _selector_diag, "run_id_a": _run_a, "run_id_b": _run_b, "diff_error": diff.get("message")},
+            }
 
         _param_changes = diff.get("param_changes", {})
         _change_lines = "\n".join(
@@ -4426,7 +4254,7 @@ async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
             "status": "success",
             "visualization_type": "text",
             "text": text,
-            "result": diff,
+            "result": {**diff, "selector_diagnostics": _selector_diag},
         }
 
     elif tool_name == "handle_natural_command":
@@ -4702,6 +4530,54 @@ async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
             "text": f"Lookup GO term {go_id}" if result.get("status") == "success" else f"Error: {result.get('error', 'Unknown error')}"
         }
 
+    elif tool_name == "go_enrichment_analysis":
+        from backend.orchestration.artifact_resolver import resolve_semantic_reference
+
+        _sid = arguments.get("session_id", "") or ""
+        _gene_list = arguments.get("gene_list")
+        _genes = _gene_list if isinstance(_gene_list, list) else []
+        _source_selector = str(arguments.get("source_selector") or "current DEG results")
+        _source_target = None
+        if _sid:
+            _session = history_manager.get_session(_sid) or {}
+            _resolved = resolve_semantic_reference(_session, _source_selector)
+            if _resolved.get("status") == "resolved":
+                _source_target = _resolved.get("target")
+
+        if not _genes:
+            _base = _build_needs_inputs_response("go_enrichment_analysis", arguments)
+            _base["status"] = "needs_inputs"
+            _base["text"] = (
+                "GO/pathway enrichment was recognized, but Helix does not yet have an extracted actionable gene list for this request. "
+                "Provide `gene_list` explicitly, or ask Helix to export significant upregulated genes first and then run enrichment."
+            )
+            _base["diagnostics"] = {
+                "intent": "run_enrichment",
+                "source_selector": _source_selector,
+                "resolved_source_target": _source_target,
+                "missing": ["gene_list", "enrichment_executor"],
+            }
+            return _base
+
+        return {
+            "status": "needs_inputs",
+            "text": (
+                "GO/pathway enrichment intent is confirmed, but a dedicated enrichment executor is not configured in this runtime. "
+                "Gene list was captured successfully; enable/install an enrichment backend (for example g:Profiler/clusterProfiler) to execute."
+            ),
+            "diagnostics": {
+                "intent": "run_enrichment",
+                "source_selector": _source_selector,
+                "resolved_source_target": _source_target,
+                "captured_gene_count": len(_genes),
+                "missing_executor": "go_enrichment_backend",
+            },
+            "result": {
+                "gene_list": _genes,
+                "source_target": _source_target,
+            },
+        }
+
     elif tool_name == "bulk_rnaseq_analysis":
         from backend import bulk_rnaseq
 
@@ -4891,32 +4767,6 @@ async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
                 "result": {},
                 "text": f"Failed to invoke FastQC tool: {str(e)}",
                 "error": str(e)
-            }
-
-    elif tool_name == "s3_browse_results":
-        from backend.agent_tools import s3_browse_results as s3_tool
-
-        tool_input = {
-            "prefix": arguments.get("prefix") or arguments.get("output") or arguments.get("s3_prefix") or "",
-            "show": arguments.get("show") or arguments.get("results_json") or arguments.get("results_path"),
-            "recursive": bool(arguments.get("recursive", True)),
-            "max_keys": int(arguments.get("max_keys", 200) or 200),
-            "mode": arguments.get("mode") or "display",
-        }
-
-        try:
-            if hasattr(s3_tool, "invoke"):
-                return s3_tool.invoke(tool_input)
-            if hasattr(s3_tool, "func"):
-                return s3_tool.func(**tool_input)
-            return s3_tool(**tool_input)
-        except Exception as e:
-            logger.error(f"s3_browse_results invocation failed: {e}")
-            return {
-                "status": "error",
-                "result": {},
-                "text": f"Failed to browse S3 results: {str(e)}",
-                "error": str(e),
             }
 
     elif tool_name == "unsupported_tool":

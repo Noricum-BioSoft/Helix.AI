@@ -2633,6 +2633,18 @@ def patch_and_rerun(
     from backend.history_manager import history_manager
     from backend import script_executor as _se
 
+    def _normalize_backend_imports(script_text: str) -> str:
+        """
+        Make generated scripts resilient to package-export differences.
+        """
+        import re as _re
+        return _re.sub(
+            r"^\s*from\s+backend\s+import\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+as\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*$",
+            r"import backend.\1 as \2",
+            script_text,
+            flags=_re.MULTILINE,
+        )
+
     # ── 1. Find the script to patch ──────────────────────────────────────────
     runs = history_manager.list_runs(session_id)
     target: Optional[Dict] = None
@@ -2650,12 +2662,18 @@ def patch_and_rerun(
 
     if not target:
         return {
-            "status": "error",
+            "status": "needs_inputs",
             "text": (
-                "No saved analysis script found in this session. "
-                "Run an analysis first (Demo 1–5) and then request changes."
+                "No patchable analysis script is currently linked to this session history. "
+                "Provide a specific `target_run` that has a saved script artifact, or request "
+                "a deterministic rerun action (for example, update PCA coloring via `bio_rerun`)."
             ),
             "error": "NO_SCRIPT_FOUND",
+            "diagnostics": {
+                "issue": "missing_script_artifact",
+                "target_run": target_run,
+                "available_run_ids": [r.get("run_id") for r in runs if isinstance(r, dict)][-5:],
+            },
         }
 
     script_art = next(
@@ -2685,6 +2703,8 @@ def patch_and_rerun(
         new_script = _llm_patch_script(old_script, change_request)
         patch_description = f"(LLM-applied) {change_request}"
 
+    new_script = _normalize_backend_imports(new_script)
+
     # ── 3. Write new script in a new run directory ────────────────────────────
     import time, re as _re
     new_run_id = f"run-{int(time.time()*1000)}-patch"
@@ -2705,9 +2725,37 @@ def patch_and_rerun(
     new_script_path.write_text(new_script)
 
     # ── 4. Execute ────────────────────────────────────────────────────────────
-    exec_result = _se.execute(new_script_path)
+    repo_root = str(Path(__file__).resolve().parent.parent)
+    py_path = os.pathsep.join([repo_root, os.getenv("PYTHONPATH", "")]).strip(os.pathsep)
+    exec_result = _se.execute(new_script_path, env={"PYTHONPATH": py_path})
 
     if exec_result.get("status") == "error":
+        _err = str(exec_result.get("error") or "")
+        _logs = str(exec_result.get("logs") or "")
+        _err_l = f"{_err}\n{_logs}".lower()
+        if "importerror" in _err_l or "cannot import name" in _err_l or "no module named" in _err_l:
+            return {
+                "status": "needs_inputs",
+                "text": (
+                    "Patch execution reached a runtime import dependency issue in the isolated script runner. "
+                    "The change request was captured, but this run could not be executed in script mode. "
+                    "Retry with an explicit rerun anchor or concrete analysis inputs."
+                ),
+                "diagnostics": {
+                    "issue": "script_runtime_import_failure",
+                    "change_request": change_request,
+                    "target_run": target.get("run_id"),
+                    "script_path": str(new_script_path),
+                    "execution_error": _err,
+                    "execution_logs_tail": _logs[-1200:],
+                },
+                "script_path": str(new_script_path),
+                "run_id": new_run_id,
+                "parent_run_id": old_run_id,
+                "links": [
+                    {"label": "analysis.py", "url": f"/download/script?path={str(new_script_path)}"},
+                ],
+            }
         return {
             "status": "error",
             "text": (

@@ -1,7 +1,7 @@
 {
-  "generated_at_utc": "2026-03-15T20:08:14.545386+00:00",
+  "generated_at_utc": "2026-03-15T20:17:58.724157+00:00",
   "scenario_id": "bulk-rnaseq-e2e",
-  "session_id": "983bcde1-8621-4e1e-9ebc-1c09424347a8",
+  "session_id": "8e89c58c-d2b1-409d-ad55-536af858506e",
   "per_turn_scores": [
     {
       "turn_id": "turn_01",
@@ -220,8 +220,8 @@
     {
       "turn_id": "turn_08",
       "prompt": "Fix it and regenerate the table and plot.",
-      "tool": "patch_and_rerun",
-      "status": "needs_inputs",
+      "tool": "bulk_rnaseq_analysis",
+      "status": "success",
       "score": 1,
       "max_score": 2,
       "expectation_category": "rerun_expected",
@@ -229,21 +229,25 @@
         "scientific_correctness_under_revision",
         "reproducibility"
       ],
-      "root_cause_categories": [],
-      "failure_patterns": [],
+      "root_cause_categories": [
+        "state_session_gap"
+      ],
+      "failure_patterns": [
+        "synthetic_success_only"
+      ],
       "assessments": {
         "tool_action_alignment": "aligned",
         "artifact_state_resolution": "resolved_or_not_required",
-        "execution_vs_planning": "uncertain",
+        "execution_vs_planning": "execution_happened",
         "output_usefulness": "specific"
       },
-      "rationale": "expectation=rerun_expected; tool_alignment=aligned; execution_vs_planning=uncertain; artifact_resolution=resolved_or_not_required; output_usefulness=specific; deductions=none",
+      "rationale": "expectation=rerun_expected; tool_alignment=aligned; execution_vs_planning=execution_happened; artifact_resolution=resolved_or_not_required; output_usefulness=specific; deductions=synthetic_success_only",
       "evidence": {
-        "tool": "patch_and_rerun",
-        "status": "needs_inputs",
+        "tool": "bulk_rnaseq_analysis",
+        "status": "success",
         "execute_ready": false,
         "error": null,
-        "text_snippet": "No patchable analysis script is currently linked to this session history. Provide a specific `target_run` that has a saved script artifact, or request a deterministic rerun action (for example, update PCA coloring via `bio_rerun`).",
+        "text_snippet": "## Bulk RNA-seq Analysis Complete\n\n**Design formula:** `~condition`  \n**Samples:** 6  |  **Genes:** 500\n\n### Differential Expression Summary\n\n| Contrast | Total Genes | Significant (padj < 0.05) | Up | Down |\n|----------|-------------|-----",
         "duration_s": null
       }
     },
@@ -251,29 +255,33 @@
       "turn_id": "turn_09",
       "prompt": "Now highlight IL6, TNF, CXCL8, and NFKB1 on the volcano plot.",
       "tool": "patch_and_rerun",
-      "status": "needs_inputs",
-      "score": 1,
+      "status": "error",
+      "score": 0,
       "max_score": 2,
       "expectation_category": "rerun_expected",
       "focus_dimensions": [
         "visualization_iteration",
         "lineage_explainability"
       ],
-      "root_cause_categories": [],
-      "failure_patterns": [],
+      "root_cause_categories": [
+        "executor_gap"
+      ],
+      "failure_patterns": [
+        "hard_execution_failure"
+      ],
       "assessments": {
         "tool_action_alignment": "aligned",
         "artifact_state_resolution": "resolved_or_not_required",
         "execution_vs_planning": "uncertain",
         "output_usefulness": "specific"
       },
-      "rationale": "expectation=rerun_expected; tool_alignment=aligned; execution_vs_planning=uncertain; artifact_resolution=resolved_or_not_required; output_usefulness=specific; deductions=none",
+      "rationale": "expectation=rerun_expected; tool_alignment=aligned; execution_vs_planning=uncertain; artifact_resolution=resolved_or_not_required; output_usefulness=specific; deductions=hard_execution_failure",
       "evidence": {
         "tool": "patch_and_rerun",
-        "status": "needs_inputs",
+        "status": "error",
         "execute_ready": false,
-        "error": null,
-        "text_snippet": "No patchable analysis script is currently linked to this session history. Provide a specific `target_run` that has a saved script artifact, or request a deterministic rerun action (for example, update PCA coloring via `bio_rerun`).",
+        "error": "Traceback (most recent call last):\n  File \"/sandbox/work/analysis.py\", line 20, in <module>\n    from backend import bulk_rnaseq as _mod\nImportError: cannot import name 'bulk_rnaseq' from 'backend' (/app/backend/__init__.py)\n",
+        "text_snippet": "Script execution failed after applying: (LLM-applied) Now highlight IL6, TNF, CXCL8, and NFKB1 on the volcano plot.\n\n**Error:** Traceback (most recent call last):\n  File \"/sandbox/work/analysis.py\", line 20, in <module>\n    from backend imp",
         "duration_s": null
       }
     },
@@ -281,14 +289,48 @@
       "turn_id": "turn_10",
       "prompt": "Also give me a heatmap of the top 30 significant genes.",
       "tool": "patch_and_rerun",
-      "status": "needs_inputs",
-      "score": 1,
+      "status": "error",
+      "score": 0,
       "max_score": 2,
       "expectation_category": "visualization_update_expected",
       "focus_dimensions": [
         "visualization_iteration",
         "artifact_persistence",
         "lineage_explainability"
+      ],
+      "root_cause_categories": [
+        "executor_gap"
+      ],
+      "failure_patterns": [
+        "hard_execution_failure"
+      ],
+      "assessments": {
+        "tool_action_alignment": "aligned",
+        "artifact_state_resolution": "not_primary",
+        "execution_vs_planning": "uncertain",
+        "output_usefulness": "specific"
+      },
+      "rationale": "expectation=visualization_update_expected; tool_alignment=aligned; execution_vs_planning=uncertain; artifact_resolution=not_primary; output_usefulness=specific; deductions=hard_execution_failure",
+      "evidence": {
+        "tool": "patch_and_rerun",
+        "status": "error",
+        "execute_ready": false,
+        "error": "Traceback (most recent call last):\n  File \"/sandbox/work/analysis.py\", line 20, in <module>\n    from backend import bulk_rnaseq as _mod\nImportError: cannot import name 'bulk_rnaseq' from 'backend' (/app/backend/__init__.py)\n",
+        "text_snippet": "Script execution failed after applying: (LLM-applied) Also give me a heatmap of the top 30 significant genes.\n\n**Error:** Traceback (most recent call last):\n  File \"/sandbox/work/analysis.py\", line 20, in <module>\n    from backend import bu",
+        "duration_s": null
+      }
+    },
+    {
+      "turn_id": "turn_11",
+      "prompt": "Actually make that top 50 genes, clustered by sample, and split by condition.",
+      "tool": "patch_and_rerun",
+      "status": "needs_inputs",
+      "score": 1,
+      "max_score": 2,
+      "expectation_category": "visualization_update_expected",
+      "focus_dimensions": [
+        "visualization_iteration",
+        "reproducibility"
       ],
       "root_cause_categories": [],
       "failure_patterns": [],
@@ -304,41 +346,7 @@
         "status": "needs_inputs",
         "execute_ready": false,
         "error": null,
-        "text_snippet": "No patchable analysis script is currently linked to this session history. Provide a specific `target_run` that has a saved script artifact, or request a deterministic rerun action (for example, update PCA coloring via `bio_rerun`).",
-        "duration_s": null
-      }
-    },
-    {
-      "turn_id": "turn_11",
-      "prompt": "Actually make that top 50 genes, clustered by sample, and split by condition.",
-      "tool": "bulk_rnaseq_analysis",
-      "status": "success",
-      "score": 1,
-      "max_score": 2,
-      "expectation_category": "visualization_update_expected",
-      "focus_dimensions": [
-        "visualization_iteration",
-        "reproducibility"
-      ],
-      "root_cause_categories": [
-        "state_session_gap"
-      ],
-      "failure_patterns": [
-        "synthetic_success_only"
-      ],
-      "assessments": {
-        "tool_action_alignment": "aligned",
-        "artifact_state_resolution": "not_primary",
-        "execution_vs_planning": "execution_happened",
-        "output_usefulness": "specific"
-      },
-      "rationale": "expectation=visualization_update_expected; tool_alignment=aligned; execution_vs_planning=execution_happened; artifact_resolution=not_primary; output_usefulness=specific; deductions=synthetic_success_only",
-      "evidence": {
-        "tool": "bulk_rnaseq_analysis",
-        "status": "success",
-        "execute_ready": false,
-        "error": null,
-        "text_snippet": "## Bulk RNA-seq Analysis Complete\n\n**Design formula:** `~condition`  \n**Samples:** 6  |  **Genes:** 500\n\n### Differential Expression Summary\n\n| Contrast | Total Genes | Significant (padj < 0.05) | Up | Down |\n|----------|-------------|-----",
+        "text_snippet": "**Helix understood your request as: Patch And Rerun**\n\nRuns Patch And Rerun.\n\nBefore Helix can execute this analysis, the following inputs are needed:\n\n### Parameters detected from your prompt\n- **design_formula**: `~condition`\n- **alpha**:",
         "duration_s": null
       }
     },
@@ -399,7 +407,7 @@
         "status": "success",
         "execute_ready": false,
         "error": null,
-        "text_snippet": "## Run Comparison (Session Ledger)\n\n**Run A:** `run_9999...` (`go_enrichment_analysis`)  \n**Run B:** `run_84ec...` (`bulk_rnaseq_analysis`)\n\n### Parameter Changes\n- **action_type**: `run_enrichment` -> `generate_plot`\n- **alpha**: `None` ->",
+        "text_snippet": "## Run Comparison (Session Ledger)\n\n**Run A:** `run_9271...` (`go_enrichment_analysis`)  \n**Run B:** `run_c3a7...` (`patch_and_rerun`)\n\n### Parameter Changes\n- **action_type**: `run_enrichment` -> `generate_plot`\n- **command**: `Take the si",
         "duration_s": null
       }
     },
@@ -556,7 +564,7 @@
         "status": "success",
         "execute_ready": false,
         "error": null,
-        "text_snippet": "## Run Comparison (Session Ledger)\n\n**Run A:** `run_84ec...` (`bulk_rnaseq_analysis`)  \n**Run B:** `run_84ec...` (`bulk_rnaseq_analysis`)\n\n### Parameter Changes\n- No parameter changes detected from session-ledger params.\n\n### Notes\nArtifact",
+        "text_snippet": "## Run Comparison (Session Ledger)\n\n**Run A:** `run_1347...` (`bulk_rnaseq_analysis`)  \n**Run B:** `run_1347...` (`bulk_rnaseq_analysis`)\n\n### Parameter Changes\n- No parameter changes detected from session-ledger params.\n\n### Notes\nArtifact",
         "duration_s": null
       }
     },
@@ -634,26 +642,45 @@
     "scientific_intent_resolution": 2.0,
     "data_understanding": 2.0,
     "workflow_selection": 1.8,
-    "artifact_persistence": 1.4,
-    "lineage_explainability": 1.455,
+    "artifact_persistence": 1.3,
+    "lineage_explainability": 1.273,
     "scientific_correctness_under_revision": 1.714,
     "reproducibility": 1.429,
-    "visualization_iteration": 1.0,
+    "visualization_iteration": 0.5,
     "error_handling_recovery": 2.0
   },
   "per_scenario_scores": [
     {
       "scenario_id": "bulk-rnaseq-e2e",
-      "raw_score": 31,
+      "raw_score": 29,
       "max_score": 40,
-      "overall_percentage": 77.5,
+      "overall_percentage": 72.5,
       "result": "Partial"
     }
   ],
-  "raw_score": 31,
+  "raw_score": 29,
   "max_score": 40,
-  "overall_percentage": 77.5,
+  "overall_percentage": 72.5,
   "critical_failures": [
+    {
+      "turn_id": "turn_09",
+      "tool": "patch_and_rerun",
+      "status": "error",
+      "high_severity_dimensions": [
+        "lineage_explainability"
+      ],
+      "reason": "expectation=rerun_expected; tool_alignment=aligned; execution_vs_planning=uncertain; artifact_resolution=resolved_or_not_required; output_usefulness=specific; deductions=hard_execution_failure"
+    },
+    {
+      "turn_id": "turn_10",
+      "tool": "patch_and_rerun",
+      "status": "error",
+      "high_severity_dimensions": [
+        "artifact_persistence",
+        "lineage_explainability"
+      ],
+      "reason": "expectation=visualization_update_expected; tool_alignment=aligned; execution_vs_planning=uncertain; artifact_resolution=not_primary; output_usefulness=specific; deductions=hard_execution_failure"
+    },
     {
       "turn_id": "turn_19",
       "tool": "__plan__",

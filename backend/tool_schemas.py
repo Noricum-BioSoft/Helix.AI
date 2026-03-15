@@ -120,6 +120,22 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
         },
     },
     {
+        "name": "go_enrichment_analysis",
+        "description": "Run GO/pathway enrichment from a differential-expression gene set reference.",
+        "tags": ["gene ontology", "go", "enrichment", "pathway", "gsea"],
+        "outputs": {"type": "object", "description": "Enrichment result summary or structured missing-input diagnostics."},
+        "inputs": {
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string"},
+                "source_selector": {"type": "string", "description": "Semantic selector for DEG source run/artifact."},
+                "gene_list": {"type": "array", "items": {"type": "string"}},
+                "command": {"type": "string"},
+            },
+            "required": ["session_id"],
+        },
+    },
+    {
         "name": "bulk_rnaseq_analysis",
         "description": "Run DESeq2 bulk RNA-seq differential expression.",
         "tags": ["rnaseq", "deseq2", "differential expression"],

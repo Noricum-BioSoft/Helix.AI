@@ -1,17 +1,16 @@
-# Iteration Report (iteration_2_report)
+# Iteration Report (iteration_5_report)
 
-- Generated: 2026-03-15T20:04:46.236536+00:00
-- Session: 204a7f5a-248d-466b-acd0-906b878c9a0b
+- Generated: 2026-03-15T20:15:08.378598+00:00
+- Session: 4c6efedc-727b-4834-b92b-8c81a2e02580
 - Scenario: bulk-rnaseq-e2e
-- Raw Score: 29 / 40
-- Overall Percentage: 72.5%
+- Raw Score: 30 / 40
+- Overall Percentage: 75.0%
 - Threshold Met: No
-- Critical failures: 3
+- Critical failures: 2
 
 ## Lessons Learned
 - 1 critical failure(s): expectation=rerun_expected; tool_alignment=aligned; execution_vs_planning=uncertain; artifact_resolution=resolved_or_not_required; output_usefulness=specific; deductions=hard_execution_failure
 - 1 critical failure(s): expectation=visualization_update_expected; tool_alignment=aligned; execution_vs_planning=uncertain; artifact_resolution=not_primary; output_usefulness=specific; deductions=hard_execution_failure
-- 1 critical failure(s): expectation=historical_recreation_expected; tool_alignment=misaligned; execution_vs_planning=incorrect_planning_instead_of_execution; artifact_resolution=resolved_or_not_required; output_usefulness=weak; deductions=output_not_specific,plan_instead_of_execution,wrong_tool_class
 
 ## Remediation Targets
 - Harden execution path robustness and fallback behavior.
@@ -19,4 +18,3 @@
 ## Critical Failures
 - `turn_09` tool=`patch_and_rerun` status=`error`: expectation=rerun_expected; tool_alignment=aligned; execution_vs_planning=uncertain; artifact_resolution=resolved_or_not_required; output_usefulness=specific; deductions=hard_execution_failure
 - `turn_10` tool=`patch_and_rerun` status=`error`: expectation=visualization_update_expected; tool_alignment=aligned; execution_vs_planning=uncertain; artifact_resolution=not_primary; output_usefulness=specific; deductions=hard_execution_failure
-- `turn_19` tool=`__plan__` status=`workflow_planned`: expectation=historical_recreation_expected; tool_alignment=misaligned; execution_vs_planning=incorrect_planning_instead_of_execution; artifact_resolution=resolved_or_not_required; output_usefulness=weak; deductions=output_not_specific,plan_instead_of_execution,wrong_tool_class

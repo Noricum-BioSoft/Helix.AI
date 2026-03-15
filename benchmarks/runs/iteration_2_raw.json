@@ -1,5 +1,5 @@
 {
-  "session_id": "6d912905-a53e-4001-8f17-92ead328b276",
+  "session_id": "204a7f5a-248d-466b-acd0-906b878c9a0b",
   "scenario_id": "bulk-rnaseq-e2e",
   "rows": [
     {
@@ -33,9 +33,9 @@
       "turn_id": "turn_04",
       "user": "The PCA suggests 2 outlier samples. Exclude them and rerun.",
       "tool": "bio_rerun",
-      "status": "success",
+      "status": "needs_inputs",
       "execute_ready": false,
-      "text": "I could not find a prior rerunnable analysis in this session yet. Please run the base analysis first, or provide explicit inputs for the rerun (for example, count matrix and metadata).",
+      "text": "Rerun target was not executable from current session history. I found no prior run with reusable parameters or artifact-backed config. Provide an explicit `run_id`, or rerun with concrete inputs (for example `count_matrix` and `sample_metadata`).",
       "error": null
     },
     {
@@ -77,37 +77,37 @@
     {
       "turn_id": "turn_09",
       "user": "Now highlight IL6, TNF, CXCL8, and NFKB1 on the volcano plot.",
-      "tool": "bulk_rnaseq_analysis",
-      "status": "success",
+      "tool": "patch_and_rerun",
+      "status": "error",
       "execute_ready": false,
-      "text": "## Bulk RNA-seq Analysis Complete\n\n**Design formula:** `~condition`  \n**Samples:** 6  |  **Genes:** 500\n\n### Differential Expression Summary\n\n| Contrast | Total Genes | Significant (padj < 0.05) | Up | Down |\n|----------|-------------|-----------------------------|----|------|\n| condition: control vs treatment | 500 | 0 | 0 | 0 |\n\n\n> \u26a0\ufe0f *Synthetic demo data used \u2014 real S3 data unavailable.*",
-      "error": null
+      "text": "Script execution failed after applying: (LLM-applied) Now highlight IL6, TNF, CXCL8, and NFKB1 on the volcano plot.\n\n**Error:** Traceback (most recent call last):\n  File \"/sandbox/work/analysis.py\", line 20, in <module>\n    from backend import bulk_rnaseq as _mod\nImportError: cannot import name 'bulk_rnaseq' from 'backend' (/app/backend/__init__.py)\n\n\n```\nTraceback (most recent call last):\n  File \"/sandbox/work/analysis.py\", line 20, in <module>\n    from backend import bulk_rnaseq as _mod\nImport",
+      "error": "Traceback (most recent call last):\n  File \"/sandbox/work/analysis.py\", line 20, in <module>\n    from backend import bulk_rnaseq as _mod\nImportError: cannot import name 'bulk_rnaseq' from 'backend' (/app/backend/__init__.py)\n"
     },
     {
       "turn_id": "turn_10",
       "user": "Also give me a heatmap of the top 30 significant genes.",
-      "tool": "bulk_rnaseq_analysis",
-      "status": "success",
+      "tool": "patch_and_rerun",
+      "status": "error",
       "execute_ready": false,
-      "text": "## Bulk RNA-seq Analysis Complete\n\n**Design formula:** `~condition`  \n**Samples:** 6  |  **Genes:** 500\n\n### Differential Expression Summary\n\n| Contrast | Total Genes | Significant (padj < 0.05) | Up | Down |\n|----------|-------------|-----------------------------|----|------|\n| condition: control vs treatment | 500 | 0 | 0 | 0 |\n\n\n> \u26a0\ufe0f *Synthetic demo data used \u2014 real S3 data unavailable.*",
-      "error": null
+      "text": "Script execution failed after applying: (LLM-applied) Also give me a heatmap of the top 30 significant genes.\n\n**Error:** Traceback (most recent call last):\n  File \"/sandbox/work/analysis.py\", line 20, in <module>\n    from backend import bulk_rnaseq as _mod\nImportError: cannot import name 'bulk_rnaseq' from 'backend' (/app/backend/__init__.py)\n\n\n```\nTraceback (most recent call last):\n  File \"/sandbox/work/analysis.py\", line 20, in <module>\n    from backend import bulk_rnaseq as _mod\nImportError:",
+      "error": "Traceback (most recent call last):\n  File \"/sandbox/work/analysis.py\", line 20, in <module>\n    from backend import bulk_rnaseq as _mod\nImportError: cannot import name 'bulk_rnaseq' from 'backend' (/app/backend/__init__.py)\n"
     },
     {
       "turn_id": "turn_11",
       "user": "Actually make that top 50 genes, clustered by sample, and split by condition.",
-      "tool": "bulk_rnaseq_analysis",
+      "tool": "patch_and_rerun",
       "status": "needs_inputs",
       "execute_ready": false,
-      "text": "**Helix understood your request as: Bulk RNA-seq differential expression analysis**\n\nPerforms differential expression analysis on raw count data. Models main effects, interactions, and multi-factor experimental designs.\n\nBefore Helix can execute this analysis, the following inputs are needed:\n\n### Required inputs\n| Parameter | Description | Example |\n|-----------|-------------|---------|\n| `count_matrix` | Raw count matrix \u2014 genes as rows, samples as columns (CSV or TSV). | `s3://your-bucket/cou",
+      "text": "**Helix understood your request as: Patch And Rerun**\n\nRuns Patch And Rerun.\n\nBefore Helix can execute this analysis, the following inputs are needed:\n\n### Parameters detected from your prompt\n- **design_formula**: `~condition`\n- **alpha**: `0.05`\n- **router_reasoning**: `{'problem_description': 'Select top 50 genes clustered by sample and split by condition', 'intent': 'single-tool', 'suggested_steps': ['Select top 50 genes by expression or significance', 'Cluster genes by sample', 'Split clust",
       "error": null
     },
     {
       "turn_id": "turn_12",
       "user": "Take the significantly upregulated genes and run GO enrichment.",
-      "tool": "bulk_rnaseq_analysis",
-      "status": "success",
+      "tool": "go_enrichment_analysis",
+      "status": "needs_inputs",
       "execute_ready": false,
-      "text": "## Bulk RNA-seq Analysis Complete\n\n**Design formula:** `~condition`  \n**Samples:** 6  |  **Genes:** 500\n\n### Differential Expression Summary\n\n| Contrast | Total Genes | Significant (padj < 0.05) | Up | Down |\n|----------|-------------|-----------------------------|----|------|\n| condition: control vs treatment | 500 | 0 | 0 | 0 |\n\n\n> \u26a0\ufe0f *Synthetic demo data used \u2014 real S3 data unavailable.*",
+      "text": "GO/pathway enrichment was recognized, but Helix does not yet have an extracted actionable gene list for this request. Provide `gene_list` explicitly, or ask Helix to export significant upregulated genes first and then run enrichment.",
       "error": null
     },
     {
@@ -116,7 +116,7 @@
       "tool": "bio_diff_runs",
       "status": "success",
       "execute_ready": false,
-      "text": "I could not resolve two comparable historical runs in this session yet. Run at least two comparable analyses first (for example, initial and corrected runs).",
+      "text": "## Run Comparison (Session Ledger)\n\n**Run A:** `run_a3a3...` (`go_enrichment_analysis`)  \n**Run B:** `run_96bf...` (`patch_and_rerun`)\n\n### Parameter Changes\n- **action_type**: `run_enrichment` -> `generate_plot`\n- **command**: `Take the significantly upregulated genes and run GO enrichment.` -> `None`\n- **count_matrix**: `path/to/count_matrix.csv` -> ``\n- **needs_inputs**: `None` -> `True`\n- **router_reasoning**: `None` -> `{'problem_description': 'Select top 50 genes clustered by sample and sp",
       "error": null
     },
     {
@@ -132,9 +132,9 @@
       "turn_id": "turn_15",
       "user": "Color the PCA by batch and sex and show both.",
       "tool": "bio_rerun",
-      "status": "success",
+      "status": "needs_inputs",
       "execute_ready": false,
-      "text": "## Bulk RNA-seq Analysis Complete\n\n**Design formula:** `~condition`  \n**Samples:** 6  |  **Genes:** 500\n\n### Differential Expression Summary\n\n| Contrast | Total Genes | Significant (padj < 0.05) | Up | Down |\n|----------|-------------|-----------------------------|----|------|\n| condition: control vs treatment | 500 | 0 | 0 | 0 |\n\n\n> \u26a0\ufe0f *Synthetic demo data used \u2014 real S3 data unavailable.*",
+      "text": "Re-run complete.",
       "error": null
     },
     {
@@ -143,7 +143,7 @@
       "tool": "handle_natural_command",
       "status": "success",
       "execute_ready": false,
-      "text": "",
+      "text": "The request returned without actionable output. Please provide the target artifact/state or required inputs so Helix can execute deterministically.",
       "error": null
     },
     {
@@ -161,16 +161,16 @@
       "tool": "bio_diff_runs",
       "status": "success",
       "execute_ready": false,
-      "text": "## Run Comparison\n\n**Run A:** `f151eb75\u2026`  \n**Run B:** `f151eb75\u2026`\n\n### Parameter Changes\n- No parameter changes detected.\n\n### Metrics (Run B)\nN/A",
+      "text": "## Run Comparison (Session Ledger)\n\n**Run A:** `run_9334...` (`bulk_rnaseq_analysis`)  \n**Run B:** `run_9334...` (`bulk_rnaseq_analysis`)\n\n### Parameter Changes\n- No parameter changes detected from session-ledger params.\n\n### Notes\nArtifact-backed run manifests were unavailable, so this comparison uses recorded session parameters/results.",
       "error": null
     },
     {
       "turn_id": "turn_19",
       "user": "Recreate the figure set corresponding to the corrected metadata version before the fold-change bug fix.",
-      "tool": "bio_diff_runs",
-      "status": "success",
-      "execute_ready": false,
-      "text": "## Run Comparison\n\n**Run A:** `f151eb75\u2026`  \n**Run B:** `f151eb75\u2026`\n\n### Parameter Changes\n- No parameter changes detected.\n\n### Metrics (Run B)\nN/A",
+      "tool": "__plan__",
+      "status": "workflow_planned",
+      "execute_ready": true,
+      "text": "## Pipeline Plan\n\n**Steps:**\n\n1. **step1** (`bio_rerun`)\n\n*All inputs are available. Click **Execute Pipeline** to run these steps.*",
       "error": null
     },
     {

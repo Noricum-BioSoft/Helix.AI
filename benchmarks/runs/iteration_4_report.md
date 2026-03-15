@@ -1,7 +1,7 @@
-# Iteration Report (iteration_2_report)
+# Iteration Report (iteration_4_report)
 
-- Generated: 2026-03-15T20:04:46.236536+00:00
-- Session: 204a7f5a-248d-466b-acd0-906b878c9a0b
+- Generated: 2026-03-15T20:11:27.838970+00:00
+- Session: 8597fd5f-80d9-4ff2-a9cf-4a8beab292d2
 - Scenario: bulk-rnaseq-e2e
 - Raw Score: 29 / 40
 - Overall Percentage: 72.5%

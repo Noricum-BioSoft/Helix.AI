@@ -1,7 +1,7 @@
 {
-  "generated_at_utc": "2026-03-15T17:11:21.494163+00:00",
+  "generated_at_utc": "2026-03-15T20:40:32.198399+00:00",
   "scenario_id": "bulk-rnaseq-e2e",
-  "session_id": "2c285940-1a04-40e7-b5b3-282ea29901e1",
+  "session_id": "5f55cea0-5f64-40ec-9a51-980068cd31fd",
   "per_turn_scores": [
     {
       "turn_id": "turn_01",
@@ -10,13 +10,21 @@
       "status": "workflow_planned",
       "score": 2,
       "max_score": 2,
+      "expectation_category": "clarification_expected",
       "focus_dimensions": [
         "scientific_intent_resolution",
         "data_understanding",
         "workflow_selection"
       ],
       "root_cause_categories": [],
-      "rationale": "response returned without transport failure; approval respected via staged plan",
+      "failure_patterns": [],
+      "assessments": {
+        "tool_action_alignment": "aligned",
+        "artifact_state_resolution": "not_primary",
+        "execution_vs_planning": "uncertain",
+        "output_usefulness": "specific"
+      },
+      "rationale": "expectation=clarification_expected; tool_alignment=aligned; execution_vs_planning=uncertain; artifact_resolution=not_primary; output_usefulness=specific; deductions=none",
       "evidence": {
         "tool": "__plan__",
         "status": "workflow_planned",
@@ -33,13 +41,21 @@
       "status": "workflow_planned",
       "score": 2,
       "max_score": 2,
+      "expectation_category": "planning_expected",
       "focus_dimensions": [
         "scientific_intent_resolution",
         "workflow_selection",
         "artifact_persistence"
       ],
       "root_cause_categories": [],
-      "rationale": "response returned without transport failure; approval respected via staged plan",
+      "failure_patterns": [],
+      "assessments": {
+        "tool_action_alignment": "aligned",
+        "artifact_state_resolution": "not_primary",
+        "execution_vs_planning": "correct_planning",
+        "output_usefulness": "specific"
+      },
+      "rationale": "expectation=planning_expected; tool_alignment=aligned; execution_vs_planning=correct_planning; artifact_resolution=not_primary; output_usefulness=specific; deductions=none",
       "evidence": {
         "tool": "__plan__",
         "status": "workflow_planned",
@@ -56,12 +72,20 @@
       "status": "success",
       "score": 2,
       "max_score": 2,
+      "expectation_category": "approval_execution_expected",
       "focus_dimensions": [
         "artifact_persistence",
         "lineage_explainability"
       ],
       "root_cause_categories": [],
-      "rationale": "response returned without transport failure; approve turn executed successfully",
+      "failure_patterns": [],
+      "assessments": {
+        "tool_action_alignment": "aligned",
+        "artifact_state_resolution": "not_primary",
+        "execution_vs_planning": "approved_execution_happened",
+        "output_usefulness": "specific"
+      },
+      "rationale": "expectation=approval_execution_expected; tool_alignment=aligned; execution_vs_planning=approved_execution_happened; artifact_resolution=not_primary; output_usefulness=specific; deductions=none",
       "evidence": {
         "tool": "__plan__",
         "status": "success",
@@ -75,22 +99,30 @@
       "turn_id": "turn_04",
       "prompt": "The PCA suggests 2 outlier samples. Exclude them and rerun.",
       "tool": "bio_rerun",
-      "status": "success",
-      "score": 2,
+      "status": "needs_inputs",
+      "score": 1,
       "max_score": 2,
+      "expectation_category": "rerun_expected",
       "focus_dimensions": [
         "artifact_persistence",
         "lineage_explainability",
         "scientific_correctness_under_revision"
       ],
       "root_cause_categories": [],
-      "rationale": "response returned without transport failure; execution turn succeeded",
+      "failure_patterns": [],
+      "assessments": {
+        "tool_action_alignment": "aligned",
+        "artifact_state_resolution": "resolved_or_not_required",
+        "execution_vs_planning": "uncertain",
+        "output_usefulness": "specific"
+      },
+      "rationale": "expectation=rerun_expected; tool_alignment=aligned; execution_vs_planning=uncertain; artifact_resolution=resolved_or_not_required; output_usefulness=specific; deductions=none",
       "evidence": {
         "tool": "bio_rerun",
-        "status": "success",
+        "status": "needs_inputs",
         "execute_ready": false,
         "error": null,
-        "text_snippet": "I could not find a prior rerunnable analysis in this session yet. Please run the base analysis first, or provide explicit inputs for the rerun (for example, count matrix and metadata).",
+        "text_snippet": "Rerun target was not executable from current session history. I found no prior run with reusable parameters or artifact-backed config. Provide an explicit `run_id`, or rerun with concrete inputs (for example `count_matrix` and `sample_metad",
         "duration_s": null
       }
     },
@@ -101,12 +133,20 @@
       "status": "workflow_planned",
       "score": 2,
       "max_score": 2,
+      "expectation_category": "planning_expected",
       "focus_dimensions": [
         "scientific_correctness_under_revision",
         "lineage_explainability"
       ],
       "root_cause_categories": [],
-      "rationale": "response returned without transport failure; approval respected via staged plan",
+      "failure_patterns": [],
+      "assessments": {
+        "tool_action_alignment": "aligned",
+        "artifact_state_resolution": "not_primary",
+        "execution_vs_planning": "correct_planning",
+        "output_usefulness": "specific"
+      },
+      "rationale": "expectation=planning_expected; tool_alignment=aligned; execution_vs_planning=correct_planning; artifact_resolution=not_primary; output_usefulness=specific; deductions=none",
       "evidence": {
         "tool": "__plan__",
         "status": "workflow_planned",
@@ -123,13 +163,21 @@
       "status": "success",
       "score": 2,
       "max_score": 2,
+      "expectation_category": "approval_execution_expected",
       "focus_dimensions": [
         "scientific_correctness_under_revision",
         "artifact_persistence",
         "reproducibility"
       ],
       "root_cause_categories": [],
-      "rationale": "response returned without transport failure; approve turn executed successfully",
+      "failure_patterns": [],
+      "assessments": {
+        "tool_action_alignment": "aligned",
+        "artifact_state_resolution": "not_primary",
+        "execution_vs_planning": "approved_execution_happened",
+        "output_usefulness": "specific"
+      },
+      "rationale": "expectation=approval_execution_expected; tool_alignment=aligned; execution_vs_planning=approved_execution_happened; artifact_resolution=not_primary; output_usefulness=specific; deductions=none",
       "evidence": {
         "tool": "__plan__",
         "status": "success",
@@ -146,12 +194,20 @@
       "status": "workflow_planned",
       "score": 2,
       "max_score": 2,
+      "expectation_category": "planning_expected",
       "focus_dimensions": [
         "scientific_correctness_under_revision",
         "lineage_explainability"
       ],
       "root_cause_categories": [],
-      "rationale": "response returned without transport failure; approval respected via staged plan",
+      "failure_patterns": [],
+      "assessments": {
+        "tool_action_alignment": "aligned",
+        "artifact_state_resolution": "not_primary",
+        "execution_vs_planning": "correct_planning",
+        "output_usefulness": "specific"
+      },
+      "rationale": "expectation=planning_expected; tool_alignment=aligned; execution_vs_planning=correct_planning; artifact_resolution=not_primary; output_usefulness=specific; deductions=none",
       "evidence": {
         "tool": "__plan__",
         "status": "workflow_planned",
@@ -164,24 +220,34 @@
     {
       "turn_id": "turn_08",
       "prompt": "Fix it and regenerate the table and plot.",
-      "tool": null,
-      "status": null,
-      "score": 0,
+      "tool": "bulk_rnaseq_analysis",
+      "status": "success",
+      "score": 1,
       "max_score": 2,
+      "expectation_category": "rerun_expected",
       "focus_dimensions": [
         "scientific_correctness_under_revision",
         "reproducibility"
       ],
       "root_cause_categories": [
-        "executor_gap"
+        "state_session_gap"
       ],
-      "rationale": "hard error or malformed response",
+      "failure_patterns": [
+        "synthetic_success_only"
+      ],
+      "assessments": {
+        "tool_action_alignment": "aligned",
+        "artifact_state_resolution": "resolved_or_not_required",
+        "execution_vs_planning": "execution_happened",
+        "output_usefulness": "specific"
+      },
+      "rationale": "expectation=rerun_expected; tool_alignment=aligned; execution_vs_planning=execution_happened; artifact_resolution=resolved_or_not_required; output_usefulness=specific; deductions=synthetic_success_only",
       "evidence": {
-        "tool": null,
-        "status": null,
-        "execute_ready": null,
-        "error": "1 validation error for patch_and_rerun\nchange_request\n  Field required [type=missing, input_value={'command': 'Fix it and r...7:07:44.516536+00:00'}}}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.9/v/missing",
-        "text_snippet": "",
+        "tool": "bulk_rnaseq_analysis",
+        "status": "success",
+        "execute_ready": false,
+        "error": null,
+        "text_snippet": "## Bulk RNA-seq Analysis Complete\n\n**Design formula:** `~condition`  \n**Samples:** 6  |  **Genes:** 500\n\n### Differential Expression Summary\n\n| Contrast | Total Genes | Significant (padj < 0.05) | Up | Down |\n|----------|-------------|-----",
         "duration_s": null
       }
     },
@@ -189,91 +255,121 @@
       "turn_id": "turn_09",
       "prompt": "Now highlight IL6, TNF, CXCL8, and NFKB1 on the volcano plot.",
       "tool": "patch_and_rerun",
-      "status": "error",
-      "score": 0,
+      "status": "success",
+      "score": 2,
       "max_score": 2,
+      "expectation_category": "rerun_expected",
       "focus_dimensions": [
         "visualization_iteration",
         "lineage_explainability"
       ],
-      "root_cause_categories": [
-        "executor_gap"
-      ],
-      "rationale": "hard error or malformed response",
+      "root_cause_categories": [],
+      "failure_patterns": [],
+      "assessments": {
+        "tool_action_alignment": "aligned",
+        "artifact_state_resolution": "resolved_or_not_required",
+        "execution_vs_planning": "execution_happened",
+        "output_usefulness": "specific"
+      },
+      "rationale": "expectation=rerun_expected; tool_alignment=aligned; execution_vs_planning=execution_happened; artifact_resolution=resolved_or_not_required; output_usefulness=specific; deductions=none",
       "evidence": {
         "tool": "patch_and_rerun",
-        "status": "error",
+        "status": "success",
         "execute_ready": false,
-        "error": "No saved analysis script found in this session. Run an analysis first (Demo 1\u20135) and then request changes.",
-        "text_snippet": "No saved analysis script found in this session. Run an analysis first (Demo 1\u20135) and then request changes.",
+        "error": null,
+        "text_snippet": "## Analysis Updated\n\nApplied: **Now highlight IL6, TNF, CXCL8, and NFKB1 on the volcano plot.**\n\n### What Changed\n- `RUN_DIR: Path('/Users/eoberortner/git/Helix.AI/sessions/5f55cea0-5f64-40ec-9a51-980068cd31fd/runs/run_0e1ecac069ef') \u2192 Path",
         "duration_s": null
       }
     },
     {
       "turn_id": "turn_10",
       "prompt": "Also give me a heatmap of the top 30 significant genes.",
-      "tool": "bulk_rnaseq_analysis",
+      "tool": "patch_and_rerun",
       "status": "success",
       "score": 2,
       "max_score": 2,
+      "expectation_category": "visualization_update_expected",
       "focus_dimensions": [
         "visualization_iteration",
         "artifact_persistence",
         "lineage_explainability"
       ],
       "root_cause_categories": [],
-      "rationale": "response returned without transport failure; execution turn succeeded",
+      "failure_patterns": [],
+      "assessments": {
+        "tool_action_alignment": "aligned",
+        "artifact_state_resolution": "not_primary",
+        "execution_vs_planning": "execution_happened",
+        "output_usefulness": "specific"
+      },
+      "rationale": "expectation=visualization_update_expected; tool_alignment=aligned; execution_vs_planning=execution_happened; artifact_resolution=not_primary; output_usefulness=specific; deductions=none",
       "evidence": {
-        "tool": "bulk_rnaseq_analysis",
+        "tool": "patch_and_rerun",
         "status": "success",
         "execute_ready": false,
         "error": null,
-        "text_snippet": "## Bulk RNA-seq Analysis Complete\n\n**Design formula:** `~condition`  \n**Samples:** 6  |  **Genes:** 500\n\n### Differential Expression Summary\n\n| Contrast | Total Genes | Significant (padj < 0.05) | Up | Down |\n|----------|-------------|-----",
+        "text_snippet": "## Analysis Updated\n\nApplied: **Also give me a heatmap of the top 30 significant genes.**\n\n### What Changed\n- `RUN_DIR: Path('/Users/eoberortner/git/Helix.AI/sessions/5f55cea0-5f64-40ec-9a51-980068cd31fd/runs/run-1773607175124-patch') \u2192 Pat",
         "duration_s": null
       }
     },
     {
       "turn_id": "turn_11",
       "prompt": "Actually make that top 50 genes, clustered by sample, and split by condition.",
-      "tool": "bulk_rnaseq_analysis",
-      "status": "success",
-      "score": 2,
+      "tool": "patch_and_rerun",
+      "status": "needs_inputs",
+      "score": 1,
       "max_score": 2,
+      "expectation_category": "visualization_update_expected",
       "focus_dimensions": [
         "visualization_iteration",
         "reproducibility"
       ],
       "root_cause_categories": [],
-      "rationale": "response returned without transport failure; execution turn succeeded",
+      "failure_patterns": [],
+      "assessments": {
+        "tool_action_alignment": "aligned",
+        "artifact_state_resolution": "not_primary",
+        "execution_vs_planning": "uncertain",
+        "output_usefulness": "specific"
+      },
+      "rationale": "expectation=visualization_update_expected; tool_alignment=aligned; execution_vs_planning=uncertain; artifact_resolution=not_primary; output_usefulness=specific; deductions=none",
       "evidence": {
-        "tool": "bulk_rnaseq_analysis",
-        "status": "success",
+        "tool": "patch_and_rerun",
+        "status": "needs_inputs",
         "execute_ready": false,
         "error": null,
-        "text_snippet": "## Bulk RNA-seq Analysis Complete\n\n**Design formula:** `~condition`  \n**Samples:** 6  |  **Genes:** 500\n\n### Differential Expression Summary\n\n| Contrast | Total Genes | Significant (padj < 0.05) | Up | Down |\n|----------|-------------|-----",
+        "text_snippet": "**Helix understood your request as: Patch And Rerun**\n\nRuns Patch And Rerun.\n\nBefore Helix can execute this analysis, the following inputs are needed:\n\n### Parameters detected from your prompt\n- **design_formula**: `~condition`\n- **alpha**:",
         "duration_s": null
       }
     },
     {
       "turn_id": "turn_12",
       "prompt": "Take the significantly upregulated genes and run GO enrichment.",
-      "tool": "bulk_rnaseq_analysis",
-      "status": "success",
-      "score": 2,
+      "tool": "go_enrichment_analysis",
+      "status": "needs_inputs",
+      "score": 1,
       "max_score": 2,
+      "expectation_category": "downstream_enrichment_expected",
       "focus_dimensions": [
         "artifact_persistence",
         "lineage_explainability",
         "workflow_selection"
       ],
       "root_cause_categories": [],
-      "rationale": "response returned without transport failure; execution turn succeeded",
+      "failure_patterns": [],
+      "assessments": {
+        "tool_action_alignment": "partial",
+        "artifact_state_resolution": "not_primary",
+        "execution_vs_planning": "uncertain",
+        "output_usefulness": "specific"
+      },
+      "rationale": "expectation=downstream_enrichment_expected; tool_alignment=partial; execution_vs_planning=uncertain; artifact_resolution=not_primary; output_usefulness=specific; deductions=none",
       "evidence": {
-        "tool": "bulk_rnaseq_analysis",
-        "status": "success",
+        "tool": "go_enrichment_analysis",
+        "status": "needs_inputs",
         "execute_ready": false,
         "error": null,
-        "text_snippet": "## Bulk RNA-seq Analysis Complete\n\n**Design formula:** `~condition`  \n**Samples:** 6  |  **Genes:** 500\n\n### Differential Expression Summary\n\n| Contrast | Total Genes | Significant (padj < 0.05) | Up | Down |\n|----------|-------------|-----",
+        "text_snippet": "GO/pathway enrichment was recognized, but Helix does not yet have an extracted actionable gene list for this request. Provide `gene_list` explicitly, or ask Helix to export significant upregulated genes first and then run enrichment.",
         "duration_s": null
       }
     },
@@ -284,18 +380,26 @@
       "status": "success",
       "score": 2,
       "max_score": 2,
+      "expectation_category": "comparison_expected",
       "focus_dimensions": [
         "reproducibility",
         "lineage_explainability"
       ],
       "root_cause_categories": [],
-      "rationale": "response returned without transport failure; execution turn succeeded",
+      "failure_patterns": [],
+      "assessments": {
+        "tool_action_alignment": "aligned",
+        "artifact_state_resolution": "resolved_or_not_required",
+        "execution_vs_planning": "execution_happened",
+        "output_usefulness": "specific"
+      },
+      "rationale": "expectation=comparison_expected; tool_alignment=aligned; execution_vs_planning=execution_happened; artifact_resolution=resolved_or_not_required; output_usefulness=specific; deductions=none",
       "evidence": {
         "tool": "bio_diff_runs",
         "status": "success",
         "execute_ready": false,
         "error": null,
-        "text_snippet": "I could not resolve two comparable historical runs in this session yet. Run at least two comparable analyses first (for example, initial and corrected runs).",
+        "text_snippet": "## Run Comparison (Session Ledger)\n\n**Run A:** `run_c541...` (`go_enrichment_analysis`)  \n**Run B:** `run_8a5d...` (`patch_and_rerun`)\n\n### Parameter Changes\n- **action_type**: `run_enrichment` -> `generate_plot`\n- **command**: `Take the si",
         "duration_s": null
       }
     },
@@ -306,12 +410,20 @@
       "status": "workflow_planned",
       "score": 2,
       "max_score": 2,
+      "expectation_category": "planning_expected",
       "focus_dimensions": [
         "scientific_intent_resolution",
         "workflow_selection"
       ],
       "root_cause_categories": [],
-      "rationale": "response returned without transport failure; approval respected via staged plan",
+      "failure_patterns": [],
+      "assessments": {
+        "tool_action_alignment": "aligned",
+        "artifact_state_resolution": "not_primary",
+        "execution_vs_planning": "correct_planning",
+        "output_usefulness": "specific"
+      },
+      "rationale": "expectation=planning_expected; tool_alignment=aligned; execution_vs_planning=correct_planning; artifact_resolution=not_primary; output_usefulness=specific; deductions=none",
       "evidence": {
         "tool": "__plan__",
         "status": "workflow_planned",
@@ -325,44 +437,64 @@
       "turn_id": "turn_15",
       "prompt": "Color the PCA by batch and sex and show both.",
       "tool": "bio_rerun",
-      "status": "success",
-      "score": 2,
+      "status": "needs_inputs",
+      "score": 1,
       "max_score": 2,
+      "expectation_category": "visualization_update_expected",
       "focus_dimensions": [
         "visualization_iteration",
         "artifact_persistence"
       ],
-      "root_cause_categories": [],
-      "rationale": "response returned without transport failure; execution turn succeeded",
+      "root_cause_categories": [
+        "error_handling_gap"
+      ],
+      "failure_patterns": [
+        "non_actionable_output"
+      ],
+      "assessments": {
+        "tool_action_alignment": "aligned",
+        "artifact_state_resolution": "not_primary",
+        "execution_vs_planning": "uncertain",
+        "output_usefulness": "weak"
+      },
+      "rationale": "expectation=visualization_update_expected; tool_alignment=aligned; execution_vs_planning=uncertain; artifact_resolution=not_primary; output_usefulness=weak; deductions=non_actionable_output",
       "evidence": {
         "tool": "bio_rerun",
-        "status": "success",
+        "status": "needs_inputs",
         "execute_ready": false,
         "error": null,
-        "text_snippet": "## Bulk RNA-seq Analysis Complete\n\n**Design formula:** `~condition`  \n**Samples:** 6  |  **Genes:** 500\n\n### Differential Expression Summary\n\n| Contrast | Total Genes | Significant (padj < 0.05) | Up | Down |\n|----------|-------------|-----",
+        "text_snippet": "Re-run complete.",
         "duration_s": null
       }
     },
     {
       "turn_id": "turn_16",
       "prompt": "Now use the cleaned dataset from before batch exclusion.",
-      "tool": "handle_natural_command",
+      "tool": "agent",
       "status": "success",
       "score": 2,
       "max_score": 2,
+      "expectation_category": "execution_expected",
       "focus_dimensions": [
         "artifact_persistence",
         "error_handling_recovery",
         "reproducibility"
       ],
       "root_cause_categories": [],
-      "rationale": "response returned without transport failure; execution turn succeeded",
+      "failure_patterns": [],
+      "assessments": {
+        "tool_action_alignment": "partial",
+        "artifact_state_resolution": "not_primary",
+        "execution_vs_planning": "execution_happened",
+        "output_usefulness": "specific"
+      },
+      "rationale": "expectation=execution_expected; tool_alignment=partial; execution_vs_planning=execution_happened; artifact_resolution=not_primary; output_usefulness=specific; deductions=none",
       "evidence": {
-        "tool": "handle_natural_command",
+        "tool": "agent",
         "status": "success",
         "execute_ready": false,
         "error": null,
-        "text_snippet": "",
+        "text_snippet": "The request returned without actionable output. Please provide the target artifact/state or required inputs so Helix can execute deterministically.",
         "duration_s": null
       }
     },
@@ -373,13 +505,21 @@
       "status": "workflow_planned",
       "score": 2,
       "max_score": 2,
+      "expectation_category": "planning_expected",
       "focus_dimensions": [
         "workflow_selection",
         "scientific_correctness_under_revision",
         "error_handling_recovery"
       ],
       "root_cause_categories": [],
-      "rationale": "response returned without transport failure; approval respected via staged plan",
+      "failure_patterns": [],
+      "assessments": {
+        "tool_action_alignment": "aligned",
+        "artifact_state_resolution": "not_primary",
+        "execution_vs_planning": "correct_planning",
+        "output_usefulness": "specific"
+      },
+      "rationale": "expectation=planning_expected; tool_alignment=aligned; execution_vs_planning=correct_planning; artifact_resolution=not_primary; output_usefulness=specific; deductions=none",
       "evidence": {
         "tool": "__plan__",
         "status": "workflow_planned",
@@ -396,19 +536,27 @@
       "status": "success",
       "score": 2,
       "max_score": 2,
+      "expectation_category": "comparison_expected",
       "focus_dimensions": [
         "reproducibility",
         "lineage_explainability",
         "scientific_correctness_under_revision"
       ],
       "root_cause_categories": [],
-      "rationale": "response returned without transport failure; execution turn succeeded",
+      "failure_patterns": [],
+      "assessments": {
+        "tool_action_alignment": "aligned",
+        "artifact_state_resolution": "resolved_or_not_required",
+        "execution_vs_planning": "execution_happened",
+        "output_usefulness": "specific"
+      },
+      "rationale": "expectation=comparison_expected; tool_alignment=aligned; execution_vs_planning=execution_happened; artifact_resolution=resolved_or_not_required; output_usefulness=specific; deductions=none",
       "evidence": {
         "tool": "bio_diff_runs",
         "status": "success",
         "execute_ready": false,
         "error": null,
-        "text_snippet": "## Run Comparison\n\n**Run A:** `d30f3e25\u2026`  \n**Run B:** `d30f3e25\u2026`\n\n### Parameter Changes\n- No parameter changes detected.\n\n### Metrics (Run B)\nN/A",
+        "text_snippet": "## Run Comparison (Session Ledger)\n\n**Run A:** `run-1773...` (`bulk_rnaseq_analysis`)  \n**Run B:** `run-1773...` (`bulk_rnaseq_analysis`)\n\n### Parameter Changes\n- No parameter changes detected from session-ledger params.\n\n### Notes\nArtifact",
         "duration_s": null
       }
     },
@@ -419,19 +567,27 @@
       "status": "success",
       "score": 2,
       "max_score": 2,
+      "expectation_category": "historical_recreation_expected",
       "focus_dimensions": [
         "reproducibility",
         "artifact_persistence",
         "lineage_explainability"
       ],
       "root_cause_categories": [],
-      "rationale": "response returned without transport failure; execution turn succeeded",
+      "failure_patterns": [],
+      "assessments": {
+        "tool_action_alignment": "aligned",
+        "artifact_state_resolution": "resolved_or_not_required",
+        "execution_vs_planning": "execution_happened",
+        "output_usefulness": "specific"
+      },
+      "rationale": "expectation=historical_recreation_expected; tool_alignment=aligned; execution_vs_planning=execution_happened; artifact_resolution=resolved_or_not_required; output_usefulness=specific; deductions=none",
       "evidence": {
         "tool": "bio_diff_runs",
         "status": "success",
         "execute_ready": false,
         "error": null,
-        "text_snippet": "## Run Comparison\n\n**Run A:** `d30f3e25\u2026`  \n**Run B:** `d30f3e25\u2026`\n\n### Parameter Changes\n- No parameter changes detected.\n\n### Metrics (Run B)\nN/A",
+        "text_snippet": "## Run Comparison (Session Ledger)\n\n**Run A:** `run_2be4...` (`bio_diff_runs`)  \n**Run B:** `run_289e...` (`__plan__`)\n\n### Parameter Changes\n- **action_type**: `compare_versions` -> `execute_tool`\n- **command**: `Compare the current DEG re",
         "duration_s": null
       }
     },
@@ -442,13 +598,21 @@
       "status": "workflow_planned",
       "score": 2,
       "max_score": 2,
+      "expectation_category": "planning_expected",
       "focus_dimensions": [
         "scientific_intent_resolution",
         "artifact_persistence",
         "lineage_explainability"
       ],
       "root_cause_categories": [],
-      "rationale": "response returned without transport failure; approval respected via staged plan",
+      "failure_patterns": [],
+      "assessments": {
+        "tool_action_alignment": "aligned",
+        "artifact_state_resolution": "not_primary",
+        "execution_vs_planning": "correct_planning",
+        "output_usefulness": "specific"
+      },
+      "rationale": "expectation=planning_expected; tool_alignment=aligned; execution_vs_planning=correct_planning; artifact_resolution=not_primary; output_usefulness=specific; deductions=none",
       "evidence": {
         "tool": "__plan__",
         "status": "workflow_planned",
@@ -462,8 +626,8 @@
   "per_dimension_scores": {
     "scientific_intent_resolution": 2.0,
     "data_understanding": 2.0,
-    "workflow_selection": 2.0,
-    "artifact_persistence": 2.0,
+    "workflow_selection": 1.8,
+    "artifact_persistence": 1.7,
     "lineage_explainability": 1.818,
     "scientific_correctness_under_revision": 1.714,
     "reproducibility": 1.714,
@@ -473,36 +637,16 @@
   "per_scenario_scores": [
     {
       "scenario_id": "bulk-rnaseq-e2e",
-      "raw_score": 36,
+      "raw_score": 35,
       "max_score": 40,
-      "overall_percentage": 90.0,
-      "result": "Partial"
+      "overall_percentage": 87.5,
+      "result": "Pass"
     }
   ],
-  "raw_score": 36,
+  "raw_score": 35,
   "max_score": 40,
-  "overall_percentage": 90.0,
-  "critical_failures": [
-    {
-      "turn_id": "turn_08",
-      "tool": null,
-      "status": null,
-      "high_severity_dimensions": [
-        "scientific_correctness_under_revision",
-        "reproducibility"
-      ],
-      "reason": "hard error or malformed response"
-    },
-    {
-      "turn_id": "turn_09",
-      "tool": "patch_and_rerun",
-      "status": "error",
-      "high_severity_dimensions": [
-        "lineage_explainability"
-      ],
-      "reason": "hard error or malformed response"
-    }
-  ],
+  "overall_percentage": 87.5,
+  "critical_failures": [],
   "threshold": 80.0,
-  "threshold_met": false
+  "threshold_met": true
 }

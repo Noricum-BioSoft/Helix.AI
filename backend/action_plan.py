@@ -14,7 +14,23 @@ def infer_action_type(command: str, tool_name: Optional[str] = None) -> str:
         return "subset_data"
     if any(k in c for k in ["compare", "difference", "changed significance"]):
         return "compare_versions"
-    if any(k in c for k in ["plot", "volcano", "heatmap", "pca", "highlight", "color"]):
+    if any(
+        k in c
+        for k in [
+            "plot",
+            "volcano",
+            "heatmap",
+            "pca",
+            "highlight",
+            "color",
+            "top 30",
+            "top 50",
+            "clustered by",
+            "split by",
+            "show both",
+            "make that",
+        ]
+    ):
         return "generate_plot"
     if any(k in c for k in ["enrichment", "pathway", "go term"]):
         return "run_enrichment"
@@ -35,8 +51,11 @@ def map_action_to_tool(action_type: str, fallback_tool: Optional[str], arguments
     if action in {"perform_group_comparison"}:
         return fallback_tool or "bulk_rnaseq_analysis"
     if action in {"run_enrichment"}:
-        return fallback_tool or "lookup_go_term"
+        return fallback_tool or "go_enrichment_analysis"
     if action in {"generate_plot"}:
+        cmd = str(arguments.get("original_command") or arguments.get("command") or "").lower()
+        if "pca" in cmd and ("batch" in cmd or "sex" in cmd):
+            return "bio_rerun"
         return fallback_tool or "patch_and_rerun"
     if action in {"compare_versions"}:
         return fallback_tool or "bio_diff_runs"

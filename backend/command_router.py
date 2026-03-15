@@ -22,6 +22,7 @@ ROUTER_TOOLS = [
     ("fetch_ncbi_sequence", "Fetch sequence from NCBI by accession"),
     ("query_uniprot", "Query UniProt for protein sequences"),
     ("lookup_go_term", "Look up Gene Ontology terms"),
+    ("go_enrichment_analysis", "Run GO/pathway enrichment from gene lists"),
     ("bulk_rnaseq_analysis", "Bulk RNA-seq / DESeq2 differential expression"),
     ("single_cell_analysis", "Single-cell RNA-seq (scPipeline, Seurat)"),
     ("patch_and_rerun", "Change result/parameters and re-run"),
@@ -104,6 +105,10 @@ class CommandRouter:
             'lookup_go_term': {
                 'keywords': ['go term', 'gene ontology', 'lookup go', 'go:'],
                 'description': 'Lookup Gene Ontology terms'
+            },
+            'go_enrichment_analysis': {
+                'keywords': ['go enrichment', 'pathway enrichment', 'run enrichment', 'gene set enrichment'],
+                'description': 'Run GO/pathway enrichment from DEG gene lists'
             },
             'bulk_rnaseq_analysis': {
                 'keywords': ['bulk rna-seq', 'deseq2', 'differential expression', 'rna-seq analysis', 'transcriptomics'],
@@ -334,6 +339,21 @@ class CommandRouter:
             print(f"🔧 Command router: Matched bio diff -> bio_diff_runs ({params})")
             return "bio_diff_runs", params
 
+        # Historical figure/state recreation requests should execute a historical
+        # comparison path directly instead of being staged as generic plans.
+        _recreate_historical = (
+            any(p in command_lower for p in ["recreate", "reconstruct", "reproduce"])
+            and any(p in command_lower for p in ["figure", "state", "version", "before", "first", "original"])
+        )
+        if _recreate_historical:
+            params = {
+                "run_id_a": "latest",
+                "run_id_b": "prior",
+                "command": command,
+            }
+            print(f"🔧 Command router: Matched historical recreation -> bio_diff_runs ({params})")
+            return "bio_diff_runs", params
+
         # Rename / retitle plot (example of generalized viz edit)
         if any(p in command_lower for p in ["rename plot", "rename the plot", "retitle plot", "set plot title", "change plot title", "update plot title"]) or (
             "rename" in command_lower and "plot" in command_lower
@@ -518,6 +538,13 @@ class CommandRouter:
         # Check for single-cell analysis (HIGH PRIORITY - before other checks)
         # NOTE: "differential expression" is intentionally removed here; bulk RNA-seq
         # prompts that mention DE are caught earlier by _is_rnaseq_transcriptomics_command.
+        if (
+            "enrichment" in command_lower
+            and ("go" in command_lower or "gene ontology" in command_lower or "pathway" in command_lower)
+        ):
+            print(f"🔧 Command router: Matched 'GO/pathway enrichment' -> go_enrichment_analysis")
+            return "go_enrichment_analysis", self._extract_parameters(command, "go_enrichment_analysis", session_context)
+
         if any(phrase in command_lower for phrase in ['single cell', 'scrna-seq', 'scrnaseq', 'single-cell', 'cell type', 'marker genes', 'pathway analysis', 'batch correction', 'seurat', 'scpipeline']):
             print(f"🔧 Command router: Matched 'single-cell analysis' -> single_cell_analysis")
             return 'single_cell_analysis', self._extract_parameters(command, 'single_cell_analysis', session_context)
@@ -1679,6 +1706,31 @@ class CommandRouter:
                 params["go_id"] = go_match.group(0).upper()
             else:
                 params["go_id"] = command.strip()
+            return params
+
+        elif tool_name == "go_enrichment_analysis":
+            params = {
+                "session_id": session_context.get("session_id", ""),
+                "command": command,
+                "gene_list": [],
+                "source_selector": "current DEG results",
+            }
+            # Supports comma/newline separated symbols in ad-hoc prompts.
+            genes_match = re.search(
+                r"(?:genes?|gene list)\s*[:=]\s*([A-Za-z0-9_,\-\s]+)",
+                command,
+                re.IGNORECASE,
+            )
+            if genes_match:
+                raw = genes_match.group(1)
+                genes = [g.strip() for g in re.split(r"[,\s]+", raw) if g.strip()]
+                params["gene_list"] = genes
+            if any(k in command_lower for k in ["first", "original", "initial"]):
+                params["source_selector"] = "first DEG results"
+            elif any(k in command_lower for k in ["prior", "earlier", "before"]):
+                params["source_selector"] = "prior DEG results"
+            elif any(k in command_lower for k in ["current", "latest"]):
+                params["source_selector"] = "current DEG results"
             return params
         
         elif tool_name == "bulk_rnaseq_analysis":
