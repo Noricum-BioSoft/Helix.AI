@@ -3,10 +3,16 @@ script_executor.py — Execute a generated analysis script and collect artifacts
 
 Responsibilities
 ----------------
-1. Run a saved ``analysis.py`` in a subprocess (isolated from the server process).
+1. Run a saved ``analysis.py`` in a sandboxed Docker container (default) or host
+   subprocess, for security and user trust.
 2. Parse the JSON summary printed to stdout.
 3. Discover all files written under ``run_dir/`` and return them as artifact records.
 4. Compute a human-readable diff between two run directories (for iterative edits).
+
+Sandbox execution is controlled by HELIX_ANALYSIS_USE_SANDBOX (default: true).
+Set to "false" to run on the host (e.g. CI without Docker). When sandbox is
+enabled and Docker is unavailable, execution fails with a clear error unless
+HELIX_SANDBOX_HOST_FALLBACK=1 is set.
 """
 
 from __future__ import annotations
@@ -28,34 +34,71 @@ logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT = 300
 
 
-# ── execution ─────────────────────────────────────────────────────────────────
-
-def execute(
-    script_path: str | Path,
-    timeout: int = DEFAULT_TIMEOUT,
-    env: Optional[Dict[str, str]] = None,
+def _run_in_sandbox(
+    script_path: Path,
+    timeout: int,
+    env: Optional[Dict[str, str]],
 ) -> Dict[str, Any]:
-    """Run *script_path* and return a structured result dict.
+    """Execute analysis.py inside the Docker sandbox. Returns same shape as execute()."""
+    from backend.sandbox_executor import get_sandbox_executor
 
-    The script is expected to print a single JSON object to stdout as its last
-    line.  Any preceding output is captured in ``logs``.
+    executor = get_sandbox_executor()
+    run_dir = script_path.parent
+    # allow_host_fallback is resolved inside execute_command based on
+    # self._docker_available and HELIX_SANDBOX_HOST_FALLBACK; pass None to let
+    # SandboxExecutor decide (it auto-falls back when Docker is unavailable).
+    allow_host_fallback = None
 
-    Returns
-    -------
-    dict with keys:
-        status      "success" | "error"
-        summary     parsed JSON object from stdout (or {})
-        artifacts   list of artifact dicts (type, uri, name, size_bytes)
-        logs        combined stdout/stderr text
-        elapsed_s   wall-clock seconds
-        error       error message (only present on failure)
-    """
-    script_path = Path(script_path)
-    if not script_path.exists():
-        return {"status": "error", "error": f"Script not found: {script_path}"}
+    result = executor.execute_command(
+        cmd=["python", script_path.name],
+        working_dir=str(run_dir),
+        output_dir=str(run_dir),
+        timeout=timeout,
+        env_vars=env,
+        allow_host_fallback=allow_host_fallback,
+    )
 
+    combined_logs = (result.stdout or "") + (result.stderr or "")
+
+    if not result.success:
+        return {
+            "status": "error",
+            "error": result.error_message or f"Script exited with code {result.exit_code}",
+            "logs": combined_logs[-4000:],
+            "elapsed_s": round(result.execution_time, 2),
+            "execution_mode": "sandbox",
+        }
+
+    summary: Dict[str, Any] = {}
+    for line in reversed((result.stdout or "").splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                summary = json.loads(line)
+                break
+            except json.JSONDecodeError:
+                continue
+
+    run_dir_str = summary.get("run_dir") or str(run_dir)
+    artifacts = _collect_artifacts(Path(run_dir_str))
+
+    return {
+        "status": summary.get("status", "success"),
+        "summary": summary,
+        "artifacts": artifacts,
+        "logs": combined_logs[-2000:],
+        "elapsed_s": round(result.execution_time, 2),
+        "execution_mode": "sandbox",
+    }
+
+
+def _run_on_host(
+    script_path: Path,
+    timeout: int,
+    env: Optional[Dict[str, str]],
+) -> Dict[str, Any]:
+    """Execute analysis.py in a host subprocess. Returns same shape as execute()."""
     run_env = {**os.environ, **(env or {})}
-
     t0 = time.perf_counter()
     try:
         proc = subprocess.run(
@@ -66,22 +109,22 @@ def execute(
             env=run_env,
         )
     except subprocess.TimeoutExpired:
-        return {"status": "error", "error": f"Script timed out after {timeout}s"}
+        return {"status": "error", "error": f"Script timed out after {timeout}s", "elapsed_s": round(time.perf_counter() - t0, 2)}
     except Exception as exc:
-        return {"status": "error", "error": str(exc)}
+        return {"status": "error", "error": str(exc), "elapsed_s": 0}
 
     elapsed = round(time.perf_counter() - t0, 2)
     combined_logs = (proc.stdout or "") + (proc.stderr or "")
 
     if proc.returncode != 0:
         return {
-            "status":   "error",
-            "error":    f"Script exited with code {proc.returncode}",
-            "logs":     combined_logs[-4000:],
+            "status": "error",
+            "error": f"Script exited with code {proc.returncode}",
+            "logs": combined_logs[-4000:],
             "elapsed_s": elapsed,
+            "execution_mode": "host",
         }
 
-    # Parse the last non-empty line as JSON summary
     summary: Dict[str, Any] = {}
     for line in reversed((proc.stdout or "").splitlines()):
         line = line.strip()
@@ -96,12 +139,78 @@ def execute(
     artifacts = _collect_artifacts(Path(run_dir_str))
 
     return {
-        "status":    summary.get("status", "success"),
-        "summary":   summary,
+        "status": summary.get("status", "success"),
+        "summary": summary,
         "artifacts": artifacts,
-        "logs":      combined_logs[-2000:],
+        "logs": combined_logs[-2000:],
         "elapsed_s": elapsed,
+        "execution_mode": "host",
     }
+
+
+# ── execution ─────────────────────────────────────────────────────────────────
+
+def execute(
+    script_path: str | Path,
+    timeout: int = DEFAULT_TIMEOUT,
+    env: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
+    """Run *script_path* and return a structured result dict.
+
+    By default runs in a sandboxed Docker container (helix-biotools) for
+    security and user trust. Set HELIX_ANALYSIS_USE_SANDBOX=false to run
+    on the host.
+
+    The script is expected to print a single JSON object to stdout as its last
+    line.  Any preceding output is captured in ``logs``.
+
+    Returns
+    -------
+    dict with keys:
+        status      "success" | "error"
+        summary     parsed JSON object from stdout (or {})
+        artifacts   list of artifact dicts (type, uri, name, size_bytes)
+        logs        combined stdout/stderr text
+        elapsed_s   wall-clock seconds
+        execution_mode  "sandbox" | "host"
+        error       error message (only present on failure)
+    """
+    script_path = Path(script_path)
+    if not script_path.exists():
+        return {"status": "error", "error": f"Script not found: {script_path}"}
+
+    use_sandbox = os.getenv("HELIX_ANALYSIS_USE_SANDBOX", "true").lower() == "true"
+
+    if use_sandbox:
+        try:
+            return _run_in_sandbox(script_path, timeout, env)
+        except Exception as exc:
+            exc_str = str(exc)
+            # Docker is not available in this environment (e.g. ECS Fargate, CI).
+            # Fall through to host execution rather than surfacing a confusing
+            # "Docker is not installed" error to the end user.
+            _docker_unavailable = (
+                "Docker is not installed" in exc_str
+                or "not running" in exc_str
+                or "No such file or directory: 'docker'" in exc_str
+                or "docker" in exc_str.lower() and "not found" in exc_str.lower()
+            )
+            if _docker_unavailable:
+                logger.warning(
+                    "Docker unavailable (%s) — falling back to host execution for %s",
+                    exc_str,
+                    script_path,
+                )
+            else:
+                logger.exception("Sandbox execution of analysis.py failed")
+                return {
+                    "status": "error",
+                    "error": f"Sandbox execution failed: {exc}",
+                    "elapsed_s": 0,
+                    "execution_mode": "sandbox",
+                }
+
+    return _run_on_host(script_path, timeout, env)
 
 
 # ── artifact collection ───────────────────────────────────────────────────────

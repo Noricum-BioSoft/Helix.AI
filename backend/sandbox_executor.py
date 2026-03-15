@@ -86,16 +86,20 @@ class SandboxExecutor:
             image: Docker image to use (defaults to BIOTOOLS_IMAGE)
         """
         self.image = image or self.BIOTOOLS_IMAGE
-        # Unit tests / local dev may explicitly opt out of Docker dependency.
-        # When enabled, we will prefer host execution and skip Docker checks.
+        # Track whether Docker is actually usable. When False, all execution
+        # methods transparently fall back to host subprocess (same Python env).
+        self._docker_available: bool = True
+
         if os.getenv("HELIX_SANDBOX_HOST_FALLBACK") == "1":
             logger.warning("HELIX_SANDBOX_HOST_FALLBACK=1: skipping Docker availability checks")
+            self._docker_available = False
         else:
-            self._check_docker_available()
-            self._check_image_available()
-    
-    def _check_docker_available(self):
-        """Check if Docker is available."""
+            self._docker_available = self._check_docker_available()
+            if self._docker_available:
+                self._check_image_available()
+
+    def _check_docker_available(self) -> bool:
+        """Check if Docker is available. Returns True if available, False otherwise (never raises)."""
         try:
             result = subprocess.run(
                 ["docker", "--version"],
@@ -104,10 +108,13 @@ class SandboxExecutor:
                 timeout=5
             )
             if result.returncode != 0:
-                raise RuntimeError("Docker is not available")
+                logger.warning("Docker is not available (non-zero exit from 'docker --version'); falling back to host execution")
+                return False
             logger.debug(f"Docker available: {result.stdout.strip()}")
+            return True
         except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-            raise RuntimeError(f"Docker is not installed or not running: {e}")
+            logger.warning(f"Docker is not installed or not running ({e}); falling back to host execution")
+            return False
     
     def _check_image_available(self):
         """Check if biotools Docker image is available."""
@@ -328,7 +335,12 @@ class SandboxExecutor:
         output_path.mkdir(parents=True, exist_ok=True)
 
         if allow_host_fallback is None:
-            allow_host_fallback = os.getenv("HELIX_SANDBOX_HOST_FALLBACK") == "1"
+            # Auto-enable host fallback when Docker is not available in this
+            # environment (e.g. ECS Fargate, CI without Docker).
+            allow_host_fallback = (
+                not self._docker_available
+                or os.getenv("HELIX_SANDBOX_HOST_FALLBACK") == "1"
+            )
 
         start_time = time.time()
 

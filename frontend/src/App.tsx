@@ -20,7 +20,7 @@ import { theme } from './theme';
 import { JobsPanel } from './components/JobsPanel';
 import { ExamplesPanel } from './components/ExamplesPanel';
 import { DemoScenariosPanel } from './components/DemoScenariosPanel';
-import { getDemoScenarioById, getDemoScenarioByTool, getDemoScenarioByCommandAndTool, DataPreviewTable } from './data/demoScenarios';
+import { getDemoScenarioById, getDemoScenarioByTool, getDemoScenarioByCommandAndTool, getDemoScenarioByCommand, DataPreviewTable } from './data/demoScenarios';
 import { ThinkingIndicator, ActivityIndicator } from './components/ThinkingIndicator';
 
 const SESSION_STORAGE_KEY = 'helix_session_id';
@@ -825,14 +825,38 @@ function App() {
     };
 
     // ── Download links (computed early so every renderer can include them) ──────
-    // Links come from data.links (build_standard_response) or raw_result.links
-    // (patch_and_rerun / legacy paths).
-    const _earlyLinksRaw: any[] =
+    // Prefer normalized backend field data.downloadable_artifacts.
+    // Fallback to legacy links only when this is an executed/completed response.
+    const responseStatus =
+      (agentOutput?.status || agentOutput?.result?.status || actualResult?.status || '').toString().toLowerCase();
+    const nonExecutedStatuses = new Set([
+      'workflow_planned',
+      'needs_inputs',
+      'tool_mapped',
+      'pipeline_submitted',
+      'workflow_needs_clarification',
+      'submitted',
+      'running',
+      'queued',
+      'pending',
+    ]);
+    const isExecutedForDownloads =
+      !!responseStatus &&
+      !nonExecutedStatuses.has(responseStatus) &&
+      !['error', 'failed', 'workflow_failed'].includes(responseStatus);
+
+    const _downloadArtifactsRaw = agentOutput?.data?.downloadable_artifacts;
+    const _hasDownloadArtifacts =
+      Array.isArray(_downloadArtifactsRaw) && _downloadArtifactsRaw.length > 0;
+    const _legacyLinksRaw: any[] =
       agentOutput?.data?.links || actualResult?.links || rawResult?.links || [];
+    const _earlyLinksRaw: any[] = _hasDownloadArtifacts
+      ? (_downloadArtifactsRaw as any[])
+      : (isExecutedForDownloads ? _legacyLinksRaw : []);
     const _earlyLinks: any[] = Array.isArray(_earlyLinksRaw)
-      ? _earlyLinksRaw.map((l: any) =>
-          l && typeof l === 'object' ? { ...l, url: normalizeAssetUrl(l.url) } : l
-        )
+      ? _earlyLinksRaw
+          .map((l: any) => (l && typeof l === 'object' ? { ...l, url: normalizeAssetUrl(l.url) } : l))
+          .filter((l: any) => l && typeof l === 'object' && typeof l.url === 'string' && l.url.trim().length > 0)
       : [];
 
     const downloadLinksSection =
@@ -846,7 +870,11 @@ function App() {
               const label: string = l?.label || l?.s3_uri || 'artifact';
               const isScript = label.endsWith('.py');
               const isBundle = label.endsWith('.zip');
-              const isDownloadable = isScript || isBundle;
+              const isDownloadable = (
+                isScript ||
+                isBundle ||
+                /\.(newick|nwk|csv|tsv|txt|json|fasta|fa)$/i.test(label)
+              );
               const icon = isBundle ? '📦' : isScript ? '📄' : '⬇';
               const styleMap: React.CSSProperties = isBundle
                 ? { background: '#0f4c81', color: '#e0f0ff', border: '1px solid #1e6bb8', fontWeight: 600 }
@@ -2116,28 +2144,45 @@ function App() {
     }
 
     // Resolve scenario by explicit scenarioId first, then by command/tool match.
-    // We do this early so rendering can stay deterministic for demo cards.
+    // When backend returns tool "__plan__", no scenario has that tool — match by command so "Load & run" still shows.
     const responseTool =
       output?.tool || output?.tool_name || output?.result?.tool;
+    const planFirstStepTool =
+      output?.raw_result?.result?.steps?.[0]?.tool_name ||
+      output?.result?.result?.steps?.[0]?.tool_name ||
+      output?.result?.steps?.[0]?.tool_name;
+    const commandForMatch = item.input ?? output?.prompt ?? '';
     const scenario =
       (item.scenarioId ? getDemoScenarioById(item.scenarioId) : undefined) ??
-      (responseTool
-        ? getDemoScenarioByCommandAndTool(item.input ?? '', responseTool)
-        : undefined);
+      (responseTool === '__plan__'
+        ? getDemoScenarioByCommand(commandForMatch) ||
+          (planFirstStepTool ? getDemoScenarioByTool(planFirstStepTool) : undefined)
+        : responseTool
+          ? getDemoScenarioByCommandAndTool(commandForMatch, responseTool) ||
+            getDemoScenarioByTool(responseTool)
+          : undefined);
+
+    // Detect response status across top-level and nested broker payloads.
+    const resolvedStatus =
+      output?.status ||
+      output?.result?.status ||
+      output?.raw_result?.status ||
+      output?.raw_result?.result?.status ||
+      output?.data?.results?.status ||
+      output?.data?.results?.result?.status;
 
     // Detect a workflow plan response so we can append the "Execute Pipeline" button
     const isWorkflowPlan =
       output?.execute_ready === true ||
       output?.result?.execute_ready === true ||
-      output?.status === 'workflow_planned' ||
-      output?.result?.status === 'workflow_planned';
+      output?.raw_result?.execute_ready === true ||
+      output?.raw_result?.result?.execute_ready === true ||
+      resolvedStatus === 'workflow_planned';
 
     // Detect a needs_inputs response so we can show the "Use example data" button.
     // Some demos come back as plain agent markdown (status=success) but still clearly ask
     // for count matrix / sample metadata. Handle that case too.
-    const explicitNeedsInputs =
-      output?.status === 'needs_inputs' ||
-      output?.result?.status === 'needs_inputs';
+    const explicitNeedsInputs = resolvedStatus === 'needs_inputs';
 
     const getAssistantTextForDetection = (o: any): string => {
       const msgs =
@@ -2175,6 +2220,7 @@ function App() {
 
     const renderedResponse = renderAgentResponse(output);
 
+    // Workflow plan: show plan + Execute Pipeline; if scenario has example data, also show Load & run.
     if (isWorkflowPlan && !scenarioForcesNeedsInputs) {
       const alreadyExecuted = executedPipelineCommands.has(item.input);
       return (
@@ -2201,10 +2247,60 @@ function App() {
                 : 'Confirms the plan above and queues all steps for execution.'}
             </span>
           </div>
+          {scenario?.followUpPrompt && (
+            <div
+              className="mt-3 p-3 rounded-3 d-flex align-items-start gap-3"
+              style={{
+                background: 'linear-gradient(135deg, #EFF6FF, #F0FDF4)',
+                border: '1px solid #BFDBFE',
+              }}
+            >
+              <span style={{ fontSize: '1.4rem', lineHeight: 1, flexShrink: 0 }}>📋</span>
+              <div className="flex-grow-1">
+                <div style={{ fontWeight: 600, fontSize: '0.88rem', color: '#1E40AF', marginBottom: '4px' }}>
+                  Example data available for this demo
+                </div>
+                <div style={{ fontSize: '0.8rem', color: '#475569', marginBottom: '10px' }}>
+                  {(() => {
+                    const domainPhrases: Record<string, string> = {
+                      'Bulk RNA-seq':   'bulk RNA-seq count matrix + sample metadata',
+                      'Single-Cell':    'single-cell gene-expression matrix (10x HDF5)',
+                      'Sequencing QC':  'paired-end FASTQ files',
+                      'Phylogenetics':  'aligned FASTA sequences',
+                    };
+                    const dataDesc = domainPhrases[scenario.domain] ?? `${scenario.domain} dataset`;
+                    return `Example ${dataDesc} hosted on S3 — ready to load and run.`;
+                  })()}
+                </div>
+                <div className="d-flex align-items-center gap-2 flex-wrap">
+                  {scenario.dataPreview && (
+                    <Button
+                      size="sm"
+                      variant="outline-secondary"
+                      onClick={() => setPreviewTables(scenario.dataPreview!)}
+                      style={{ fontSize: '0.8rem', fontWeight: 600 }}
+                    >
+                      🔍 Preview data
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="success"
+                    disabled={loading}
+                    onClick={() => executeCommand(scenario.followUpPrompt!, item.scenarioId ?? scenario.id, true)}
+                    style={{ fontSize: '0.8rem', fontWeight: 600 }}
+                  >
+                    {loading ? 'Running…' : '▶ Load & run'}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       );
     }
 
+    // needs_inputs only (no workflow plan, or scenario forces needs_inputs): show Load & run only.
     if (isNeedsInputs) {
       if (scenario?.followUpPrompt) {
         return (

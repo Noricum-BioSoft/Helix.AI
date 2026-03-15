@@ -185,10 +185,17 @@ class HistoryManager:
                 "artifact_id": artifact_id,
                 "run_id": run_id,
                 "type": artifact_type,
+                "artifact_kind": artifact_type,
                 "title": title,
                 "uri": uri,
                 "format": format,
                 "derived_from": derived_from,
+                "parent_artifact_ids": [derived_from] if derived_from else [],
+                "source_run_id": run_id,
+                "version": None,
+                "analysis_branch": "main",
+                "semantic_aliases": [],
+                "state_tags": [],
                 "params": params or {},
                 "created_at": self._now_iso(),
             }
@@ -240,6 +247,41 @@ class HistoryManager:
             return None
         art = arts.get(artifact_id)
         return art if isinstance(art, dict) else None
+
+    def get_artifact_aliases(self, session_id: str) -> Dict[str, Dict[str, Any]]:
+        from backend.artifact_resolver import build_alias_index
+
+        session = self.get_session(session_id)
+        if not session:
+            return {}
+        idx = build_alias_index(session)
+        aliases = idx.get("aliases", {})
+        return aliases if isinstance(aliases, dict) else {}
+
+    def get_historical_states(self, session_id: str) -> List[Dict[str, Any]]:
+        from backend.artifact_resolver import build_alias_index
+
+        session = self.get_session(session_id)
+        if not session:
+            return []
+        idx = build_alias_index(session)
+        states = idx.get("historical_states", [])
+        return states if isinstance(states, list) else []
+
+    def get_lineage_edges(self, session_id: str) -> List[Dict[str, Any]]:
+        artifacts = self.list_artifacts(session_id)
+        edges: List[Dict[str, Any]] = []
+        for art in artifacts:
+            if not isinstance(art, dict):
+                continue
+            child = art.get("artifact_id")
+            parents = art.get("parent_artifact_ids")
+            if not isinstance(parents, list):
+                parents = [art.get("derived_from")] if art.get("derived_from") else []
+            for p in parents:
+                if p:
+                    edges.append({"from_artifact_id": p, "to_artifact_id": child})
+        return edges
 
     def resolve_run_reference(self, session_id: str, ref: str) -> Optional[Dict[str, Any]]:
         """
@@ -332,10 +374,29 @@ class HistoryManager:
                     "artifact_id": artifact_id,
                     "run_id": run_id,
                     "type": a_type,
+                    "artifact_kind": a.get("artifact_kind") or a_type,
                     "title": a_title,
                     "uri": a_uri,
                     "format": a_format,
                     "derived_from": a_derived,
+                    "parent_artifact_ids": (
+                        a.get("parent_artifact_ids")
+                        if isinstance(a.get("parent_artifact_ids"), list)
+                        else ([a_derived] if a_derived else [])
+                    ),
+                    "source_run_id": a.get("source_run_id") or run_id,
+                    "version": a.get("version"),
+                    "analysis_branch": a.get("analysis_branch") or "main",
+                    "semantic_aliases": (
+                        a.get("semantic_aliases")
+                        if isinstance(a.get("semantic_aliases"), list)
+                        else []
+                    ),
+                    "state_tags": (
+                        a.get("state_tags")
+                        if isinstance(a.get("state_tags"), list)
+                        else []
+                    ),
                     "params": a_params,
                     "created_at": self._now_iso(),
                 }

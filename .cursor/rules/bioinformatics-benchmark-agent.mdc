@@ -1,0 +1,50 @@
+---
+description: Enforce iterative bioinformatics benchmark execution and scoring discipline
+globs:
+  - bioinformatics_benchmark.{md,yaml}
+  - benchmarks/bioinformatics/**/*
+  - evals/bioinformatics/**/*
+  - tests/bioinformatics/**/*
+  - tests/benchmark/**/*
+alwaysApply: false
+---
+
+# Bioinformatics Benchmark Agent Rule
+
+## Mission
+
+- Treat `bioinformatics_benchmark.yaml` as executable source of truth.
+- Use `bioinformatics_benchmark.md` only as interpretation guidance.
+- Run iterative remediation loops until score threshold is met or progress is blocked.
+
+## Required Iteration Loop
+
+1. Run benchmark.
+2. Score strictly from observed evidence.
+3. Extract lessons learned.
+4. Implement high-impact structural fixes in Helix only.
+5. Rerun benchmark and compare against prior iteration.
+
+Do not stop at planning/analysis when rerun is feasible.
+
+## Scoring Requirements
+
+- Use 0/1/2 rubric from benchmark definitions.
+- Compute and print:
+  - Raw Score: X / Y
+  - Overall Percentage: Z%
+  - Threshold Met: Yes/No
+- Include per-turn, per-dimension, and per-scenario scoring.
+- Treat planned-only responses as partial/fail when execution was expected.
+
+## Hard Guardrails
+
+- Do not hardcode scenario names, assay labels, or benchmark workflow IDs into core control logic.
+- Approval gating must be action-risk based (mutation, cost, scientific risk, artifact impact), not workflow-name based.
+- Keep benchmark and evaluator prompt files read-only.
+- Fix implementation in Helix components, not benchmark definitions.
+
+## Required Iteration Artifacts
+
+- `benchmark_iteration_<N>_report.md`
+- `benchmark_iteration_<N>_scores.json` containing score breakdowns, critical failures, lessons learned, remediation applied, and next-iteration decision.

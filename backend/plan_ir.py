@@ -21,7 +21,8 @@ PLAN_IR_VERSION = "v1"
 
 class PlanStep(BaseModel):
     id: str = Field(..., description="Unique step id (stable within plan)")
-    tool_name: str = Field(..., description="Tool name to execute")
+    action_type: str = Field(default="execute_tool", description="Generic action type")
+    tool_name: Optional[str] = Field(default=None, description="Concrete tool name to execute")
     arguments: Dict[str, Any] = Field(default_factory=dict, description="Tool arguments")
     description: Optional[str] = Field(default=None, description="Human-readable step description")
 

@@ -391,6 +391,18 @@ class CommandRouter:
             print(f"🔧 Command router: Matched 'run io summary' -> session_run_io_summary ({run_ref})")
             return "session_run_io_summary", {"run_ref": run_ref}
 
+        # Iterative visualization updates in transcriptomics contexts:
+        # route to patch_and_rerun so we modify existing outputs instead of
+        # re-triggering full RNA-seq input resolution.
+        if any(p in command_lower for p in ["volcano plot", "heatmap", "pca"]) and any(
+            p in command_lower for p in ["highlight", "color", "top 30", "top 50", "clustered by", "show both", "make that"]
+        ):
+            if "pca" in command_lower and ("batch" in command_lower or "sex" in command_lower):
+                print("🔧 Command router: Matched 'pca recolor/replot' -> bio_rerun")
+                return "bio_rerun", {"changes": {"figure_variant": "pca_by_batch_and_sex"}, "target_run": "latest"}
+            print("🔧 Command router: Matched 'iterative transcriptomics viz edit' -> patch_and_rerun")
+            return "patch_and_rerun", {"change_request": command, "target_run": "latest"}
+
         # ── HYBRID: LLM-based routing for everything not matched by high-confidence keywords above ──
         llm_result = self._route_with_llm(command, session_context)
         if llm_result is not None:
@@ -462,6 +474,11 @@ class CommandRouter:
             return 'sequence_alignment', self._extract_parameters(command, 'sequence_alignment', session_context)
         
         
+        # Check for known unsupported tools (return clear message with alternatives)
+        if any(phrase in command_lower for phrase in ['multiqc', 'multi qc', 'run multiqc', 'perform multiqc']):
+            print(f"🔧 Command router: Matched 'MultiQC' -> unsupported_tool (not implemented)")
+            return 'unsupported_tool', {"requested_tool": "multiqc", "command": command}
+
         # Check for FastQC analysis (HIGH PRIORITY - before vendor check to avoid false matches with "test" in paths)
         if any(phrase in command_lower for phrase in ['fastqc', 'fastqc analysis', 'quality control analysis', 'perform fastqc', 'run fastqc']):
             print(f"🔧 Command router: Matched 'FastQC' -> fastqc_quality_analysis")
@@ -664,14 +681,17 @@ class CommandRouter:
         through the existing router.
         """
         from backend.plan_ir import Plan, PlanStep
+        from backend.action_plan import infer_action_type
 
         parts = self._split_workflow_command(command)
         steps = []
         for idx, part in enumerate(parts, start=1):
             tool_name, params = self.route_command(part, session_context)
+            action_type = infer_action_type(part, tool_name)
             steps.append(
                 PlanStep(
                     id=f"step{idx}",
+                    action_type=action_type,
                     tool_name=tool_name,
                     arguments=params or {},
                     description=part.strip(),
@@ -1077,43 +1097,59 @@ class CommandRouter:
             return {"aligned_sequences": aligned_sequences, "num_variants": num_variants}
         
         elif tool_name == "fastqc_quality_analysis":
-            # Extract R1 and R2 paths from command
-            # Look for S3 paths or file paths
-            r1_path = None
-            r2_path = None
-            output_path = None
-            
-            # Pattern 1: "forward reads are available here: s3://..."
+            # Session-aware extraction: resolve "merged reads", "raw reads", etc. from pipeline
+            from backend.session_param_extractor import get_fastqc_inputs_from_session
+
+            sess_r1, sess_r2, sess_out, sess_error = get_fastqc_inputs_from_session(
+                session_context or {}, command
+            )
+            if sess_error:
+                # User asked for merged/FASTA - return needs_inputs with clear explanation
+                return {
+                    "input_r1": "",
+                    "input_r2": "",
+                    "output": None,
+                    "needs_inputs": True,
+                    "session_resolution_error": sess_error,
+                }
+            if sess_r1 and sess_r2:
+                return {
+                    "input_r1": sess_r1,
+                    "input_r2": sess_r2,
+                    "output": sess_out,
+                    "needs_inputs": False,
+                }
+
+            # Fallback: extract R1/R2 from command
+            r1_path = sess_r1
+            r2_path = sess_r2
+            output_path = sess_out
+
             r1_match = re.search(r'(?:forward|r1|read\s*1)[^:]*:\s*(s3://[^\s]+|/[^\s]+)', command, re.IGNORECASE)
             if r1_match:
-                r1_path = r1_match.group(1).strip()
-            
-            # Pattern 2: "reverse reads are available here: s3://..."
+                r1_path = r1_path or r1_match.group(1).strip()
             r2_match = re.search(r'(?:reverse|r2|read\s*2)[^:]*:\s*(s3://[^\s]+|/[^\s]+)', command, re.IGNORECASE)
             if r2_match:
-                r2_path = r2_match.group(1).strip()
-            
-            # Pattern 3: Look for any S3 paths containing R1 or R2
+                r2_path = r2_path or r2_match.group(1).strip()
             if not r1_path:
-                r1_match = re.search(r's3://[^\s]*(?:R1|r1|_1\.fq|mate_R1)[^\s]*', command, re.IGNORECASE)
-                if r1_match:
-                    r1_path = r1_match.group(0).strip()
-            
+                m = re.search(r's3://[^\s]*(?:R1|r1|_1\.fq|mate_R1)[^\s]*', command, re.IGNORECASE)
+                if m:
+                    r1_path = m.group(0).strip()
             if not r2_path:
-                r2_match = re.search(r's3://[^\s]*(?:R2|r2|_2\.fq|mate_R2)[^\s]*', command, re.IGNORECASE)
-                if r2_match:
-                    r2_path = r2_match.group(0).strip()
-            
-            # Extract output path if mentioned
-            output_match = re.search(r'(?:output|results|save)[^:]*:\s*(s3://[^\s]+)', command, re.IGNORECASE)
-            if output_match:
-                output_path = output_match.group(1).strip()
-            
+                m = re.search(r's3://[^\s]*(?:R2|r2|_2\.fq|mate_R2)[^\s]*', command, re.IGNORECASE)
+                if m:
+                    r2_path = m.group(0).strip()
+            # Single URI in command (e.g. merged.fasta) - don't use for R1/R2
+            if not output_path:
+                output_match = re.search(r'(?:output|results|save)[^:]*:\s*(s3://[^\s]+)', command, re.IGNORECASE)
+                if output_match:
+                    output_path = output_match.group(1).strip()
+
             needs_inputs = not bool(r1_path or r2_path)
             return {
-                "input_r1":    r1_path or "",
-                "input_r2":    r2_path or "",
-                "output":      output_path,
+                "input_r1": r1_path or "",
+                "input_r2": r2_path or "",
+                "output": output_path,
                 "needs_inputs": needs_inputs,
             }
         

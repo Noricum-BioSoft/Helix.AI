@@ -20,17 +20,21 @@ if [[ -z "$REGION" || -z "$BUCKET" ]]; then
   exit 1
 fi
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+FRONTEND_DIR="${PROJECT_ROOT}/frontend"
+
 echo "Building frontend..."
-pushd frontend >/dev/null
+pushd "${FRONTEND_DIR}" >/dev/null
 npm ci
 npm run build
 popd >/dev/null
 
 echo "Syncing to s3://${BUCKET} ..."
-aws s3 sync frontend/dist "s3://${BUCKET}" --region "$REGION" --delete --cache-control "public,max-age=31536000,immutable"
+aws s3 sync "${FRONTEND_DIR}/dist" "s3://${BUCKET}" --region "$REGION" --delete --cache-control "public,max-age=31536000,immutable"
 
 # Ensure index.html is not cached aggressively
-aws s3 cp "frontend/dist/index.html" "s3://${BUCKET}/index.html" --region "$REGION" --cache-control "no-cache, no-store, must-revalidate" --content-type "text/html"
+aws s3 cp "${FRONTEND_DIR}/dist/index.html" "s3://${BUCKET}/index.html" --region "$REGION" --cache-control "no-cache, no-store, must-revalidate" --content-type "text/html"
 
 if [[ -n "$CLOUDFRONT_ID" ]]; then
   echo "Creating CloudFront invalidation..."

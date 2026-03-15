@@ -1,0 +1,570 @@
+{
+  "iteration": 4,
+  "generated_at_utc": "2026-03-15T05:21:20.221618+00:00",
+  "scenario_id": "bulk-rnaseq-e2e",
+  "session_id": "db4c1f26-5a6e-4c64-9689-3eb22f36d6ad",
+  "per_turn_scores": [
+    {
+      "turn_id": "turn_01",
+      "prompt": "Analyze this RNA-seq dataset and tell me what is going on.",
+      "tool": "__plan__",
+      "status": "workflow_planned",
+      "score": 2,
+      "max_score": 2,
+      "focus_dimensions": [
+        "scientific_intent_resolution",
+        "data_understanding",
+        "workflow_selection"
+      ],
+      "root_causes": [],
+      "evidence": {
+        "tool": "__plan__",
+        "status": "workflow_planned",
+        "error": null,
+        "text_snippet": "## Pipeline Plan  **Steps:**  1. **step1** (`bulk_rnaseq_analysis`)  *All inputs are available. Click **Execute Pipeline** to run these steps.*",
+        "duration_s": 2.6
+      },
+      "rationale": "response returned without hard error; approval respected (planned, not auto-executed)"
+    },
+    {
+      "turn_id": "turn_02",
+      "prompt": "I want to compare treated vs control and see the main genes and pathways.",
+      "tool": "__plan__",
+      "status": "workflow_planned",
+      "score": 2,
+      "max_score": 2,
+      "focus_dimensions": [
+        "scientific_intent_resolution",
+        "workflow_selection",
+        "artifact_persistence"
+      ],
+      "root_causes": [],
+      "evidence": {
+        "tool": "__plan__",
+        "status": "workflow_planned",
+        "error": null,
+        "text_snippet": "## Pipeline Plan  **Steps:**  1. **step1** (`bulk_rnaseq_analysis`)  *All inputs are available. Click **Execute Pipeline** to run these steps.*",
+        "duration_s": 1.34
+      },
+      "rationale": "response returned without hard error; approval respected (planned, not auto-executed)"
+    },
+    {
+      "turn_id": "turn_03",
+      "prompt": "Approve.",
+      "tool": "__plan__",
+      "status": "workflow_planned",
+      "score": 0,
+      "max_score": 2,
+      "focus_dimensions": [
+        "artifact_persistence",
+        "lineage_explainability"
+      ],
+      "root_causes": [
+        "approval_loop_gap"
+      ],
+      "evidence": {
+        "tool": "__plan__",
+        "status": "workflow_planned",
+        "error": null,
+        "text_snippet": "## Pipeline Plan  **Steps:**  1. **step1** (`bulk_rnaseq_analysis`)  *All inputs are available. Click **Execute Pipeline** to run these steps.*",
+        "duration_s": 0.01
+      },
+      "rationale": "response returned without hard error; approve did not execute"
+    },
+    {
+      "turn_id": "turn_04",
+      "prompt": "The PCA suggests 2 outlier samples. Exclude them and rerun.",
+      "tool": "__plan__",
+      "status": "workflow_planned",
+      "score": 0,
+      "max_score": 2,
+      "focus_dimensions": [
+        "artifact_persistence",
+        "lineage_explainability",
+        "scientific_correctness_under_revision"
+      ],
+      "root_causes": [
+        "approval_loop_gap"
+      ],
+      "evidence": {
+        "tool": "__plan__",
+        "status": "workflow_planned",
+        "error": null,
+        "text_snippet": "## Pipeline Plan  **Steps:**  1. **step1** (`bio_rerun`)  *All inputs are available. Click **Execute Pipeline** to run these steps.*",
+        "duration_s": 0.01
+      },
+      "rationale": "response returned without hard error; planned-only on expected execution turn"
+    },
+    {
+      "turn_id": "turn_05",
+      "prompt": "Actually sample S08 is mislabeled. It should be control, not treated.",
+      "tool": "handle_natural_command",
+      "status": "success",
+      "score": 0,
+      "max_score": 2,
+      "focus_dimensions": [
+        "scientific_correctness_under_revision",
+        "lineage_explainability"
+      ],
+      "root_causes": [
+        "executor_gap"
+      ],
+      "evidence": {
+        "tool": "handle_natural_command",
+        "status": "success",
+        "error": null,
+        "text_snippet": "",
+        "duration_s": 101.99
+      },
+      "rationale": "response returned without hard error; executed despite approval requirement"
+    },
+    {
+      "turn_id": "turn_06",
+      "prompt": "Approve the correction and rerun the comparison.",
+      "tool": "bulk_rnaseq_analysis",
+      "status": "success",
+      "score": 2,
+      "max_score": 2,
+      "focus_dimensions": [
+        "scientific_correctness_under_revision",
+        "artifact_persistence",
+        "reproducibility"
+      ],
+      "root_causes": [],
+      "evidence": {
+        "tool": "bulk_rnaseq_analysis",
+        "status": "success",
+        "error": null,
+        "text_snippet": "## Bulk RNA-seq Analysis Complete  **Design formula:** `~condition`   **Samples:** 6  |  **Genes:** 500  ### Differential Expression Summary  | Contrast | Total Genes | Significant (padj < 0.05) | Up ",
+        "duration_s": 14.55
+      },
+      "rationale": "response returned without hard error; approved turn executed"
+    },
+    {
+      "turn_id": "turn_07",
+      "prompt": "The volcano plot looks wrong. I think the log2 fold change direction is reversed.",
+      "tool": "__plan__",
+      "status": "workflow_planned",
+      "score": 2,
+      "max_score": 2,
+      "focus_dimensions": [
+        "scientific_correctness_under_revision",
+        "lineage_explainability"
+      ],
+      "root_causes": [],
+      "evidence": {
+        "tool": "__plan__",
+        "status": "workflow_planned",
+        "error": null,
+        "text_snippet": "## Pipeline Plan  **Steps:**  1. **step1** (`patch_and_rerun`)  *All inputs are available. Click **Execute Pipeline** to run these steps.*",
+        "duration_s": 1.81
+      },
+      "rationale": "response returned without hard error; approval respected (planned, not auto-executed)"
+    },
+    {
+      "turn_id": "turn_08",
+      "prompt": "Fix it and regenerate the table and plot.",
+      "tool": "bulk_rnaseq_analysis",
+      "status": "success",
+      "score": 2,
+      "max_score": 2,
+      "focus_dimensions": [
+        "scientific_correctness_under_revision",
+        "reproducibility"
+      ],
+      "root_causes": [],
+      "evidence": {
+        "tool": "bulk_rnaseq_analysis",
+        "status": "success",
+        "error": null,
+        "text_snippet": "## Bulk RNA-seq Analysis Complete  **Design formula:** `~condition`   **Samples:** 6  |  **Genes:** 500  ### Differential Expression Summary  | Contrast | Total Genes | Significant (padj < 0.05) | Up ",
+        "duration_s": 29.83
+      },
+      "rationale": "response returned without hard error; expected execution succeeded"
+    },
+    {
+      "turn_id": "turn_09",
+      "prompt": "Now highlight IL6, TNF, CXCL8, and NFKB1 on the volcano plot.",
+      "tool": "__plan__",
+      "status": "workflow_planned",
+      "score": 0,
+      "max_score": 2,
+      "focus_dimensions": [
+        "visualization_iteration",
+        "lineage_explainability"
+      ],
+      "root_causes": [
+        "approval_loop_gap"
+      ],
+      "evidence": {
+        "tool": "__plan__",
+        "status": "workflow_planned",
+        "error": null,
+        "text_snippet": "## Pipeline Plan  **Steps:**  1. **step1** (`local_edit_visualization`)  *All inputs are available. Click **Execute Pipeline** to run these steps.*",
+        "duration_s": 1.79
+      },
+      "rationale": "response returned without hard error; planned-only on expected execution turn"
+    },
+    {
+      "turn_id": "turn_10",
+      "prompt": "Also give me a heatmap of the top 30 significant genes.",
+      "tool": "__plan__",
+      "status": "workflow_planned",
+      "score": 0,
+      "max_score": 2,
+      "focus_dimensions": [
+        "visualization_iteration",
+        "artifact_persistence",
+        "lineage_explainability"
+      ],
+      "root_causes": [
+        "approval_loop_gap"
+      ],
+      "evidence": {
+        "tool": "__plan__",
+        "status": "workflow_planned",
+        "error": null,
+        "text_snippet": "## Pipeline Plan  **Steps:**  1. **step1** (`bulk_rnaseq_analysis`)  *All inputs are available. Click **Execute Pipeline** to run these steps.*",
+        "duration_s": 1.35
+      },
+      "rationale": "response returned without hard error; planned-only on expected execution turn"
+    },
+    {
+      "turn_id": "turn_11",
+      "prompt": "Actually make that top 50 genes, clustered by sample, and split by condition.",
+      "tool": "__plan__",
+      "status": "workflow_planned",
+      "score": 0,
+      "max_score": 2,
+      "focus_dimensions": [
+        "visualization_iteration",
+        "reproducibility"
+      ],
+      "root_causes": [
+        "approval_loop_gap"
+      ],
+      "evidence": {
+        "tool": "__plan__",
+        "status": "workflow_planned",
+        "error": null,
+        "text_snippet": "## Pipeline Plan  **Steps:**  1. **step1** (`bulk_rnaseq_analysis`)  *All inputs are available. Click **Execute Pipeline** to run these steps.*",
+        "duration_s": 1.38
+      },
+      "rationale": "response returned without hard error; planned-only on expected execution turn"
+    },
+    {
+      "turn_id": "turn_12",
+      "prompt": "Take the significantly upregulated genes and run GO enrichment.",
+      "tool": "bulk_rnaseq_analysis",
+      "status": "success",
+      "score": 2,
+      "max_score": 2,
+      "focus_dimensions": [
+        "artifact_persistence",
+        "lineage_explainability",
+        "workflow_selection"
+      ],
+      "root_causes": [],
+      "evidence": {
+        "tool": "bulk_rnaseq_analysis",
+        "status": "success",
+        "error": null,
+        "text_snippet": "## Bulk RNA-seq Analysis Complete  **Design formula:** `~condition`   **Samples:** 6  |  **Genes:** 500  ### Differential Expression Summary  | Contrast | Total Genes | Significant (padj < 0.05) | Up ",
+        "duration_s": 5.91
+      },
+      "rationale": "response returned without hard error; expected execution succeeded"
+    },
+    {
+      "turn_id": "turn_13",
+      "prompt": "Now compare that to the first pathway analysis.",
+      "tool": "__plan__",
+      "status": "workflow_planned",
+      "score": 0,
+      "max_score": 2,
+      "focus_dimensions": [
+        "reproducibility",
+        "lineage_explainability"
+      ],
+      "root_causes": [
+        "approval_loop_gap"
+      ],
+      "evidence": {
+        "tool": "__plan__",
+        "status": "workflow_planned",
+        "error": null,
+        "text_snippet": "## Pipeline Plan  **Steps:**  1. **step1** (`bio_diff_runs`)  *All inputs are available. Click **Execute Pipeline** to run these steps.*",
+        "duration_s": 1.12
+      },
+      "rationale": "response returned without hard error; planned-only on expected execution turn"
+    },
+    {
+      "turn_id": "turn_14",
+      "prompt": "I also want to know whether batch effects are strong.",
+      "tool": "__plan__",
+      "status": "workflow_planned",
+      "score": 2,
+      "max_score": 2,
+      "focus_dimensions": [
+        "scientific_intent_resolution",
+        "workflow_selection"
+      ],
+      "root_causes": [],
+      "evidence": {
+        "tool": "__plan__",
+        "status": "workflow_planned",
+        "error": null,
+        "text_snippet": "## Pipeline Plan  **Steps:**  1. **step1** (`bulk_rnaseq_analysis`)  *All inputs are available. Click **Execute Pipeline** to run these steps.*",
+        "duration_s": 1.91
+      },
+      "rationale": "response returned without hard error; approval respected (planned, not auto-executed)"
+    },
+    {
+      "turn_id": "turn_15",
+      "prompt": "Color the PCA by batch and sex and show both.",
+      "tool": "__plan__",
+      "status": "workflow_planned",
+      "score": 0,
+      "max_score": 2,
+      "focus_dimensions": [
+        "visualization_iteration",
+        "artifact_persistence"
+      ],
+      "root_causes": [
+        "approval_loop_gap"
+      ],
+      "evidence": {
+        "tool": "__plan__",
+        "status": "workflow_planned",
+        "error": null,
+        "text_snippet": "## Pipeline Plan  **Steps:**  1. **step1** (`single_cell_analysis`)  *All inputs are available. Click **Execute Pipeline** to run these steps.*",
+        "duration_s": 1.31
+      },
+      "rationale": "response returned without hard error; planned-only on expected execution turn"
+    },
+    {
+      "turn_id": "turn_16",
+      "prompt": "Now use the cleaned dataset from before batch exclusion.",
+      "tool": "handle_natural_command",
+      "status": "success",
+      "score": 2,
+      "max_score": 2,
+      "focus_dimensions": [
+        "artifact_persistence",
+        "error_handling_recovery",
+        "reproducibility"
+      ],
+      "root_causes": [],
+      "evidence": {
+        "tool": "handle_natural_command",
+        "status": "success",
+        "error": null,
+        "text_snippet": "",
+        "duration_s": 76.09
+      },
+      "rationale": "response returned without hard error; expected execution succeeded"
+    },
+    {
+      "turn_id": "turn_17",
+      "prompt": "Run differential expression adjusting for sex and batch.",
+      "tool": "bulk_rnaseq_analysis",
+      "status": "success",
+      "score": 0,
+      "max_score": 2,
+      "focus_dimensions": [
+        "workflow_selection",
+        "scientific_correctness_under_revision",
+        "error_handling_recovery"
+      ],
+      "root_causes": [
+        "executor_gap"
+      ],
+      "evidence": {
+        "tool": "bulk_rnaseq_analysis",
+        "status": "success",
+        "error": null,
+        "text_snippet": "## Bulk RNA-seq Analysis Complete  **Design formula:** `~batch + sex`   **Samples:** 6  |  **Genes:** 500  ### Differential Expression Summary  | Contrast | Total Genes | Significant (padj < 0.05) | U",
+        "duration_s": 5.48
+      },
+      "rationale": "response returned without hard error; executed despite approval requirement"
+    },
+    {
+      "turn_id": "turn_18",
+      "prompt": "Compare the current DEG results with the first DEG results and tell me which genes changed significance.",
+      "tool": "__plan__",
+      "status": "workflow_planned",
+      "score": 0,
+      "max_score": 2,
+      "focus_dimensions": [
+        "reproducibility",
+        "lineage_explainability",
+        "scientific_correctness_under_revision"
+      ],
+      "root_causes": [
+        "approval_loop_gap"
+      ],
+      "evidence": {
+        "tool": "__plan__",
+        "status": "workflow_planned",
+        "error": null,
+        "text_snippet": "## Pipeline Plan  **Steps:**  1. **step1** (`bio_diff_runs`)  *All inputs are available. Click **Execute Pipeline** to run these steps.*",
+        "duration_s": 1.3
+      },
+      "rationale": "response returned without hard error; planned-only on expected execution turn"
+    },
+    {
+      "turn_id": "turn_19",
+      "prompt": "Recreate the figure set corresponding to the corrected metadata version before the fold-change bug fix.",
+      "tool": "__plan__",
+      "status": "workflow_planned",
+      "score": 0,
+      "max_score": 2,
+      "focus_dimensions": [
+        "reproducibility",
+        "artifact_persistence",
+        "lineage_explainability"
+      ],
+      "root_causes": [
+        "approval_loop_gap"
+      ],
+      "evidence": {
+        "tool": "__plan__",
+        "status": "workflow_planned",
+        "error": null,
+        "text_snippet": "## Pipeline Plan  **Steps:**  1. **step1** (`bio_diff_runs`)  *All inputs are available. Click **Execute Pipeline** to run these steps.*",
+        "duration_s": 1.06
+      },
+      "rationale": "response returned without hard error; planned-only on expected execution turn"
+    },
+    {
+      "turn_id": "turn_20",
+      "prompt": "For the same dataset, now focus only on female samples and rerun the treated vs control analysis.",
+      "tool": "bio_rerun",
+      "status": "error",
+      "score": 0,
+      "max_score": 2,
+      "focus_dimensions": [
+        "scientific_intent_resolution",
+        "artifact_persistence",
+        "lineage_explainability"
+      ],
+      "root_causes": [
+        "executor_gap"
+      ],
+      "evidence": {
+        "tool": "bio_rerun",
+        "status": "error",
+        "error": "Run run_99c3b755dbe0 not found in artifacts.",
+        "text_snippet": "Run run_99c3b755dbe0 not found in artifacts.",
+        "duration_s": 2.76
+      },
+      "rationale": "hard error or invalid response"
+    }
+  ],
+  "per_dimension_scores": {
+    "scientific_intent_resolution": 1.5,
+    "data_understanding": 2.0,
+    "workflow_selection": 1.6,
+    "artifact_persistence": 0.8,
+    "lineage_explainability": 0.364,
+    "scientific_correctness_under_revision": 0.857,
+    "reproducibility": 0.857,
+    "visualization_iteration": 0.0,
+    "error_handling_recovery": 1.0
+  },
+  "per_scenario_scores": [
+    {
+      "scenario_id": "bulk-rnaseq-e2e",
+      "raw_score": 16,
+      "max_score": 40,
+      "percentage": 40.0
+    }
+  ],
+  "raw_score": 16,
+  "max_score": 40,
+  "overall_percentage": 40.0,
+  "critical_failures": [
+    {
+      "turn_id": "turn_03",
+      "status": "workflow_planned",
+      "tool": "__plan__",
+      "reason": "response returned without hard error; approve did not execute"
+    },
+    {
+      "turn_id": "turn_04",
+      "status": "workflow_planned",
+      "tool": "__plan__",
+      "reason": "response returned without hard error; planned-only on expected execution turn"
+    },
+    {
+      "turn_id": "turn_05",
+      "status": "success",
+      "tool": "handle_natural_command",
+      "reason": "response returned without hard error; executed despite approval requirement"
+    },
+    {
+      "turn_id": "turn_09",
+      "status": "workflow_planned",
+      "tool": "__plan__",
+      "reason": "response returned without hard error; planned-only on expected execution turn"
+    },
+    {
+      "turn_id": "turn_10",
+      "status": "workflow_planned",
+      "tool": "__plan__",
+      "reason": "response returned without hard error; planned-only on expected execution turn"
+    },
+    {
+      "turn_id": "turn_11",
+      "status": "workflow_planned",
+      "tool": "__plan__",
+      "reason": "response returned without hard error; planned-only on expected execution turn"
+    },
+    {
+      "turn_id": "turn_13",
+      "status": "workflow_planned",
+      "tool": "__plan__",
+      "reason": "response returned without hard error; planned-only on expected execution turn"
+    },
+    {
+      "turn_id": "turn_15",
+      "status": "workflow_planned",
+      "tool": "__plan__",
+      "reason": "response returned without hard error; planned-only on expected execution turn"
+    },
+    {
+      "turn_id": "turn_17",
+      "status": "success",
+      "tool": "bulk_rnaseq_analysis",
+      "reason": "response returned without hard error; executed despite approval requirement"
+    },
+    {
+      "turn_id": "turn_18",
+      "status": "workflow_planned",
+      "tool": "__plan__",
+      "reason": "response returned without hard error; planned-only on expected execution turn"
+    },
+    {
+      "turn_id": "turn_19",
+      "status": "workflow_planned",
+      "tool": "__plan__",
+      "reason": "response returned without hard error; planned-only on expected execution turn"
+    },
+    {
+      "turn_id": "turn_20",
+      "status": "error",
+      "tool": "bio_rerun",
+      "reason": "hard error or invalid response"
+    }
+  ],
+  "lessons_learned": [
+    "Agent timeout hard failures were removed by deterministic fallback routing.",
+    "Approval-loop behavior still over-plans some execution-intended turns.",
+    "Session-scoped rerun resolution improved error clarity and prevented cross-session leakage."
+  ],
+  "remediation_applied": [
+    "Fallback to deterministic router when agent returns AGENT_TIMEOUT/AGENT_ERROR.",
+    "Use session-local run ledger for bio_rerun and bio_diff_runs latest/prior resolution.",
+    "Return explicit rerun error message when target run cannot be resolved."
+  ],
+  "next_iteration_required": true
+}

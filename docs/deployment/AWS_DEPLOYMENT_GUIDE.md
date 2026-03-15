@@ -27,6 +27,21 @@ The deployment architecture includes:
 - **Load Balancer**: Application Load Balancer (ALB) for backend traffic
 - **Container Registry**: ECR for storing Docker images
 
+### Hosted deployment (single backend, small datasets only)
+
+To reduce cost, the stack uses **one backend only** (Fargate). The optional EC2 instance is not created unless you deploy with `cdk deploy -c createEc2Instance=true`. See [AWS Cost Investigation](AWS_COST_INVESTIGATION.md).
+
+For the hosted app we support **small datasets only** (e.g. &lt;10 MB per file). Upload guards reject larger files:
+
+- **Prompt attachments** (`/agent`): files over the limit are rejected with HTTP 413.
+- **Dataset register** (`/datasets/register`): requests that include any file over the limit are rejected.
+
+The limit is configurable via environment (default **10 MB** on the Fargate task):
+
+- `HELIX_MAX_UPLOAD_MB` (e.g. `10`) or `HELIX_MAX_UPLOAD_BYTES` (bytes). Set to `0` to disable the limit (e.g. for self-hosted or dev).
+
+EMR and other large-dataset code paths remain in the codebase; they are simply not reachable when uploads are capped (e.g. on AWS-hosted).
+
 ## Prerequisites
 
 ### AWS Account Setup

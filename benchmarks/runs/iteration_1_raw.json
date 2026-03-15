@@ -1,0 +1,186 @@
+{
+  "session_id": "2c285940-1a04-40e7-b5b3-282ea29901e1",
+  "scenario_id": "bulk-rnaseq-e2e",
+  "rows": [
+    {
+      "turn_id": "turn_01",
+      "user": "Analyze this RNA-seq dataset and tell me what is going on.",
+      "tool": "__plan__",
+      "status": "workflow_planned",
+      "execute_ready": true,
+      "text": "## Pipeline Plan\n\n**Steps:**\n\n1. **step1** (`bulk_rnaseq_analysis`)\n\n*All inputs are available. Click **Execute Pipeline** to run these steps.*",
+      "error": null
+    },
+    {
+      "turn_id": "turn_02",
+      "user": "I want to compare treated vs control and see the main genes and pathways.",
+      "tool": "__plan__",
+      "status": "workflow_planned",
+      "execute_ready": true,
+      "text": "## Pipeline Plan\n\n**Steps:**\n\n1. **step1** (`bulk_rnaseq_analysis`)\n\n*All inputs are available. Click **Execute Pipeline** to run these steps.*",
+      "error": null
+    },
+    {
+      "turn_id": "turn_03",
+      "user": "Approve.",
+      "tool": "__plan__",
+      "status": "success",
+      "execute_ready": false,
+      "text": "## Pipeline Execution Complete\n\nThe approved plan has been executed.\n\n**Steps:**\n\n1. **step1** (`bulk_rnaseq_analysis`)",
+      "error": null
+    },
+    {
+      "turn_id": "turn_04",
+      "user": "The PCA suggests 2 outlier samples. Exclude them and rerun.",
+      "tool": "bio_rerun",
+      "status": "success",
+      "execute_ready": false,
+      "text": "I could not find a prior rerunnable analysis in this session yet. Please run the base analysis first, or provide explicit inputs for the rerun (for example, count matrix and metadata).",
+      "error": null
+    },
+    {
+      "turn_id": "turn_05",
+      "user": "Actually sample S08 is mislabeled. It should be control, not treated.",
+      "tool": "__plan__",
+      "status": "workflow_planned",
+      "execute_ready": true,
+      "text": "## Pipeline Plan\n\n**Steps:**\n\n1. **step1** (`handle_natural_command`)\n\n*All inputs are available. Click **Execute Pipeline** to run these steps.*",
+      "error": null
+    },
+    {
+      "turn_id": "turn_06",
+      "user": "Approve the correction and rerun the comparison.",
+      "tool": "__plan__",
+      "status": "success",
+      "execute_ready": false,
+      "text": "## Pipeline Execution Complete\n\nThe approved plan has been executed.\n\n**Steps:**\n\n1. **step1** (`handle_natural_command`)",
+      "error": null
+    },
+    {
+      "turn_id": "turn_07",
+      "user": "The volcano plot looks wrong. I think the log2 fold change direction is reversed.",
+      "tool": "__plan__",
+      "status": "workflow_planned",
+      "execute_ready": true,
+      "text": "## Pipeline Plan\n\n**Steps:**\n\n1. **step1** (`patch_and_rerun`)\n\n*All inputs are available. Click **Execute Pipeline** to run these steps.*",
+      "error": null
+    },
+    {
+      "turn_id": "turn_08",
+      "user": "Fix it and regenerate the table and plot.",
+      "tool": null,
+      "status": null,
+      "execute_ready": null,
+      "text": "",
+      "error": "1 validation error for patch_and_rerun\nchange_request\n  Field required [type=missing, input_value={'command': 'Fix it and r...7:07:44.516536+00:00'}}}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.9/v/missing"
+    },
+    {
+      "turn_id": "turn_09",
+      "user": "Now highlight IL6, TNF, CXCL8, and NFKB1 on the volcano plot.",
+      "tool": "patch_and_rerun",
+      "status": "error",
+      "execute_ready": false,
+      "text": "No saved analysis script found in this session. Run an analysis first (Demo 1\u20135) and then request changes.",
+      "error": "No saved analysis script found in this session. Run an analysis first (Demo 1\u20135) and then request changes."
+    },
+    {
+      "turn_id": "turn_10",
+      "user": "Also give me a heatmap of the top 30 significant genes.",
+      "tool": "bulk_rnaseq_analysis",
+      "status": "success",
+      "execute_ready": false,
+      "text": "## Bulk RNA-seq Analysis Complete\n\n**Design formula:** `~condition`  \n**Samples:** 6  |  **Genes:** 500\n\n### Differential Expression Summary\n\n| Contrast | Total Genes | Significant (padj < 0.05) | Up | Down |\n|----------|-------------|-----------------------------|----|------|\n| condition: control vs treatment | 500 | 0 | 0 | 0 |\n\n\n> \u26a0\ufe0f *Synthetic demo data used \u2014 real S3 data unavailable.*",
+      "error": null
+    },
+    {
+      "turn_id": "turn_11",
+      "user": "Actually make that top 50 genes, clustered by sample, and split by condition.",
+      "tool": "bulk_rnaseq_analysis",
+      "status": "success",
+      "execute_ready": false,
+      "text": "## Bulk RNA-seq Analysis Complete\n\n**Design formula:** `~condition`  \n**Samples:** 6  |  **Genes:** 500\n\n### Differential Expression Summary\n\n| Contrast | Total Genes | Significant (padj < 0.05) | Up | Down |\n|----------|-------------|-----------------------------|----|------|\n| condition: control vs treatment | 500 | 0 | 0 | 0 |\n\n\n> \u26a0\ufe0f *Synthetic demo data used \u2014 real S3 data unavailable.*",
+      "error": null
+    },
+    {
+      "turn_id": "turn_12",
+      "user": "Take the significantly upregulated genes and run GO enrichment.",
+      "tool": "bulk_rnaseq_analysis",
+      "status": "success",
+      "execute_ready": false,
+      "text": "## Bulk RNA-seq Analysis Complete\n\n**Design formula:** `~condition`  \n**Samples:** 6  |  **Genes:** 500\n\n### Differential Expression Summary\n\n| Contrast | Total Genes | Significant (padj < 0.05) | Up | Down |\n|----------|-------------|-----------------------------|----|------|\n| condition: control vs treatment | 500 | 0 | 0 | 0 |\n\n\n> \u26a0\ufe0f *Synthetic demo data used \u2014 real S3 data unavailable.*",
+      "error": null
+    },
+    {
+      "turn_id": "turn_13",
+      "user": "Now compare that to the first pathway analysis.",
+      "tool": "bio_diff_runs",
+      "status": "success",
+      "execute_ready": false,
+      "text": "I could not resolve two comparable historical runs in this session yet. Run at least two comparable analyses first (for example, initial and corrected runs).",
+      "error": null
+    },
+    {
+      "turn_id": "turn_14",
+      "user": "I also want to know whether batch effects are strong.",
+      "tool": "__plan__",
+      "status": "workflow_planned",
+      "execute_ready": true,
+      "text": "## Pipeline Plan\n\n**Steps:**\n\n1. **step1** (`bulk_rnaseq_analysis`)\n\n*All inputs are available. Click **Execute Pipeline** to run these steps.*",
+      "error": null
+    },
+    {
+      "turn_id": "turn_15",
+      "user": "Color the PCA by batch and sex and show both.",
+      "tool": "bio_rerun",
+      "status": "success",
+      "execute_ready": false,
+      "text": "## Bulk RNA-seq Analysis Complete\n\n**Design formula:** `~condition`  \n**Samples:** 6  |  **Genes:** 500\n\n### Differential Expression Summary\n\n| Contrast | Total Genes | Significant (padj < 0.05) | Up | Down |\n|----------|-------------|-----------------------------|----|------|\n| condition: control vs treatment | 500 | 0 | 0 | 0 |\n\n\n> \u26a0\ufe0f *Synthetic demo data used \u2014 real S3 data unavailable.*",
+      "error": null
+    },
+    {
+      "turn_id": "turn_16",
+      "user": "Now use the cleaned dataset from before batch exclusion.",
+      "tool": "handle_natural_command",
+      "status": "success",
+      "execute_ready": false,
+      "text": "",
+      "error": null
+    },
+    {
+      "turn_id": "turn_17",
+      "user": "Run differential expression adjusting for sex and batch.",
+      "tool": "__plan__",
+      "status": "workflow_planned",
+      "execute_ready": true,
+      "text": "## Pipeline Plan\n\n**Steps:**\n\n1. **step1** (`bulk_rnaseq_analysis`)\n\n*All inputs are available. Click **Execute Pipeline** to run these steps.*",
+      "error": null
+    },
+    {
+      "turn_id": "turn_18",
+      "user": "Compare the current DEG results with the first DEG results and tell me which genes changed significance.",
+      "tool": "bio_diff_runs",
+      "status": "success",
+      "execute_ready": false,
+      "text": "## Run Comparison\n\n**Run A:** `d30f3e25\u2026`  \n**Run B:** `d30f3e25\u2026`\n\n### Parameter Changes\n- No parameter changes detected.\n\n### Metrics (Run B)\nN/A",
+      "error": null
+    },
+    {
+      "turn_id": "turn_19",
+      "user": "Recreate the figure set corresponding to the corrected metadata version before the fold-change bug fix.",
+      "tool": "bio_diff_runs",
+      "status": "success",
+      "execute_ready": false,
+      "text": "## Run Comparison\n\n**Run A:** `d30f3e25\u2026`  \n**Run B:** `d30f3e25\u2026`\n\n### Parameter Changes\n- No parameter changes detected.\n\n### Metrics (Run B)\nN/A",
+      "error": null
+    },
+    {
+      "turn_id": "turn_20",
+      "user": "For the same dataset, now focus only on female samples and rerun the treated vs control analysis.",
+      "tool": "__plan__",
+      "status": "workflow_planned",
+      "execute_ready": true,
+      "text": "## Pipeline Plan\n\n**Steps:**\n\n1. **step1** (`bio_rerun`)\n\n*All inputs are available. Click **Execute Pipeline** to run these steps.*",
+      "error": null
+    }
+  ]
+}

@@ -130,6 +130,7 @@ cdk destroy
 
 ## Cost Optimization
 
+- **EC2 instance**: The stack creates **only** the Fargate backend by default. To also create the EC2 instance (alternative backend / build host), run `cdk deploy -c createEc2Instance=true`. Omitting it saves ~\$30/month. See [AWS Cost Investigation](../../docs/deployment/AWS_COST_INVESTIGATION.md).
 - **NAT Gateways**: Currently set to 1. For production, consider using 2+ for high availability, or use NAT Instances for lower cost.
 - **ECS Tasks**: Start with 1 task. Scale based on usage.
 - **CloudWatch Logs**: Retention is set to 7 days. Adjust based on requirements.

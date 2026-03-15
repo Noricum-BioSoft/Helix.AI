@@ -84,6 +84,29 @@ class ExecutionBroker:
         self._tool_executor = tool_executor
 
     async def execute_tool(self, req: ExecutionRequest) -> Dict[str, Any]:
+        # Known unsupported tools: return clear message with alternatives (no execution)
+        if req.tool_name == "unsupported_tool":
+            from backend.unsupported_tools import get_unsupported_response
+            requested = (req.arguments or {}).get("requested_tool", "unknown")
+            resp = get_unsupported_response(requested)
+            if resp:
+                text = f"**{requested.replace('_', ' ').title()} is not supported**\n\n"
+                text += resp.get("reason", "") + "\n\n**Alternatives:**\n" + resp.get("alternatives", "")
+                return {
+                    "status": "success",
+                    "tool_name": "unsupported_tool",
+                    "text": text,
+                    "requested_tool": requested,
+                    "alternatives_provided": True,
+                }
+            # Fallback if tool not in registry
+            return {
+                "status": "success",
+                "tool_name": "unsupported_tool",
+                "text": f"Helix does not support '{requested}'. Try the examples in the docs or rephrase your request.",
+                "requested_tool": requested,
+            }
+
         # Phase 3: Plan execution path (multi-step workflow)
         if req.tool_name == "__plan__" or (isinstance(req.arguments, dict) and "plan" in req.arguments):
             plan_dict = req.arguments.get("plan") if isinstance(req.arguments, dict) else None
@@ -650,17 +673,54 @@ class ExecutionBroker:
         """
         context: Dict[str, Any] = {"steps": {}}
         step_outputs: List[Dict[str, Any]] = []
+        from backend.action_plan import map_action_to_tool
 
         for step in plan.steps:
             resolved_args = self._resolve_refs(step.arguments, context)
+            resolved_tool = map_action_to_tool(
+                getattr(step, "action_type", "execute_tool"),
+                step.tool_name,
+                resolved_args if isinstance(resolved_args, dict) else {},
+            )
+            if not resolved_tool:
+                raise ValueError(f"Could not resolve tool for action '{getattr(step, 'action_type', None)}'")
+            from backend.plan_binding import validate_tool_bindings
+            binding_issues = validate_tool_bindings(
+                resolved_tool,
+                resolved_args if isinstance(resolved_args, dict) else {},
+            )
+            if binding_issues:
+                step_record = {
+                    "id": step.id,
+                    "action_type": getattr(step, "action_type", "execute_tool"),
+                    "tool_name": resolved_tool,
+                    "arguments": resolved_args,
+                    "result": {
+                        "status": "error",
+                        "error_type": "artifact_binding_failed",
+                        "issues": binding_issues,
+                    },
+                }
+                context["steps"][step.id] = step_record
+                step_outputs.append(step_record)
+                return {
+                    "status": "error",
+                    "type": "plan_result",
+                    "plan_version": plan.version,
+                    "steps": step_outputs,
+                    "result": step_record["result"],
+                    "error_type": "artifact_binding_failed",
+                    "issues": binding_issues,
+                }
             # So step 2+ can use step 1 output (e.g. consensus from alignment); see CONSENSUS_FROM_ALIGNMENT_GAP.md
-            if step.tool_name == "handle_natural_command" and context.get("steps"):
+            if resolved_tool == "handle_natural_command" and context.get("steps"):
                 resolved_args = dict(resolved_args)
                 resolved_args["previous_plan_steps"] = dict(context["steps"])
-            out = await self._tool_executor(step.tool_name, resolved_args)
+            out = await self._tool_executor(resolved_tool, resolved_args)
             step_record = {
                 "id": step.id,
-                "tool_name": step.tool_name,
+                "action_type": getattr(step, "action_type", "execute_tool"),
+                "tool_name": resolved_tool,
                 "arguments": resolved_args,
                 "result": out,
             }

@@ -1,0 +1,486 @@
+benchmark:
+  id: bioinformatics-benchmark-v1
+  name: Bioinformatics Iterative Loop Benchmark
+  version: "1.0"
+  description: >
+    Machine-readable benchmark for evaluating a conversational bioinformatics
+    analysis system as a stateful iterative data workspace with artifact
+    persistence, lineage, approval loops, plot iteration, scientific bug-fixing,
+    and reproducibility support.
+  primary_modality: bulk_rnaseq
+  companion_markdown: bioinformatics_benchmark.md
+
+scoring:
+  scale:
+    "0": fails
+    "1": partial_or_inconsistent
+    "2": passes_reliably
+  interpretation:
+    critical_pass:
+      description: No high-severity criterion is 0 and most are 2
+    mvp_pass:
+      description: Average score >= 1.5 and no critical criterion is 0
+    strong_pass:
+      description: Average score >= 1.8 and no high-severity criterion is below 2
+
+root_cause_categories:
+  - state_session_gap
+  - asset_registry_gap
+  - lineage_gap
+  - planner_gap
+  - approval_loop_gap
+  - reference_resolver_gap
+  - executor_gap
+  - visualization_state_mismatch
+  - error_handling_gap
+
+evaluation_dimensions:
+  - id: scientific_intent_resolution
+    description: Correctly interprets biological intent and ambiguity
+    severity: high
+  - id: data_understanding
+    description: Correctly infers file structure, modality, and relevant metadata
+    severity: high
+  - id: workflow_selection
+    description: Selects a plausible analysis workflow for the modality
+    severity: high
+  - id: artifact_persistence
+    description: Persists and reuses meaningful scientific artifacts across turns
+    severity: high
+  - id: lineage_explainability
+    description: Explains upstream and downstream relationships between artifacts
+    severity: high
+  - id: scientific_correctness_under_revision
+    description: Handles design corrections, contrast fixes, and selective reruns safely
+    severity: high
+  - id: visualization_iteration
+    description: Safely revises and extends plots without losing provenance
+    severity: medium
+  - id: error_handling_recovery
+    description: Recovers safely from missing metadata, invalid requests, and missing artifacts
+    severity: high
+  - id: reproducibility
+    description: Recreates and compares historical outputs from prior states
+    severity: high
+
+artifacts_expected_classes:
+  - source_dataset
+  - metadata_table
+  - corrected_metadata
+  - filtered_dataset
+  - normalized_matrix
+  - qc_report
+  - pca_plot
+  - deg_table
+  - volcano_plot
+  - heatmap
+  - gene_list
+  - pathway_enrichment
+  - go_enrichment
+  - comparison_result
+
+scenarios:
+  - id: bulk-rnaseq-e2e
+    name: Bulk RNA-seq End-to-End Iterative Scenario
+    modality: bulk_rnaseq
+    description: >
+      End-to-end scenario stressing planning, QC, metadata correction,
+      scientific bug-fixing, figure revision, downstream enrichment,
+      historical comparison, and branch analysis.
+    setup:
+      files:
+        - name: counts_matrix.tsv
+          kind: source_dataset
+          expected_structure:
+            rows: genes
+            columns: sample_ids
+            values: raw_counts
+        - name: sample_metadata.tsv
+          kind: metadata_table
+          expected_columns:
+            - sample_id
+            - condition
+            - batch
+            - sex
+            - timepoint
+      assumptions:
+        - counts_matrix.tsv contains raw counts
+        - sample_metadata.tsv maps sample IDs to experimental metadata
+    turns:
+      - id: turn_01
+        user: Analyze this RNA-seq dataset and tell me what is going on.
+        expected_behaviors:
+          - detect_under_specified_request
+          - inspect_files_and_structure
+          - explain_detected_data_shape_or_modality
+          - propose_multiple_plausible_analysis_options
+          - avoid_premature_irreversible_execution
+        should_require_approval_before_execution: true
+        focus_dimensions:
+          - scientific_intent_resolution
+          - data_understanding
+          - workflow_selection
+        fail_conditions:
+          - commits_immediately_to_single_analysis_without_clarification
+          - does_not_inspect_available_files
+          - misidentifies_modality_without_evidence
+
+      - id: turn_02
+        user: I want to compare treated vs control and see the main genes and pathways.
+        expected_behaviors:
+          - propose_plan_using_metadata
+          - confirm_or_infer_condition_field_safely
+          - include_qc_deg_volcano_and_pathway_steps
+          - surface_key_assumptions
+          - wait_for_approval
+        expected_plan_contains:
+          - qc_summary
+          - differential_expression
+          - deg_table
+          - volcano_plot
+          - pathway_enrichment
+        should_require_approval_before_execution: true
+        focus_dimensions:
+          - scientific_intent_resolution
+          - workflow_selection
+          - artifact_persistence
+        fail_conditions:
+          - executes_before_approval
+          - omits_required_assumptions
+          - does_not_name_inputs_or_outputs
+
+      - id: turn_03
+        user: Approve.
+        expected_behaviors:
+          - execute_approved_workflow
+          - create_reusable_artifacts
+          - report_available_reusable_outputs
+        expected_artifacts_created:
+          - qc_report_v1
+          - pca_plot_v1
+          - deg_table_treated_vs_control_v1
+          - volcano_plot_v1
+          - pathway_enrichment_v1
+        focus_dimensions:
+          - artifact_persistence
+          - lineage_explainability
+        fail_conditions:
+          - execution_without_persisted_outputs
+          - outputs_not_reusable
+          - lineage_not_explainable
+
+      - id: turn_04
+        user: The PCA suggests 2 outlier samples. Exclude them and rerun.
+        expected_behaviors:
+          - resolve_referenced_pca_artifact
+          - request_sample_ids_if_not_identifiable
+          - create_filtered_dataset_excluding_outliers
+          - rerun_affected_downstream_steps
+          - preserve_old_and_new_versions
+        expected_artifacts_created:
+          - filtered_dataset_outliers_removed_v1
+          - pca_plot_v2
+          - deg_table_treated_vs_control_after_outlier_removal_v1
+          - pathway_enrichment_after_outlier_removal_v1
+        focus_dimensions:
+          - artifact_persistence
+          - lineage_explainability
+          - scientific_correctness_under_revision
+        fail_conditions:
+          - silently_excludes_unknown_samples
+          - overwrites_prior_results
+          - cannot_trace_outlier_filtered_branch
+
+      - id: turn_05
+        user: Actually sample S08 is mislabeled. It should be control, not treated.
+        expected_behaviors:
+          - recognize_metadata_correction
+          - explain_prior_results_may_be_stale
+          - propose_rerunning_affected_steps
+          - preserve_old_and_corrected_metadata_versions
+        should_require_approval_before_execution: true
+        focus_dimensions:
+          - scientific_correctness_under_revision
+          - lineage_explainability
+        fail_conditions:
+          - updates_metadata_without_warning
+          - fails_to_identify_downstream_impact
+          - mutates_old_metadata_in_place_without_versioning
+
+      - id: turn_06
+        user: Approve the correction and rerun the comparison.
+        expected_behaviors:
+          - rerun_using_corrected_metadata
+          - create_new_artifact_versions
+          - mark_prior_outputs_as_based_on_older_metadata
+        expected_artifacts_created:
+          - sample_metadata_corrected_v2
+          - deg_table_treated_vs_control_v2
+          - volcano_plot_v2
+          - pathway_enrichment_v2
+        focus_dimensions:
+          - scientific_correctness_under_revision
+          - artifact_persistence
+          - reproducibility
+        fail_conditions:
+          - overwrites_v1_results
+          - cannot_distinguish_old_vs_corrected_outputs
+          - stale_results_not_marked_or_explainable
+
+      - id: turn_07
+        user: The volcano plot looks wrong. I think the log2 fold change direction is reversed.
+        expected_behaviors:
+          - inspect_contrast_definition
+          - diagnose_whether_direction_is_wrong
+          - explain_reasoning
+          - propose_fix_if_needed
+          - avoid_bluffing
+        should_require_approval_before_execution: true
+        focus_dimensions:
+          - scientific_correctness_under_revision
+          - lineage_explainability
+        fail_conditions:
+          - agrees_without_investigation
+          - cannot_state_contrast_definition
+          - gives_unfounded_confident_answer
+
+      - id: turn_08
+        user: Fix it and regenerate the table and plot.
+        expected_behaviors:
+          - rerun_only_affected_steps_if_possible
+          - preserve_prior_versions
+          - clearly_state_what_changed
+        expected_artifacts_created:
+          - deg_table_treated_vs_control_v3
+          - volcano_plot_v3
+        focus_dimensions:
+          - scientific_correctness_under_revision
+          - reproducibility
+        fail_conditions:
+          - reruns_unrelated_steps_without_reason
+          - overwrites_v2_outputs
+          - cannot_explain_difference_from_v2
+
+      - id: turn_09
+        user: Now highlight IL6, TNF, CXCL8, and NFKB1 on the volcano plot.
+        expected_behaviors:
+          - use_current_deg_table_as_plot_source
+          - regenerate_plot_without_full_deg_rerun
+          - preserve_previous_plot_version
+        expected_artifacts_created:
+          - volcano_plot_v4
+        focus_dimensions:
+          - visualization_iteration
+          - lineage_explainability
+        fail_conditions:
+          - reruns_full_analysis_unnecessarily
+          - uses_wrong_deg_table_version
+          - overwrites_existing_plot
+
+      - id: turn_10
+        user: Also give me a heatmap of the top 30 significant genes.
+        expected_behaviors:
+          - use_current_deg_table_and_expression_matrix
+          - define_or_reuse_significance_threshold
+          - explain_normalization_or_sample_basis
+          - create_new_heatmap_artifact
+        expected_artifacts_created:
+          - heatmap_top30_v1
+        focus_dimensions:
+          - visualization_iteration
+          - artifact_persistence
+          - lineage_explainability
+        fail_conditions:
+          - heatmap_source_is_unclear
+          - uses_incompatible_or_wrong_input
+          - does_not_preserve_plot_artifact
+
+      - id: turn_11
+        user: Actually make that top 50 genes, clustered by sample, and split by condition.
+        expected_behaviors:
+          - revise_heatmap_request_cleanly
+          - preserve_earlier_heatmap
+          - create_new_version
+        expected_artifacts_created:
+          - heatmap_top50_v2
+        focus_dimensions:
+          - visualization_iteration
+          - reproducibility
+        fail_conditions:
+          - silently_mutates_old_heatmap
+          - cannot_explain_difference_from_previous_version
+
+      - id: turn_12
+        user: Take the significantly upregulated genes and run GO enrichment.
+        expected_behaviors:
+          - resolve_current_deg_table
+          - apply_significance_and_direction_filters
+          - create_gene_list_and_go_enrichment_artifacts
+        expected_artifacts_created:
+          - upregulated_gene_list_v1
+          - go_enrichment_upregulated_v1
+        focus_dimensions:
+          - artifact_persistence
+          - lineage_explainability
+          - workflow_selection
+        fail_conditions:
+          - does_not_filter_by_direction
+          - enrichment_input_is_untraceable
+          - wrong_upstream_result_version_used
+
+      - id: turn_13
+        user: Now compare that to the first pathway analysis.
+        expected_behaviors:
+          - resolve_current_go_enrichment
+          - resolve_original_pathway_enrichment
+          - compare_appropriately
+          - explain_if_inputs_or_methods_differ
+        focus_dimensions:
+          - reproducibility
+          - lineage_explainability
+        fail_conditions:
+          - cannot_resolve_first_pathway_analysis
+          - compares_wrong_artifacts
+          - cannot_explain_difference_in_inputs
+
+      - id: turn_14
+        user: I also want to know whether batch effects are strong.
+        expected_behaviors:
+          - recognize_new_but_related_intent
+          - propose_batch_relevant_analyses
+          - reuse_existing_processed_artifacts_when_appropriate
+        should_require_approval_before_execution: true
+        focus_dimensions:
+          - scientific_intent_resolution
+          - workflow_selection
+        fail_conditions:
+          - treats_request_as_unrelated_reset
+          - ignores_existing_artifacts
+          - proposes_irrelevant_analysis
+
+      - id: turn_15
+        user: Color the PCA by batch and sex and show both.
+        expected_behaviors:
+          - use_correct_upstream_processed_artifact
+          - create_distinct_visualizations
+          - preserve_earlier_pca_versions
+        expected_artifacts_created:
+          - pca_by_batch_v2
+          - pca_by_sex_v1
+        focus_dimensions:
+          - visualization_iteration
+          - artifact_persistence
+        fail_conditions:
+          - uses_wrong_data_basis_for_pca
+          - overwrites_previous_pca_without_version
+          - cannot_explain_plot_source
+
+      - id: turn_16
+        user: Now use the cleaned dataset from before batch exclusion.
+        expected_behaviors:
+          - validate_artifact_existence
+          - resolve_correct_historical_artifact_if_present
+          - otherwise_state_missing_and_offer_recreation
+          - avoid_hallucinated_access
+        focus_dimensions:
+          - artifact_persistence
+          - error_handling_recovery
+          - reproducibility
+        fail_conditions:
+          - hallucinates_nonexistent_artifact
+          - resolves_to_wrong_nearby_version
+          - cannot_explain_artifact_choice
+
+      - id: turn_17
+        user: Run differential expression adjusting for sex and batch.
+        expected_behaviors:
+          - validate_design_formula_against_metadata
+          - propose_valid_model_if_supported
+          - explain_limitations_if_invalid_or_unstable
+        should_require_approval_before_execution: true
+        focus_dimensions:
+          - workflow_selection
+          - scientific_correctness_under_revision
+          - error_handling_recovery
+        fail_conditions:
+          - proposes_invalid_model_without_warning
+          - ignores_missing_covariate_support
+          - executes_on_unstable_design_silently
+
+      - id: turn_18
+        user: Compare the current DEG results with the first DEG results and tell me which genes changed significance.
+        expected_behaviors:
+          - resolve_current_and_first_deg_tables
+          - compare_significance_and_effect_direction
+          - explain_likely_causes_for_changes
+        focus_dimensions:
+          - reproducibility
+          - lineage_explainability
+          - scientific_correctness_under_revision
+        fail_conditions:
+          - cannot_resolve_first_deg_table
+          - compares_wrong_versions
+          - cannot_explain_why_results_changed
+
+      - id: turn_19
+        user: Recreate the figure set corresponding to the corrected metadata version before the fold-change bug fix.
+        expected_behaviors:
+          - resolve_exact_historical_state
+          - retrieve_or_regenerate_correct_figure_set
+          - avoid_confusing_neighboring_versions
+        focus_dimensions:
+          - reproducibility
+          - artifact_persistence
+          - lineage_explainability
+        fail_conditions:
+          - cannot_target_intermediate_state
+          - returns_current_figures_instead
+          - historical_state_not_addressable
+
+      - id: turn_20
+        user: For the same dataset, now focus only on female samples and rerun the treated vs control analysis.
+        expected_behaviors:
+          - resolve_appropriate_source_data_and_metadata
+          - propose_subsetting_female_samples_only
+          - validate_sample_count_and_design
+          - create_new_branch_without_overwriting_main_path
+        should_require_approval_before_execution: true
+        focus_dimensions:
+          - scientific_intent_resolution
+          - artifact_persistence
+          - lineage_explainability
+        fail_conditions:
+          - overwrites_existing_analysis_path
+          - does_not_validate_design_after_subsetting
+          - loses_connection_to_parent_artifacts
+
+output_requirements:
+  per_turn:
+    - transcript_summary
+    - observed_behavior
+    - expected_vs_actual
+    - resolved_input_artifacts
+    - created_output_artifacts
+    - approval_respected
+    - lineage_explainable
+    - scores_by_dimension
+    - root_cause_categories
+    - evidence
+  final_summary:
+    - overall_average_score
+    - critical_failures
+    - repeated_failure_patterns
+    - top_architectural_weaknesses
+    - prioritized_recommendations
+
+high_severity_red_flags:
+  - cannot_distinguish_raw_counts_from_normalized_expression
+  - confuses_bulk_and_single_cell_logic
+  - cannot_name_exact_contrast_used
+  - overwrites_old_results_after_metadata_correction
+  - cannot_explain_gene_list_used_for_enrichment
+  - regenerates_plots_from_wrong_deg_version
+  - loses_track_of_excluded_samples
+  - cannot_reproduce_specific_historical_figure
+  - silently_reverses_comparison_direction
+  - hallucinates_missing_artifact_access

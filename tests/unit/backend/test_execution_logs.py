@@ -140,6 +140,50 @@ def test_build_standard_response_logs_have_timestamps():
     assert response["logs"][0]["timestamp"]  # Should not be empty
 
 
+def test_build_standard_response_hides_downloads_for_plan_states():
+    """Planning responses should not expose downloadable artifacts."""
+    result = {
+        "status": "workflow_planned",
+        "text": "Pipeline plan ready",
+        "links": [{"label": "bundle.zip", "url": "/download/bundle?session_id=abc"}],
+    }
+
+    response = build_standard_response(
+        prompt="Plan a pipeline",
+        tool="agent",
+        result=result,
+        session_id="test-session",
+        mcp_route="/execute",
+        success=True,
+    )
+
+    assert response["status"] == "workflow_planned"
+    assert response["data"].get("downloadable_artifacts") == []
+
+
+def test_build_standard_response_exposes_downloads_for_executed_states():
+    """Executed success responses should expose downloadable artifacts."""
+    result = {
+        "status": "success",
+        "text": "Run complete",
+        "links": [{"label": "results.csv", "url": "/session/s/artifacts/a/download"}],
+    }
+
+    response = build_standard_response(
+        prompt="Run and return outputs",
+        tool="bulk_rnaseq_analysis",
+        result=result,
+        session_id="test-session",
+        mcp_route="/execute",
+        success=True,
+    )
+
+    artifacts = response["data"].get("downloadable_artifacts")
+    assert isinstance(artifacts, list)
+    assert len(artifacts) >= 1
+    assert artifacts[0]["label"] == "results.csv"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 

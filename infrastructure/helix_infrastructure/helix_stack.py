@@ -34,6 +34,9 @@ class HelixStack(Stack):
         # Configuration
         project_name = "helix-ai"
         backend_port = 8001
+        # Set createEc2Instance=true in CDK context or HELIX_CREATE_EC2=1 in env to create EC2 (adds ~$30/mo)
+        _ec2_flag = self.node.try_get_context("createEc2Instance") or os.environ.get("HELIX_CREATE_EC2", "false")
+        create_ec2_instance = str(_ec2_flag).lower() in ("true", "1", "yes")
         
         # Custom domain configuration (optional)
         # Can be set via environment variables or CDK context
@@ -287,6 +290,8 @@ class HelixStack(Stack):
             ),
             environment={
                 "PYTHONUNBUFFERED": "1",
+                # Hosted small-datasets-only: cap upload size (e.g. 10 MB) to avoid large data processing costs
+                "HELIX_MAX_UPLOAD_MB": "10",
             },
             secrets=container_secrets if container_secrets else None,  # Only add if secrets exist
             health_check=ecs.HealthCheck(
@@ -619,8 +624,28 @@ class HelixStack(Stack):
 
 
         # ==========================================
-        # 9. EC2 Instance for Backend (Alternative to Fargate)
+        # 9. EC2 Instance for Backend (Alternative to Fargate) – optional for cost savings
         # ==========================================
+        # Create EC2 only when createEc2Instance=true or HELIX_CREATE_EC2=1 (saves ~$30/mo when disabled)
+        if create_ec2_instance:
+            self._create_ec2_backend(
+                project_name=project_name,
+                backend_port=backend_port,
+                vpc=vpc,
+                alb_sg=alb_sg,
+                ecr_repo=ecr_repo,
+            )
+
+    def _create_ec2_backend(
+        self,
+        *,
+        project_name: str,
+        backend_port: int,
+        vpc: ec2.IVpc,
+        alb_sg: ec2.ISecurityGroup,
+        ecr_repo: ecr.IRepository,
+    ) -> None:
+        """Create EC2 instance and target group for backend (alternative to Fargate)."""
         # Create an IAM role for EC2 instance
         ec2_role = iam.Role(
             self,
