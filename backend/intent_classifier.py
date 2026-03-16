@@ -280,32 +280,48 @@ def _classify_intent_with_heuristics(text: str) -> IntentDecision:
     return IntentDecision(intent="execute", reason="heuristic_default")
 
 
-def classify_intent(text: str) -> IntentDecision:
+def classify_intent(
+    text: str,
+    *,
+    session_context: Optional[dict] = None,
+    workflow_state: Optional[str] = None,
+) -> IntentDecision:
     """
-    Classify user intent into "execute" or "qa" using LLM agent.
-    
-    First attempts to use LLM-based classification (via intent-detector-agent.md).
-    Falls back to heuristic classification if:
-    - HELIX_MOCK_MODE is enabled
-    - LLM API keys are not available
-    - LLM invocation fails for any reason
-    
-    The LLM returns multi-label classification (question, action, data, workflow),
-    which is mapped to binary execute/qa decision:
-    - "action" present → "execute"
-    - Only "question" (no "action") → "qa"
-    - Otherwise → "execute" (safer default)
-    
-    Args:
-        text: User prompt to classify
-        
-    Returns:
-        IntentDecision with intent ("execute" or "qa") and reason string
+    Classify user intent into "execute" or "qa" using session-aware rules first,
+    then LLM, then heuristics.
+
+    Session-aware shortcuts (applied before any LLM call):
+    - WAITING_FOR_APPROVAL + short affirmative-looking text → "execute" (approval)
+    - WAITING_FOR_CLARIFICATION → "execute" (user is answering a question)
+    - WAITING_FOR_INPUTS → "execute" (user is supplying inputs)
+    - Prior runs in session + "again / rerun / redo" → "execute"
     """
-    # Try LLM-based classification first
+    from typing import Optional  # noqa: PLC0415 – local to avoid circular at module level
+
+    # ── Checkpoint-state shortcuts ────────────────────────────────────────────
+    if workflow_state:
+        _ws = (workflow_state or "").upper()
+        if _ws in {"WAITING_FOR_APPROVAL", "WAITING_FOR_CLARIFICATION", "WAITING_FOR_INPUTS"}:
+            return IntentDecision(intent="execute", reason=f"checkpoint_state_{_ws.lower()}")
+
+    # ── Session-history shortcuts ─────────────────────────────────────────────
+    if session_context:
+        _runs = session_context.get("runs") or []
+        _history = session_context.get("history") or []
+        _has_prior_runs = bool(_runs or _history)
+        _tl = (text or "").lower().strip()
+        _rerun_cues = ("again", "rerun", "re-run", "redo", "try again", "retry",
+                       "same but", "this time", "now run", "update it")
+        if _has_prior_runs and any(c in _tl for c in _rerun_cues):
+            return IntentDecision(intent="execute", reason="session_rerun_cue")
+
+    # ── LLM then heuristic fallback ───────────────────────────────────────────
     try:
         return _classify_intent_with_llm(text)
     except Exception as e:
-        # Fall back to heuristics if LLM is unavailable or fails
         logger.debug(f"Falling back to heuristic classification: {e}")
         return _classify_intent_with_heuristics(text)
+
+
+# Keep Optional importable at module level for type annotations
+from typing import Optional  # noqa: E402

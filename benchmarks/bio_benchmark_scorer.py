@@ -435,6 +435,18 @@ def score_benchmark_run(
         else ("Partial" if pct >= 50.0 else "Fail")
     )
 
+    # Defensive invariant checks — catch silent mis-scoring bugs early.
+    assert 0 <= raw <= max_score, (
+        f"Scorer invariant violated: raw_score {raw} is outside [0, {max_score}]"
+    )
+    assert 0.0 <= pct <= 100.0, (
+        f"Scorer invariant violated: overall_percentage {pct} is outside [0, 100]"
+    )
+    for _t in per_turn:
+        assert _t["score"] <= _t["max_score"], (
+            f"Turn {_t['turn_id']}: score {_t['score']} > max_score {_t['max_score']}"
+        )
+
     return {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "scenario_id": scenario_id,

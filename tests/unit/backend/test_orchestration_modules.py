@@ -211,3 +211,16 @@ def test_command_router_routes_historical_recreation_to_diff_runs():
     assert params.get("run_id_a") == "latest"
     assert params.get("run_id_b") == "prior"
 
+
+def test_command_router_routes_workflow_design_intent_to_planner():
+    router = CommandRouter()
+    tool, params = router.route_command(
+        (
+            "Design the workflow before execution. "
+            "Propose expected calculations, output artifacts, and recommended plots."
+        ),
+        {"session_id": "sid-1"},
+    )
+    assert tool == "handle_natural_command"
+    assert params.get("session_id") == "sid-1"
+

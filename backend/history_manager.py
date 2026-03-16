@@ -1089,5 +1089,41 @@ class HistoryManager:
         
         return files
 
+    # ── Workflow Checkpoint API ───────────────────────────────────────────────
+
+    def save_checkpoint(self, session_id: str, checkpoint: "WorkflowCheckpoint") -> None:  # noqa: F821
+        """Persist a WorkflowCheckpoint into the session store and flush to disk."""
+        from backend.workflow_checkpoint import WorkflowCheckpoint  # local import to avoid circular
+        self._ensure_sessions_loaded()
+        session_lock = self._get_session_lock(session_id)
+        with session_lock:
+            if session_id not in self.sessions:
+                self.ensure_session_exists(session_id)
+            self.sessions[session_id]["__checkpoint__"] = checkpoint.to_dict()
+            self.sessions[session_id]["updated_at"] = datetime.now().isoformat()
+        self._save_session(session_id)
+
+    def load_checkpoint(self, session_id: str) -> "WorkflowCheckpoint":  # noqa: F821
+        """Load the current WorkflowCheckpoint for a session.
+
+        Returns an IDLE checkpoint if none exists.
+        """
+        from backend.workflow_checkpoint import WorkflowCheckpoint
+        self._ensure_sessions_loaded()
+        session = self.sessions.get(session_id) or {}
+        raw = session.get("__checkpoint__")
+        if raw and isinstance(raw, dict):
+            try:
+                return WorkflowCheckpoint.from_dict(raw)
+            except Exception:
+                pass
+        return WorkflowCheckpoint.idle()
+
+    def clear_checkpoint(self, session_id: str) -> None:
+        """Remove the checkpoint and return session to IDLE."""
+        from backend.workflow_checkpoint import WorkflowCheckpoint
+        self.save_checkpoint(session_id, WorkflowCheckpoint.idle())
+
+
 # Global history manager instance
 history_manager = HistoryManager() 

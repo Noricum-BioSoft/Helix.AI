@@ -827,8 +827,21 @@ function App() {
     // ── Download links (computed early so every renderer can include them) ──────
     // Prefer normalized backend field data.downloadable_artifacts.
     // Fallback to legacy links only when this is an executed/completed response.
+    const statusCandidates = [
+      agentOutput?.status,
+      agentOutput?.result?.status,
+      agentOutput?.raw_result?.status,
+      agentOutput?.raw_result?.result?.status,
+      actualResult?.status,
+    ]
+      .map((s) => (s == null ? '' : String(s).toLowerCase()))
+      .filter(Boolean);
+    const planningStatuses = new Set(['workflow_planned', 'needs_inputs', 'tool_mapped', 'workflow_needs_clarification']);
+    // Prefer planning statuses when mixed envelopes disagree (e.g., top-level success + inner plan).
     const responseStatus =
-      (agentOutput?.status || agentOutput?.result?.status || actualResult?.status || '').toString().toLowerCase();
+      statusCandidates.find((s) => planningStatuses.has(s)) ||
+      statusCandidates[0] ||
+      '';
     const nonExecutedStatuses = new Set([
       'workflow_planned',
       'needs_inputs',
@@ -844,15 +857,29 @@ function App() {
       !!responseStatus &&
       !nonExecutedStatuses.has(responseStatus) &&
       !['error', 'failed', 'workflow_failed'].includes(responseStatus);
+    const executeReadyFlag = (
+      agentOutput?.execute_ready ??
+      agentOutput?.result?.execute_ready ??
+      agentOutput?.raw_result?.execute_ready ??
+      agentOutput?.raw_result?.result?.execute_ready
+    );
+    const topText = String(agentOutput?.text || agentOutput?.result?.text || '');
+    const looksLikePlanText = /##\s*Pipeline Plan/i.test(topText);
+    const isNonExecutablePlanResponse =
+      responseStatus === 'workflow_planned' ||
+      responseStatus === 'needs_inputs' ||
+      (executeReadyFlag === false && looksLikePlanText);
 
     const _downloadArtifactsRaw = agentOutput?.data?.downloadable_artifacts;
     const _hasDownloadArtifacts =
       Array.isArray(_downloadArtifactsRaw) && _downloadArtifactsRaw.length > 0;
     const _legacyLinksRaw: any[] =
       agentOutput?.data?.links || actualResult?.links || rawResult?.links || [];
-    const _earlyLinksRaw: any[] = _hasDownloadArtifacts
-      ? (_downloadArtifactsRaw as any[])
-      : (isExecutedForDownloads ? _legacyLinksRaw : []);
+    const _earlyLinksRaw: any[] = isNonExecutablePlanResponse
+      ? []
+      : (_hasDownloadArtifacts
+        ? (_downloadArtifactsRaw as any[])
+        : (isExecutedForDownloads ? _legacyLinksRaw : []));
     const _earlyLinks: any[] = Array.isArray(_earlyLinksRaw)
       ? _earlyLinksRaw
           .map((l: any) => (l && typeof l === 'object' ? { ...l, url: normalizeAssetUrl(l.url) } : l))
@@ -2162,7 +2189,16 @@ function App() {
             getDemoScenarioByTool(responseTool)
           : undefined);
 
-    // Detect response status across top-level and nested broker payloads.
+    // ── Single source of truth: backend workflow_state ───────────────────────
+    // Canonical field emitted by build_standard_response. Fall back to heuristics
+    // only if talking to an older backend that doesn't emit it yet.
+    const workflowState: string = (
+      output?.workflow_state ||
+      output?.result?.workflow_state ||
+      output?.raw_result?.workflow_state ||
+      ''
+    ).toUpperCase();
+
     const resolvedStatus =
       output?.status ||
       output?.result?.status ||
@@ -2171,18 +2207,41 @@ function App() {
       output?.data?.results?.status ||
       output?.data?.results?.result?.status;
 
-    // Detect a workflow plan response so we can append the "Execute Pipeline" button
-    const isWorkflowPlan =
-      output?.execute_ready === true ||
-      output?.result?.execute_ready === true ||
-      output?.raw_result?.execute_ready === true ||
-      output?.raw_result?.result?.execute_ready === true ||
-      resolvedStatus === 'workflow_planned';
+    // If backend sends workflow_state, trust it completely.
+    // Otherwise fall back to the old flag/status heuristics.
+    const planAction: 'approve' | 'execute' | 'none' = (() => {
+      if (workflowState === 'WAITING_FOR_APPROVAL') return 'approve';
+      if (workflowState === 'PLANNING') {
+        // PLANNING means execute_ready=true + no approval gate
+        const er = output?.execute_ready ?? output?.result?.execute_ready ?? false;
+        return er ? 'execute' : 'none';
+      }
+      if (workflowState === 'WAITING_FOR_INPUTS' || workflowState === 'IDLE' ||
+          workflowState === 'COMPLETED' || workflowState === 'FAILED' ||
+          workflowState === 'EXECUTING') return 'none';
+      // Legacy fallback for older backend responses without workflow_state
+      const status = (resolvedStatus || '').toLowerCase();
+      if (status !== 'workflow_planned') return 'none';
+      const approvalRequired =
+        output?.approval_required === true ||
+        output?.result?.approval_required === true ||
+        output?.raw_result?.approval_required === true;
+      const executeReady =
+        output?.execute_ready === true ||
+        output?.result?.execute_ready === true;
+      if (approvalRequired) return 'approve';
+      if (executeReady) return 'execute';
+      return 'none';
+    })();
 
-    // Detect a needs_inputs response so we can show the "Use example data" button.
-    // Some demos come back as plain agent markdown (status=success) but still clearly ask
-    // for count matrix / sample metadata. Handle that case too.
-    const explicitNeedsInputs = resolvedStatus === 'needs_inputs';
+    const isApprovalPlan = planAction === 'approve';
+    const showExecutePipeline = planAction === 'execute';
+    const isWorkflowPlan = planAction !== 'none' || workflowState === 'PLANNING';
+
+    // needs_inputs: waiting for data before planning/execution can proceed
+    const explicitNeedsInputs =
+      workflowState === 'WAITING_FOR_INPUTS' ||
+      (resolvedStatus || '').toLowerCase() === 'needs_inputs';
 
     const getAssistantTextForDetection = (o: any): string => {
       const msgs =
@@ -2232,19 +2291,37 @@ function App() {
                 ✓ Submitted
               </Button>
             ) : (
-              <Button
-                variant="success"
-                onClick={() => handleExecutePipeline(item.input)}
-                disabled={loading}
-                className="px-4"
-              >
-                {loading ? 'Submitting…' : '▶ Execute Pipeline'}
-              </Button>
+              <>
+                {planAction === 'approve' && (
+                  <Button
+                    variant="primary"
+                    onClick={() => executeCommand('Approve.', item.scenarioId, false)}
+                    disabled={loading}
+                    className="px-4"
+                  >
+                    {loading ? 'Approving…' : '✅ I approve'}
+                  </Button>
+                )}
+                {showExecutePipeline && (
+                  <Button
+                    variant="success"
+                    onClick={() => handleExecutePipeline(item.input)}
+                    disabled={loading}
+                    className="px-4"
+                  >
+                    {loading ? 'Submitting…' : '▶ Execute Pipeline'}
+                  </Button>
+                )}
+              </>
             )}
             <span className="text-muted small">
               {alreadyExecuted
                 ? 'Pipeline submitted — see results above.'
-                : 'Confirms the plan above and queues all steps for execution.'}
+                : planAction === 'approve'
+                  ? 'Approval confirms execution of the pending reviewed plan.'
+                  : planAction === 'execute'
+                    ? 'Confirms the plan above and queues all steps for execution.'
+                    : 'This is a design/preview plan. Provide inputs or approval context to continue.'}
             </span>
           </div>
           {scenario?.followUpPrompt && (

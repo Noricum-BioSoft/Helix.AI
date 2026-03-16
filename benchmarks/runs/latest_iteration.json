@@ -1,6 +1,6 @@
 {
   "iteration": 1,
-  "overall_percentage": 87.5,
+  "overall_percentage": 90.0,
   "critical_failures": 0,
   "threshold_met": true,
   "stop_reason": "threshold_met_and_no_critical_failures",

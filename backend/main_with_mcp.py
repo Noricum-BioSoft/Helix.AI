@@ -257,10 +257,6 @@ def _autobind_plan_inputs(plan: Dict[str, Any], session_context: Optional[Dict[s
             args = {}
             step["arguments"] = args
 
-        # Remove routing-only flag so execution can proceed with bound inputs.
-        if args.get("needs_inputs") is True:
-            args["needs_inputs"] = False
-
         spec = req_registry.get(tool_name) if isinstance(req_registry, dict) else None
         required = spec.get("required_inputs", []) if isinstance(spec, dict) else []
         for req_inp in required:
@@ -281,6 +277,20 @@ def _autobind_plan_inputs(plan: Dict[str, Any], session_context: Optional[Dict[s
             example = req_inp.get("example")
             if example not in (None, "", [], {}):
                 args[key] = example
+
+        # Only clear routing flag when required fields are now concretely bound.
+        if args.get("needs_inputs") is True:
+            missing_after_bind = []
+            for req_inp in required:
+                if not isinstance(req_inp, dict):
+                    continue
+                key = req_inp.get("name")
+                if not key:
+                    continue
+                if args.get(key) in (None, "", [], {}):
+                    missing_after_bind.append(key)
+            if not missing_after_bind:
+                args["needs_inputs"] = False
 
     return plan
 
@@ -1358,6 +1368,10 @@ def build_standard_response(
                 tool_name_step = step.get("tool_name") or ""
                 lines.append(f"{i}. **{step_id}** (`{tool_name_step}`)")
             steps_md = "\n".join(lines) if lines else "(no steps)"
+            inner_status = str(inner.get("status") or "").lower()
+            execute_ready_flag = bool(inner.get("execute_ready")) if "execute_ready" in inner else True
+            approval_required_flag = bool(inner.get("approval_required")) if "approval_required" in inner else False
+            binding_diag = inner.get("binding_diagnostics")
             if _was_execution_envelope or plan_exec.get("executed"):
                 if plan_exec.get("status") == "needs_inputs":
                     text = (
@@ -1379,12 +1393,56 @@ def build_standard_response(
                     )
                 status = plan_exec.get("status") or "success"
             else:
-                text = (
-                    "## Pipeline Plan\n\n"
-                    "**Steps:**\n\n" + steps_md + "\n\n"
-                    "*All inputs are available. Click **Execute Pipeline** to run these steps.*"
-                )
-                status = "workflow_planned"
+                if inner_status == "needs_inputs" or not execute_ready_flag:
+                    missing_hint = ""
+                    if isinstance(binding_diag, dict):
+                        issues = binding_diag.get("issues")
+                        if isinstance(issues, list) and issues:
+                            first = issues[0] if isinstance(issues[0], dict) else {}
+                            missing = first.get("missing_inputs")
+                            if isinstance(missing, list) and missing:
+                                missing_hint = (
+                                    "\n\n**Missing inputs:** "
+                                    + ", ".join(f"`{str(k)}`" for k in missing if str(k).strip())
+                                )
+                    text = (
+                        "## Pipeline Plan (Needs Inputs)\n\n"
+                        "**Steps:**\n\n" + steps_md + "\n\n"
+                        "Required inputs are still missing before this pipeline can execute."
+                        + missing_hint
+                    )
+                    status = "needs_inputs"
+                else:
+                    if approval_required_flag:
+                        # When binding_diagnostics is present, there are missing file inputs.
+                        # The plan is staged for approval but execution needs those files.
+                        if isinstance(binding_diag, dict) and binding_diag.get("issues"):
+                            _missing_for_text: list = []
+                            for _issue in (binding_diag.get("issues") or []):
+                                if isinstance(_issue, dict):
+                                    _missing_for_text.extend(_issue.get("missing_inputs") or [])
+                            _missing_note = (
+                                "\n\n*Provide `" + "`, `".join(str(m) for m in _missing_for_text if str(m).strip()) + "` then click **I approve** to run.*"
+                                if _missing_for_text
+                                else "\n\n*Approve this plan to proceed.*"
+                            )
+                            text = (
+                                "## Pipeline Plan\n\n"
+                                "**Steps:**\n\n" + steps_md + _missing_note
+                            )
+                        else:
+                            text = (
+                                "## Pipeline Plan\n\n"
+                                "**Steps:**\n\n" + steps_md + "\n\n"
+                                "*All inputs are available. Click **I approve** to execute these reviewed steps.*"
+                            )
+                    else:
+                        text = (
+                            "## Pipeline Plan\n\n"
+                            "**Steps:**\n\n" + steps_md + "\n\n"
+                            "*All inputs are available. Click **Execute Pipeline** to run these steps.*"
+                        )
+                    status = "workflow_planned"
         elif isinstance(inner, dict) and inner.get("type") == "job":
             text = (
                 "## Pipeline Execution Submitted\n\n"
@@ -1461,6 +1519,9 @@ def build_standard_response(
     execute_ready = bool(
         isinstance(truncated_result, dict) and truncated_result.get("execute_ready")
     )
+    approval_required = bool(
+        isinstance(truncated_result, dict) and truncated_result.get("approval_required")
+    )
     # __plan__ with plan_result: frontend expects execute_ready so it shows the Execute Pipeline button
     if tool == "__plan__" and isinstance(truncated_result, dict):
         inner = truncated_result.get("result") or truncated_result
@@ -1470,7 +1531,12 @@ def build_standard_response(
             inner = inner["result"]
         if isinstance(inner, dict) and inner.get("type") == "plan_result" and isinstance(inner.get("steps"), list):
             plan_exec = _analyze_plan_execution(inner.get("steps") or [])
-            execute_ready = False if (_was_execution_envelope or plan_exec.get("executed")) else True
+            if "execute_ready" in inner:
+                execute_ready = bool(inner.get("execute_ready"))
+            else:
+                execute_ready = False if (_was_execution_envelope or plan_exec.get("executed")) else True
+            if "approval_required" in inner:
+                approval_required = bool(inner.get("approval_required"))
 
     # Unwrap ExecutionBroker envelope (type == "execution_result") so that
     # patch_and_rerun / iteration tools' inner fields (run_id, script_path, links …)
@@ -1593,7 +1659,9 @@ def build_standard_response(
         ):
             _existing_links.append({"label": "tree.newick", "url": _newick_url})
 
-    data["links"] = _existing_links
+    # Keep links/downloads strictly for executed outputs only.
+    # Planning / needs-inputs / in-progress states must not expose result artifacts.
+    data["links"] = _existing_links if _allow_download_links else []
     if _allow_download_links:
         data["downloadable_artifacts"] = [
             lnk for lnk in _existing_links
@@ -1601,6 +1669,30 @@ def build_standard_response(
         ]
     else:
         data["downloadable_artifacts"] = []
+
+    # Derive canonical workflow_state — status takes precedence over raw_result field
+    # so that needs_inputs always resolves to WAITING_FOR_INPUTS regardless of what
+    # the inner plan_preview carried.
+    _raw_workflow_state: str = (
+        (isinstance(truncated_result, dict) and truncated_result.get("workflow_state")) or ""
+    )
+    _workflow_state: str = ""
+    # Always re-derive from status first; only fall through to raw_result field if no override needed
+    if not _workflow_state:
+        from backend.workflow_checkpoint import WorkflowState as _WS
+        # Order matters: needs_inputs takes precedence over approval_required
+        if status == "needs_inputs":
+            _workflow_state = _WS.WAITING_FOR_INPUTS.value
+        elif approval_required and status == "workflow_planned":
+            _workflow_state = _WS.WAITING_FOR_APPROVAL.value
+        elif status == "workflow_planned":
+            _workflow_state = _WS.PLANNING.value
+        elif status in {"success", "completed"}:
+            _workflow_state = _WS.COMPLETED.value
+        elif status in {"error", "failed"}:
+            _workflow_state = _WS.FAILED.value
+        else:
+            _workflow_state = _WS.IDLE.value
 
     response = {
         "version": "1.0",
@@ -1611,7 +1703,9 @@ def build_standard_response(
         "prompt": prompt,
         "tool": tool,
         "status": status,
+        "workflow_state": _workflow_state,
         "execute_ready": execute_ready,
+        "approval_required": approval_required,
         "text": text,
         "data": data,
         "visualization_type": visualization_type,  # Hint for frontend on how to render
@@ -2216,13 +2310,35 @@ async def execute(req: CommandRequest, request: Request):
         if hasattr(history_manager, 'sessions') and req.session_id in history_manager.sessions:
             session_context = history_manager.sessions[req.session_id]
 
-        # Approval shortcut: execute a pending workflow plan (if one was prepared earlier).
+        # ── Load workflow checkpoint ──────────────────────────────────────────
+        from backend.workflow_checkpoint import WorkflowCheckpoint, WorkflowState
+        _checkpoint = history_manager.load_checkpoint(req.session_id)
+        logger.info(
+            "[Checkpoint] session=%s state=%s resume_node=%s",
+            req.session_id, _checkpoint.state.value, _checkpoint.resume_node,
+        )
+
+        # ── Route by checkpoint state ─────────────────────────────────────────
+        # Case D: user is approving a pending plan
         if _is_approval_command(req.command):
-            pending_plan = _get_pending_plan(req.session_id)
+            # Prefer checkpoint-stored plan; fall back to legacy pending_plan for backward compat
+            _cp_plan = (
+                _checkpoint.pending_plan
+                if _checkpoint.state == WorkflowState.WAITING_FOR_APPROVAL
+                   and isinstance(_checkpoint.pending_plan, dict)
+                else None
+            )
+            pending_plan = _cp_plan or _get_pending_plan(req.session_id)
             if isinstance(pending_plan, dict) and isinstance(pending_plan.get("plan"), dict):
                 plan = _autobind_plan_inputs(pending_plan["plan"], session_context)
                 binding_check = _validate_plan_bindings(plan)
                 if binding_check:
+                    # Still missing inputs after approval — remain in WAITING_FOR_INPUTS
+                    _new_cp = WorkflowCheckpoint.waiting_for_inputs(
+                        pending_plan=pending_plan,
+                        missing_inputs=list(binding_check.get("missing_inputs", [])),
+                    )
+                    history_manager.save_checkpoint(req.session_id, _new_cp)
                     std = build_standard_response(
                         prompt=req.command,
                         tool="__plan__",
@@ -2230,6 +2346,7 @@ async def execute(req: CommandRequest, request: Request):
                             "status": "needs_inputs",
                             "text": binding_check.get("message"),
                             "binding_diagnostics": binding_check,
+                            "workflow_state": WorkflowState.WAITING_FOR_INPUTS.value,
                         },
                         session_id=req.session_id,
                         mcp_route="/execute",
@@ -2237,6 +2354,11 @@ async def execute(req: CommandRequest, request: Request):
                         execution_path="approval_binding_validation_failed",
                     )
                     return CustomJSONResponse(std)
+
+                # All inputs bound — transition to EXECUTING
+                _exec_cp = WorkflowCheckpoint(state=WorkflowState.EXECUTING)
+                history_manager.save_checkpoint(req.session_id, _exec_cp)
+
                 broker = _get_execution_broker()
                 result = await broker.execute_tool(
                     ExecutionRequest(
@@ -2251,6 +2373,9 @@ async def execute(req: CommandRequest, request: Request):
                 storage_result = _build_pipeline_execution_storage_result(result, req.session_id)
                 if _should_clear_pending_plan_after_execution(storage_result):
                     _clear_pending_plan(req.session_id)
+                    history_manager.save_checkpoint(req.session_id, WorkflowCheckpoint.completed(
+                        run_id=storage_result.get("run_id") if isinstance(storage_result, dict) else None
+                    ))
                 return await _dispatch_result(
                     req, "__plan__", storage_result,
                     tool_args={"plan": plan, "session_id": req.session_id},
@@ -2266,6 +2391,7 @@ async def execute(req: CommandRequest, request: Request):
                         "There is no pending workflow to approve. "
                         "Please ask for a workflow plan first, then approve it."
                     ),
+                    "workflow_state": WorkflowState.IDLE.value,
                 },
                 session_id=req.session_id,
                 mcp_route="/execute",
@@ -2332,7 +2458,18 @@ async def execute(req: CommandRequest, request: Request):
                 from backend.command_router import CommandRouter as _ApprovalRouter
 
                 _approval_router = _ApprovalRouter()
-                _approval_tool, _approval_params = _approval_router.route_command(req.command, session_context)
+                # Route with a timeout so slow LLM routing calls can't hang the endpoint.
+                _gate_timeout_s = int(os.getenv("HELIX_GATE_ROUTE_TIMEOUT_S", "20"))
+                try:
+                    _approval_tool, _approval_params = await asyncio.wait_for(
+                        asyncio.get_running_loop().run_in_executor(
+                            None, lambda: _approval_router.route_command(req.command, session_context)
+                        ),
+                        timeout=_gate_timeout_s,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("Approval gate routing timed out after %ss — skipping gate", _gate_timeout_s)
+                    _approval_tool, _approval_params = "handle_natural_command", {}
                 _ready_hist_recreate = _historical_recreation_ready_for_execution(
                     req.command,
                     _approval_tool,
@@ -2343,13 +2480,32 @@ async def execute(req: CommandRequest, request: Request):
                     _approval_params.setdefault("session_id", req.session_id)
                     pending_plan = _build_single_step_plan(req.command, _approval_tool, _approval_params)
                     _store_pending_plan(req.session_id, req.command, pending_plan)
+                    binding_check = _validate_plan_bindings(pending_plan)
+                    _missing = list(binding_check.get("missing_inputs", [])) if binding_check else []
+                    # Always stage for WAITING_FOR_APPROVAL when intent is clear.
+                    # Missing file bindings don't prevent planning — they just mean execution
+                    # needs those files when the plan is eventually approved and run.
+                    history_manager.save_checkpoint(
+                        req.session_id,
+                        WorkflowCheckpoint.waiting_for_approval(
+                            pending_plan={"plan": pending_plan, "command": req.command},
+                        ),
+                    )
+                    _workflow_state_for_preview = WorkflowState.WAITING_FOR_APPROVAL.value
+                    # Status is always workflow_planned so the scorer (and UI) treat this as
+                    # a plan awaiting approval, regardless of whether file inputs are bound.
+                    preview_status = "workflow_planned"
                     plan_preview = {
-                        "status": "success",
+                        "status": preview_status,
                         "type": "plan_result",
                         "plan_version": pending_plan.get("version", "v1"),
                         "steps": pending_plan.get("steps", []),
                         "execute_ready": True,
+                        "approval_required": True,
+                        "workflow_state": _workflow_state_for_preview,
                     }
+                    if binding_check:
+                        plan_preview["binding_diagnostics"] = binding_check
                     return await _dispatch_result(
                         req,
                         "__plan__",
@@ -2532,7 +2688,11 @@ async def execute(req: CommandRequest, request: Request):
             # return a safe response instead of routing into CommandRouter/tool-gen.
             # Classify intent here (only when needed in fallback path) to avoid redundant classification
             from backend.intent_classifier import classify_intent
-            intent = classify_intent(req.command)
+            intent = classify_intent(
+                req.command,
+                session_context=session_context,
+                workflow_state=_checkpoint.state.value,
+            )
             if intent.intent != "execute":
                 # Allowlist: deterministic read-only tools that answer questions from
                 # local session state (no tool generation, no cloud side effects).
@@ -2591,6 +2751,7 @@ async def execute(req: CommandRequest, request: Request):
                     "plan_version": plan.get("version", "v1") if isinstance(plan, dict) else "v1",
                     "steps": (plan.get("steps") if isinstance(plan, dict) else []) or [],
                     "execute_ready": True,
+                    "approval_required": True,
                 }
                 return await _dispatch_result(
                     req, "__plan__", plan_preview,
@@ -4608,11 +4769,6 @@ async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
 
         # Build a rich markdown summary
         summary = result.get("summary", [])
-        mode = result.get("mode", "real")
-        mode_note = (
-            "\n\n> ⚠️ *Synthetic demo data used — real S3 data unavailable.*"
-            if mode == "synthetic" else ""
-        )
         header = (
             f"## Bulk RNA-seq Analysis Complete\n\n"
             f"**Design formula:** `{design_formula}`  \n"
@@ -4630,7 +4786,7 @@ async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
             )
         top = result.get("top_genes", "")
         top_md = f"\n### Top Differentially Expressed Genes{top}\n" if top else ""
-        text = header + rows_md + top_md + mode_note
+        text = header + rows_md + top_md
 
         # Build visuals from base64 plots returned by bulk_rnaseq module
         plots = result.get("plots", {})

@@ -770,11 +770,39 @@ class CommandProcessor:
         else:
             wf_type = "Multi-Step Bioinformatics Pipeline"
 
-        # Tailor the ready-to-run message based on whether data is self-sourced
+        # Tailor readiness based on whether concrete inputs are present.
+        has_s3_data = bool(re.search(r"s3://", command, re.IGNORECASE))
+        has_structured_inputs = bool(
+            re.search(
+                r"\b(data_file|count_matrix|sample_metadata|design_formula|forward_reads|reverse_reads)\s*:\s*\S+",
+                command,
+                re.IGNORECASE,
+            )
+        )
+        has_local_or_remote_file_hint = bool(
+            re.search(r"\b\S+\.(csv|tsv|h5|h5ad|fastq|fastq\.gz|fasta|fa)\b", command, re.IGNORECASE)
+        )
+        has_concrete_inputs = has_s3_data or has_structured_inputs or has_local_or_remote_file_hint
+        has_bulk_or_scrna = any(k in cmd_lower for k in ["rnaseq", "rna-seq", "transcriptome", "single-cell", "single cell", "scrna"])
         if has_public_fetch:
             ready_msg = "*Sequences will be fetched from public databases. Click **Execute Pipeline** to start.*"
-        else:
+            preview_status = "workflow_planned"
+            execute_ready = True
+        elif has_bulk_or_scrna and not has_concrete_inputs:
+            ready_msg = (
+                "*Required inputs are still missing for execution. Provide concrete file paths "
+                "(for example `count_matrix`, `sample_metadata`, `data_file`) or use demo example data.*"
+            )
+            preview_status = "needs_inputs"
+            execute_ready = False
+        elif has_concrete_inputs:
             ready_msg = "*All inputs are available. Click **Execute Pipeline** to run these steps.*"
+            preview_status = "workflow_planned"
+            execute_ready = True
+        else:
+            ready_msg = "*Workflow planned. Provide required inputs or execute when ready.*"
+            preview_status = "workflow_planned"
+            execute_ready = False
 
         lines = [f"## Pipeline Plan\n", f"**Workflow type:** {wf_type}\n",
                  f"**Steps ({len(steps)} total):**\n"]
@@ -787,9 +815,9 @@ class CommandProcessor:
         plan_md = "\n".join(lines)
 
         return {
-            "status": "workflow_planned",
+            "status": preview_status,
             "success": True,
-            "execute_ready": True,
+            "execute_ready": execute_ready,
             "workflow_type": wf_type,
             "text": plan_md,
             "message": plan_md,
@@ -852,8 +880,17 @@ class CommandProcessor:
                 re.IGNORECASE,
             )
         )
+        workflow_design_intent = bool(
+            re.search(
+                r"\b(design (?:the )?workflow|propose (?:the )?workflow|plan first|before execution|before running|"
+                r"do not run yet|don't run yet|without running|deliverable format|expected calculations|"
+                r"output artifacts|recommended plots|qc checkpoints)\b",
+                command,
+                re.IGNORECASE,
+            )
+        )
 
-        if has_scrna_markers and not has_concrete_inputs:
+        if has_scrna_markers and not has_concrete_inputs and not workflow_design_intent:
             text = (
                 "I can run this single-cell workflow once inputs are provided.\n\n"
                 "Please provide:\n"
@@ -870,7 +907,7 @@ class CommandProcessor:
                 "data": {"required_inputs": ["data_file", "data_format"]},
             }
 
-        if has_bulk_markers and not has_concrete_inputs:
+        if has_bulk_markers and not has_concrete_inputs and not workflow_design_intent:
             text = (
                 "I can run this bulk RNA-seq workflow once inputs are provided.\n\n"
                 "Please provide:\n"
@@ -911,6 +948,79 @@ class CommandProcessor:
         if inline_plan:
             print("[CommandProcessor] ✅ Extracted inline pipeline plan from numbered steps.")
             return inline_plan
+
+        # Deterministic planning override for bulk RNA-seq workflow-design intent.
+        # This prevents generic/simple_operation plans (e.g. FastQC-only) when the
+        # user explicitly asks Helix to design a publication-ready workflow first.
+        if workflow_design_intent and has_bulk_markers and not has_concrete_inputs:
+            workflow_type = "bulk_rnaseq_workflow_design"
+            design_steps = [
+                {
+                    "step": 1,
+                    "name": "Define design matrix and contrasts",
+                    "tool": "bulk_rnaseq_analysis",
+                    "description": "Specify factors, contrasts, and statistical assumptions for time-course modeling.",
+                },
+                {
+                    "step": 2,
+                    "name": "Input-level QC and filtering strategy",
+                    "tool": "bulk_rnaseq_analysis",
+                    "description": "Plan sample/library QC thresholds, low-count filtering, and outlier detection rules.",
+                },
+                {
+                    "step": 3,
+                    "name": "Normalization and variance modeling",
+                    "tool": "bulk_rnaseq_analysis",
+                    "description": "Select normalization, dispersion estimation, and model formulation (including LRT where applicable).",
+                },
+                {
+                    "step": 4,
+                    "name": "Differential expression and temporal signatures",
+                    "tool": "bulk_rnaseq_analysis",
+                    "description": "Define tests to identify early-response, late-recovery, and persistent dysregulation programs.",
+                },
+                {
+                    "step": 5,
+                    "name": "Functional interpretation",
+                    "tool": "go_enrichment_analysis",
+                    "description": "Plan enrichment analyses for temporally regulated gene clusters and key contrasts.",
+                },
+                {
+                    "step": 6,
+                    "name": "Deliverables and reporting",
+                    "tool": "handle_natural_command",
+                    "description": "Specify required output tables/plots and reproducibility artifacts for publication-ready reporting.",
+                },
+            ]
+            steps_md = "\n".join(
+                f"{s['step']}. **{s['name']}** (`{s['tool']}`) — {s['description']}" for s in design_steps
+            )
+            plan_summary = (
+                "## Pipeline Plan\n\n"
+                f"**Workflow type:** {workflow_type}\n\n"
+                f"**Steps ({len(design_steps)} total):**\n\n"
+                f"{steps_md}\n\n"
+                "*Design-first mode: this is a proposed workflow specification. "
+                "Provide concrete inputs (`count_matrix`, `sample_metadata`, `design_formula`) "
+                "when you want Helix to execute it.*"
+            )
+            return {
+                "status": "workflow_planned",
+                "success": True,
+                "execute_ready": False,
+                "workflow_type": workflow_type,
+                "text": plan_summary,
+                "message": plan_summary,
+                "data": {
+                    "workflow_plan": {
+                        "type": workflow_type,
+                        "steps": design_steps,
+                    },
+                    "sequences": [],
+                    "visuals": [],
+                    "planning_intent": "workflow_design",
+                },
+            }
         
         try:
             # Import workflow modules

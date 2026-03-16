@@ -22,12 +22,29 @@ def _run_once(api_base: str, benchmark_yaml: Path) -> Dict[str, Any]:
     rows: List[Dict[str, Any]] = []
     for t in turns:
         prompt = t.get("user", "")
-        r = requests.post(
-            f"{api_base}/execute",
-            json={"command": prompt, "session_id": sid},
-            timeout=180,
-        )
-        data = r.json()
+        try:
+            r = requests.post(
+                f"{api_base}/execute",
+                json={"command": prompt, "session_id": sid},
+                timeout=180,
+            )
+            data = r.json()
+        except requests.exceptions.Timeout:
+            data = {
+                "tool": "timeout",
+                "status": "timeout",
+                "execute_ready": False,
+                "text": "Request timed out after 180s.",
+                "error": "ReadTimeout",
+            }
+        except Exception as exc:  # noqa: BLE001
+            data = {
+                "tool": "error",
+                "status": "error",
+                "execute_ready": False,
+                "text": f"Benchmark runner error: {exc}",
+                "error": str(exc),
+            }
         rows.append(
             {
                 "turn_id": t.get("id"),
@@ -44,7 +61,10 @@ def _run_once(api_base: str, benchmark_yaml: Path) -> Dict[str, Any]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run benchmark improvement loop.")
-    parser.add_argument("--api-base", default="http://localhost:8001")
+    parser.add_argument(
+        "--api-base",
+        default="http://localhost:8000",  # default matches the standard dev-server port
+    )
     parser.add_argument("--benchmark-yaml", default="tests/bioinformatics_benchmark.yaml")
     parser.add_argument("--out-dir", default="benchmarks/runs")
     parser.add_argument("--max-iters", type=int, default=3)

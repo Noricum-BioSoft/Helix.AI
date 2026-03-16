@@ -1,0 +1,22 @@
+{
+  "generated_at_utc": "2026-03-16T18:37:40.684077+00:00",
+  "source_file": "benchmarks/runs/iteration_1_scored.json",
+  "overall_percentage": 90.0,
+  "raw_score": 36,
+  "max_score": 40,
+  "threshold_pct": 80.0,
+  "threshold_met": true,
+  "critical_failures": 0,
+  "description": "Passing baseline after iteration-2 remediation (90%). Used as regression floor.",
+  "must_not_regress_below_pct": 88.0,
+  "per_turn_must_pass": {
+    "turn_02": 2,
+    "turn_08": 2,
+    "turn_09": 2,
+    "turn_10": 2,
+    "turn_14": 2,
+    "turn_16": 2,
+    "turn_17": 2,
+    "turn_19": 2
+  }
+}

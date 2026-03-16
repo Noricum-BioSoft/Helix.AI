@@ -1,10 +1,10 @@
 # Iteration Report (iteration_1_report)
 
-- Generated: 2026-03-15T20:40:32.200778+00:00
-- Session: 5f55cea0-5f64-40ec-9a51-980068cd31fd
+- Generated: 2026-03-16T15:45:13.622737+00:00
+- Session: c2fb53c4-63a2-4163-a565-744bfac61532
 - Scenario: bulk-rnaseq-e2e
-- Raw Score: 35 / 40
-- Overall Percentage: 87.5%
+- Raw Score: 36 / 40
+- Overall Percentage: 90.0%
 - Threshold Met: Yes
 - Critical failures: 0
 - Stop reason: threshold_met_and_no_critical_failures

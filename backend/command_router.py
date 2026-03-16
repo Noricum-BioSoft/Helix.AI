@@ -128,6 +128,45 @@ class CommandRouter:
         scrubbed = re.sub(r"\s+", " ", scrubbed).strip()
         return scrubbed
 
+    @staticmethod
+    def _is_workflow_design_intent(command_lower: str) -> bool:
+        """
+        Detect requests asking Helix to design/propose a workflow (planning mode),
+        distinct from direct execute/run intent.
+        """
+        text = command_lower or ""
+        planning_markers = (
+            "design the workflow",
+            "design a workflow",
+            "propose a workflow",
+            "propose the workflow",
+            "workflow before execution",
+            "before execution",
+            "before running",
+            "before run",
+            "do not run yet",
+            "don't run yet",
+            "without running",
+            "plan first",
+            "analysis plan",
+            "deliverable format",
+        )
+        deliverable_markers = (
+            "what should be calculated",
+            "expected calculations",
+            "which outputs",
+            "output artifacts",
+            "recommended plots",
+            "plots/figures",
+            "tables and plots",
+            "checkpoints",
+            "failure modes",
+            "rationale",
+        )
+        has_planning = any(p in text for p in planning_markers)
+        has_deliverables = any(p in text for p in deliverable_markers)
+        return has_planning and (has_deliverables or "workflow" in text)
+
     def _route_with_llm(
         self, command: str, session_context: Dict[str, Any]
     ) -> Optional[Tuple[str, Dict[str, Any]]]:
@@ -198,6 +237,16 @@ class CommandRouter:
         Returns (tool_name, parameters)
         """
         command_lower = self._scrub_for_keyword_matching(command)
+
+        # Planning-intent override: route workflow-design requests to the general
+        # planner path before domain/tool-specific execution routing.
+        if self._is_workflow_design_intent(command_lower):
+            print("🔧 Command router: Matched 'workflow design intent' -> handle_natural_command")
+            return "handle_natural_command", {
+                "command": command,
+                "session_id": session_context.get("session_id", ""),
+                "planning_intent": "workflow_design",
+            }
 
         if os.getenv("HELIX_LLM_ROUTER_FIRST", "0").lower() in ("1", "true", "yes"):
             llm_result = self._route_with_llm(command, session_context)
@@ -338,6 +387,20 @@ class CommandRouter:
                 params["run_id_b"] = "prior"
             print(f"🔧 Command router: Matched bio diff -> bio_diff_runs ({params})")
             return "bio_diff_runs", params
+
+        # "Use X from before Y" / "use cleaned/filtered/original dataset" → handle_natural_command
+        # These are artifact-switch requests that should reach the agent directly without
+        # approval staging. Routing to handle_natural_command bypasses the approval gate
+        # (see approval_policy: handle_natural_command without approval semantics → no staging).
+        _use_historical = (
+            re.search(r"\buse\b", command_lower)
+            and any(p in command_lower for p in ["before", "prior", "original", "first run", "earlier"])
+            and any(p in command_lower for p in ["dataset", "data", "version", "artifact", "result"])
+        )
+        if _use_historical:
+            params = {"command": command}
+            print(f"🔧 Command router: Matched use-historical → handle_natural_command ({params})")
+            return "handle_natural_command", params
 
         # Historical figure/state recreation requests should execute a historical
         # comparison path directly instead of being staged as generic plans.
