@@ -475,6 +475,9 @@ docs/*SUMMARY*.md
 docs/*COMPLETE*.md
 docs/**/[A-Z0-9_]*.md
 docs/**/[A-Z0-9_]*.json
+# Re-include canonical architecture reference docs (not generated)
+!docs/architecture/[A-Z0-9_]*.md
+!docs/[A-Z]*.md
 
 tests/*PROOF*.md
 tests/*SUMMARY*.md
