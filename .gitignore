@@ -475,6 +475,8 @@ docs/*SUMMARY*.md
 docs/*COMPLETE*.md
 docs/**/[A-Z0-9_]*.md
 docs/**/[A-Z0-9_]*.json
+# All JSON files in docs/ are illustrative traces/examples, not source
+docs/**/*.json
 # Re-include canonical architecture reference docs (not generated)
 !docs/architecture/[A-Z0-9_]*.md
 !docs/[A-Z]*.md
@@ -488,6 +490,15 @@ tests/workflows/*.md
 
 # Local scratch scripts
 test_complete_workflow.py
+
+# Benchmark run artifacts (only baseline.json is tracked source)
+benchmarks/runs/iteration_*.json
+benchmarks/runs/iteration_*.md
+benchmarks/runs/loop_summary.json
+benchmarks/runs/latest_iteration.json
+
+# AWS test run capture directories
+tests/integration/helix-aws-strict-rerun-*/
 
 # Large/auto-generated documentation assets (local)
 docs/tds-screenshots/
