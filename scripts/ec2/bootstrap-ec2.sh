@@ -36,10 +36,29 @@ install_packages() {
       echo "Install Node.js 18+ manually if npm is missing: https://github.com/nodesource/distributions" >&2
     }
   elif [[ -f /etc/os-release ]] && grep -q 'Amazon Linux 2' /etc/os-release && command -v yum >/dev/null 2>&1; then
-    # Amazon Linux 2 (yum; common on EC2) — Node via NodeSource
-    yum install -y python3 python3-pip nginx git curl gcc python3-devel
-    curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
-    yum install -y nodejs
+    # Amazon Linux 2: glibc 2.26 — NodeSource Node 18+ RPMs need glibc 2.28+.
+    # Install nginx from Extras; build Node 18 LTS from source into /usr/local.
+    yum install -y python3 python3-pip git curl gcc gcc-c++ make python3-devel xz
+    if ! command -v nginx >/dev/null 2>&1; then
+      amazon-linux-extras install nginx1 -y
+    fi
+    if ! command -v node >/dev/null 2>&1 || ! node -v 2>/dev/null | grep -qE '^v1[89]\.'; then
+      NODE_VER="${HELIX_NODE_AL2_VER:-18.20.5}"
+      echo "[bootstrap] Amazon Linux 2: building Node ${NODE_VER} from source (10–30+ min on small instances)..."
+      cd /tmp
+      rm -rf "node-v${NODE_VER}"
+      curl -fsSL "https://nodejs.org/dist/v${NODE_VER}/node-v${NODE_VER}.tar.xz" -o "node-v${NODE_VER}.tar.xz"
+      tar -xJf "node-v${NODE_VER}.tar.xz"
+      cd "node-v${NODE_VER}"
+      ./configure --prefix=/usr/local
+      make -j"$(nproc 2>/dev/null || echo 2)"
+      make install
+      hash -r
+      /usr/local/bin/node -v
+      for x in node npm npx corepack; do
+        [[ -x /usr/local/bin/$x ]] && ln -sf "/usr/local/bin/$x" "/usr/bin/$x"
+      done
+    fi
   elif command -v apt-get >/dev/null 2>&1; then
     apt-get update -y
     apt-get install -y python3.11 python3.11-venv python3-pip nginx git curl
