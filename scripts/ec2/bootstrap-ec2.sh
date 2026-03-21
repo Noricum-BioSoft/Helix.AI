@@ -45,7 +45,7 @@ install_packages() {
     fi
     if ! command -v node >/dev/null 2>&1 || ! node -v 2>/dev/null | grep -qE '^v1[89]\.'; then
       NODE_VER="${HELIX_NODE_AL2_VER:-18.20.5}"
-      echo "[bootstrap] Amazon Linux 2: building Node ${NODE_VER} from source (10–30+ min on small instances)..."
+      echo "[bootstrap] Amazon Linux 2: building Node ${NODE_VER} from source (often 1–3+ hours on small EC2; use SSM --timeout-seconds 28800 or higher)."
       cd /tmp
       rm -rf "node-v${NODE_VER}"
       curl -fsSL "https://nodejs.org/dist/v${NODE_VER}/node-v${NODE_VER}.tar.xz" -o "node-v${NODE_VER}.tar.xz"
