@@ -38,7 +38,8 @@ install_packages() {
   elif [[ -f /etc/os-release ]] && grep -q 'Amazon Linux 2' /etc/os-release && command -v yum >/dev/null 2>&1; then
     # Amazon Linux 2: glibc 2.26 — NodeSource Node 18+ RPMs need glibc 2.28+.
     # Install nginx from Extras; build Node 18 LTS from source into /usr/local.
-    yum install -y python3 python3-pip git curl gcc gcc-c++ make python3-devel xz
+    # gcc10: Node 18+ sources need C++17 (charconv); AL2 default gcc 7 is too old.
+    yum install -y python3 python3-pip git curl gcc gcc-c++ make python3-devel xz gcc10 gcc10-c++
     if ! command -v nginx >/dev/null 2>&1; then
       amazon-linux-extras install nginx1 -y
     fi
@@ -50,6 +51,8 @@ install_packages() {
       curl -fsSL "https://nodejs.org/dist/v${NODE_VER}/node-v${NODE_VER}.tar.xz" -o "node-v${NODE_VER}.tar.xz"
       tar -xJf "node-v${NODE_VER}.tar.xz"
       cd "node-v${NODE_VER}"
+      export CC=/usr/bin/gcc10-gcc
+      export CXX=/usr/bin/gcc10-g++
       ./configure --prefix=/usr/local
       make -j"$(nproc 2>/dev/null || echo 2)"
       make install
