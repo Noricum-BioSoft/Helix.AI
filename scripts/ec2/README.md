@@ -2,6 +2,24 @@
 
 Run **[docs/deployment/EC2_GIT_BETA.md](../../docs/deployment/EC2_GIT_BETA.md)** on the server — we cannot run AWS/SSH steps from this repo.
 
+## Deploy from S3 via SSM (no git clone on the instance)
+
+1. Create a clean tarball (avoid `git archive ... | gzip` in one pipe on some hosts — use `git archive` then `gzip` the `.tar` file), upload to `s3://…/bootstrap/helix-ai-source.tar.gz` and `ssm-deploy-from-s3.sh`.
+2. **Amazon Linux 2:** Node 18 must be **built from source** (official linux-x64 binaries need glibc 2.28+; AL2 has 2.26). Builds can exceed **1 hour**.
+3. **`AWS-RunShellScript` uses `executionTimeout` (default 3600 s).** You must pass it in **parameters**, not only `--timeout-seconds` on `send-command`, or the shell step stops after 1 hour.
+
+```bash
+aws ssm send-command \
+  --region us-west-1 \
+  --instance-ids i-xxxxxxxx \
+  --document-name AWS-RunShellScript \
+  --timeout-seconds 28800 \
+  --parameters '{
+    "commands":["aws s3 cp s3://YOUR_BUCKET/bootstrap/ssm-deploy-from-s3.sh /tmp/ssm-deploy.sh && chmod +x /tmp/ssm-deploy.sh && bash /tmp/ssm-deploy.sh YOUR_BUCKET bootstrap/helix-ai-source.tar.gz"],
+    "executionTimeout":["28800"]
+  }'
+```
+
 ## Files
 
 | File | Purpose |
