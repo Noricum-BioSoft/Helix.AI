@@ -480,6 +480,8 @@ docs/**/*.json
 # Re-include canonical architecture reference docs (not generated)
 !docs/architecture/[A-Z0-9_]*.md
 !docs/[A-Z]*.md
+# Deployment guides (EC2_GIT_BETA.md etc.) — UPPER_SNAKE names match the ignore above
+!docs/deployment/*.md
 
 tests/*PROOF*.md
 tests/*SUMMARY*.md

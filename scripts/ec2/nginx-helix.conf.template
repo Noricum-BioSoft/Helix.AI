@@ -1,0 +1,41 @@
+# Nginx: static frontend + proxy API to backend (same-origin for the SPA).
+# Install: sudo cp (generated) /etc/nginx/conf.d/helix.conf && sudo nginx -t && sudo systemctl reload nginx
+#
+# Replace __HELIX_ROOT__ with your repo path (bootstrap script does this).
+# For HTTPS, use certbot: sudo certbot --nginx -d your.domain
+
+server {
+    listen 80;
+    server_name _;
+
+    root __HELIX_ROOT__/frontend/dist;
+    index index.html;
+
+    client_max_body_size 25m;
+
+    # Long-running agent / execute calls
+    proxy_read_timeout 600s;
+    proxy_send_timeout 600s;
+
+    location ~ ^/(health|execute|agent|create_session|docs|openapi\.json|redoc|download) {
+        proxy_pass http://127.0.0.1:8001;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location ~ ^/(mcp|session|jobs)/ {
+        proxy_pass http://127.0.0.1:8001;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
