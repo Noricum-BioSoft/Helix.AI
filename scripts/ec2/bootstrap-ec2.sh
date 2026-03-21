@@ -35,6 +35,11 @@ install_packages() {
       dnf install -y python3 python3-pip nginx git
       echo "Install Node.js 18+ manually if npm is missing: https://github.com/nodesource/distributions" >&2
     }
+  elif [[ -f /etc/os-release ]] && grep -q 'Amazon Linux 2' /etc/os-release && command -v yum >/dev/null 2>&1; then
+    # Amazon Linux 2 (yum; common on EC2) — Node via NodeSource
+    yum install -y python3 python3-pip nginx git curl gcc python3-devel
+    curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
+    yum install -y nodejs
   elif command -v apt-get >/dev/null 2>&1; then
     apt-get update -y
     apt-get install -y python3.11 python3.11-venv python3-pip nginx git curl
