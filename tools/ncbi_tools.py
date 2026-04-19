@@ -8,11 +8,24 @@ This module provides functions to interact with NCBI databases including:
 """
 
 import os
-from Bio import Entrez, SeqIO
 from typing import Dict, Any
 
-# NCBI requires an email. Allow overriding via env var.
-Entrez.email = os.getenv("HELIX_NCBI_EMAIL", "helix.ai@example.com")
+# BioPython is an optional runtime dependency.  Import it lazily inside each
+# function so that importing this module never raises ImportError in
+# environments where Biopython is not installed (e.g. CI runners that only
+# run unit/benchmark tests).  In mock mode the functions return synthetic data
+# before reaching any Bio call, so Biopython is never needed there either.
+def _bio():
+    """Lazy accessor for (Entrez, SeqIO) — raises ImportError with a clear message."""
+    try:
+        from Bio import Entrez as _Entrez, SeqIO as _SeqIO  # noqa: PLC0415
+        _Entrez.email = os.getenv("HELIX_NCBI_EMAIL", "helix.ai@example.com")
+        return _Entrez, _SeqIO
+    except ImportError as exc:
+        raise ImportError(
+            "BioPython is required for NCBI access but is not installed. "
+            "Install it with: pip install biopython"
+        ) from exc
 
 
 def fetch_sequence_from_ncbi(
@@ -55,6 +68,7 @@ def fetch_sequence_from_ncbi(
         }
     
     try:
+        Entrez, SeqIO = _bio()
         # Fetch sequence
         handle = Entrez.efetch(
             db=database,
@@ -133,6 +147,7 @@ def search_ncbi(
         }
     
     try:
+        Entrez, _ = _bio()
         # Search
         search_handle = Entrez.esearch(
             db=database,

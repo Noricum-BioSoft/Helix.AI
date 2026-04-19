@@ -44,8 +44,19 @@ if _tools_mod is not None:
         sys.modules.pop("tools.ncbi_tools", None)
 
 # Eager import makes `patch("tools.ncbi_tools....")` deterministic across suite order.
+# Guard with try/except: optional heavy deps (biopython, pysam…) may be absent
+# in lightweight CI environments that only run unit/benchmark tests.
 importlib.import_module("tools")
-importlib.import_module("tools.ncbi_tools")
+try:
+    importlib.import_module("tools.ncbi_tools")
+except ImportError as _e:
+    import warnings
+    warnings.warn(
+        f"tools.ncbi_tools could not be imported ({_e}). "
+        "Tests that patch this module will be skipped or may fail.",
+        ImportWarning,
+        stacklevel=1,
+    )
 
 @pytest.fixture(autouse=True)
 def _ensure_default_event_loop():
