@@ -132,14 +132,12 @@ export const helixApi = {
   uploadSessionFiles: async (sessionId: string, files: File[]) => {
     const formData = new FormData();
     files.forEach((file) => formData.append('files', file));
+    // Do NOT set Content-Type manually. When posting FormData the browser must
+    // generate the multipart boundary itself; an explicit header without the
+    // boundary causes a 400 "Missing boundary in multipart." error.
     const response = await axios.post(
       `${API_BASE_URL}/session/${sessionId}/uploads`,
       formData,
-      {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-      },
     );
     return response.data as {
       success: boolean;

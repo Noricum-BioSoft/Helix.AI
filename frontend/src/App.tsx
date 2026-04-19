@@ -370,7 +370,10 @@ function App() {
         );
         return [...withoutPending, ...uploaded];
       });
-    } catch (error) {
+    } catch (error: unknown) {
+      const detail =
+        (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+        ?? (error instanceof Error ? error.message : String(error));
       console.error('Upload failed:', error);
       setUploadedFiles((prev) => {
         const withoutPending = prev.filter(
@@ -380,7 +383,7 @@ function App() {
           name: file.name,
           size: file.size,
           status: 'failed' as const,
-          error: 'Upload failed',
+          error: `Upload failed: ${detail}`,
         }));
         return [...withoutPending, ...failed];
       });
