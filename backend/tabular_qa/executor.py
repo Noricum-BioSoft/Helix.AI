@@ -115,22 +115,28 @@ def execute_code(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
+    captured_output: list[str] = []
+
+    # Redirect print() inside sandbox.
+    # Must be defined before the namespace so the closure captures the local list.
+    def _safe_print(*args: Any, **kwargs: Any) -> None:
+        sep = kwargs.get("sep", " ")
+        captured_output.append(sep.join(str(a) for a in args))
+
+    # Make a fresh copy of the safe-builtins dict for every call.
+    # We must NOT mutate the module-level _SAFE_BUILTINS singleton: that would
+    # permanently replace the real `print` with a closure over a previous
+    # call's captured_output list, losing output on subsequent calls and
+    # creating a race condition under concurrent execution.
+    call_builtins = {**_SAFE_BUILTINS, "print": _safe_print}
+
     namespace: Dict[str, Any] = {
-        "__builtins__": _SAFE_BUILTINS,
+        "__builtins__": call_builtins,
         "df": df.copy(),
         "pd": pd,
         "np": np,
         "plt": plt,
     }
-
-    captured_output: list[str] = []
-
-    # Redirect print() inside sandbox
-    def _safe_print(*args: Any, **kwargs: Any) -> None:
-        sep = kwargs.get("sep", " ")
-        captured_output.append(sep.join(str(a) for a in args))
-
-    namespace["__builtins__"]["print"] = _safe_print  # type: ignore[index]
 
     result_holder: Dict[str, Any] = {}
     exc_holder: list[Exception] = []

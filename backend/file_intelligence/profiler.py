@@ -56,11 +56,14 @@ SUPPORTED_EXTENSIONS: Dict[str, str] = {
 }
 
 
-def _resolve_gz_path(path: Path) -> Path:
-    """For .gz files, return the path with the inner extension for dispatch."""
+def _resolve_gz_inner_suffix(path: Path) -> str:
+    """Return the inner extension of a .gz file (e.g. '.fastq' for 'reads.fastq.gz')."""
     stem = path.stem  # e.g. 'reads.fastq' from 'reads.fastq.gz'
-    inner = Path(stem).suffix.lower()  # '.fastq'
-    return path if not inner else path.with_suffix(inner)
+    return Path(stem).suffix.lower()  # '.fastq'
+
+
+# Families whose profilers natively read gzip-compressed files.
+_GZ_NATIVE_FAMILIES = {"sequence"}
 
 
 def profile_file(path: str | Path, *, sheet: Optional[str] = None) -> Dict[str, Any]:
@@ -83,8 +86,33 @@ def profile_file(path: str | Path, *, sheet: Optional[str] = None) -> Dict[str, 
     path = Path(path)
     suffix = path.suffix.lower()
 
-    dispatch_path = _resolve_gz_path(path) if suffix == ".gz" else path
-    dispatch_suffix = dispatch_path.suffix.lower()
+    # For .gz files, use the inner extension only for family dispatch.
+    # The original compressed path is passed to profilers that handle .gz
+    # natively (sequence).  For all other families, .gz is not yet supported
+    # because their underlying parsers (pandas, pysam, h5py…) require the
+    # decompressed file; we return a clear error rather than silently failing.
+    if suffix == ".gz":
+        inner_suffix = _resolve_gz_inner_suffix(path)
+        family = SUPPORTED_EXTENSIONS.get(inner_suffix, "unknown")
+        if family not in _GZ_NATIVE_FAMILIES:
+            return {
+                "format": f"{inner_suffix.lstrip('.')}.gz",
+                "family": family if family != "unknown" else "unknown",
+                "n_records": None,
+                "summary": {},
+                "schema": {},
+                "sample": [],
+                "available_sheets": None,
+                "raw_metadata": {},
+                "profiler_error": (
+                    f"gzip-compressed {inner_suffix.lstrip('.')} files are not yet "
+                    "supported for upload-time profiling. Please decompress the file "
+                    "before uploading."
+                ),
+            }
+        dispatch_suffix = inner_suffix
+    else:
+        dispatch_suffix = suffix
     family = SUPPORTED_EXTENSIONS.get(dispatch_suffix, "unknown")
 
     if family == "tabular":

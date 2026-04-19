@@ -243,8 +243,9 @@ def run_tabular_qa(
     last_error: Optional[str] = None
     last_exec: Optional[Dict[str, Any]] = None
     code = ""
+    attempt = 0  # guard: keeps attempt defined if the loop range is ever empty
 
-    for attempt in range(1, MAX_RETRIES + 2):  # +2 so we get MAX_RETRIES retries
+    for attempt in range(1, MAX_RETRIES + 2):  # 1 initial try + MAX_RETRIES retries
         prompt = _build_code_prompt(question, profile, error_context=last_error)
         try:
             raw = _llm_invoke(llm, prompt)

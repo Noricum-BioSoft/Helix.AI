@@ -1939,11 +1939,19 @@ class CommandRouter:
     # ── Tabular QA routing (conversational Code Interpreter) ─────────────────
 
     _TABULAR_QA_QUESTION_PREFIXES = (
-        "what", "which", "how many", "how much", "show me", "list", "find",
-        "give me", "tell me", "describe", "summarize", "summarise", "compare",
-        "is there", "are there", "does", "do ", "count", "plot", "visualize",
-        "visualise", "distribution", "histogram", "scatter", "correlation",
-        "explain", "why", "what's", "whats", "what is", "what are",
+        # Unambiguous question/command openers — safe to match only at the START
+        # of the command.  We intentionally exclude very short or common words
+        # (e.g. "do", "find", "list", "count") to prevent mid-sentence keyword
+        # collisions that hijack unrelated routes (e.g. vendor research, NCBI
+        # fetch) when a tabular file happens to be in the session.
+        "what ", "what's ", "whats ", "what is ", "what are ",
+        "which ", "how many ", "how much ",
+        "show me ", "give me ", "tell me ",
+        "describe ", "summarize ", "summarise ",
+        "compare ", "is there ", "are there ",
+        "does ", "plot ", "visualize ", "visualise ",
+        "distribution of ", "histogram of ", "scatter ",
+        "correlation ", "explain ", "why ",
     )
 
     def _is_tabular_qa_command(
@@ -1953,11 +1961,15 @@ class CommandRouter:
         True when the command is an open-ended question about an uploaded tabular
         file.  Requires a tabular file to be present in the session — without one
         there is nothing to query against.
+
+        Matching strategy: only startswith() — never substring — to prevent
+        short prefixes like "do" or "find" from hijacking commands that merely
+        contain those words mid-sentence (e.g. "vendor" contains "do",
+        "window" contains "do", "playlist" contains "list").
         """
         if not self._has_tabular_file_in_session(session_context):
             return False
-        return any(command_lower.startswith(p) or f" {p}" in command_lower
-                   for p in self._TABULAR_QA_QUESTION_PREFIXES)
+        return any(command_lower.startswith(p) for p in self._TABULAR_QA_QUESTION_PREFIXES)
 
     def _extract_tabular_qa_params(
         self, command: str, session_context: dict
