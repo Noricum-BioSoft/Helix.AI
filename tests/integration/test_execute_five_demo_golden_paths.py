@@ -19,14 +19,14 @@ def _isolate(tmp_path, monkeypatch):
     history_manager.sessions = {}
     history_manager._sessions_loaded = True
 
-    import backend.main_with_mcp as _mwm
+    import backend.main as _mwm
 
     _mwm._daily_prompt_counters.clear()
 
 
 @pytest.fixture()
 def client() -> TestClient:
-    from backend.main_with_mcp import app
+    from backend.main import app
 
     return TestClient(app)
 
@@ -125,7 +125,7 @@ def fake_execute_backend(monkeypatch):
 
         return {"status": "success", "text": f"mock {tool} complete"}
 
-    monkeypatch.setattr("backend.main_with_mcp.dispatch_tool", _fake_dispatch)
+    monkeypatch.setattr("backend.main.dispatch_tool", _fake_dispatch)
 
 
 def _post_execute(client: TestClient, command: str, session_id: str | None = None, execute_plan: bool = False) -> dict:

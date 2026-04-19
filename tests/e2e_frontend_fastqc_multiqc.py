@@ -3,7 +3,7 @@
 End-to-end test: 16S demo + FastQC/MultiQC follow-ups via localhost frontend.
 
 Prerequisites:
-  1. Backend: HELIX_MOCK_MODE=1 uvicorn backend.main_with_mcp:app --host 0.0.0.0 --port 8001
+  1. Backend: HELIX_MOCK_MODE=1 uvicorn backend.main:app --host 0.0.0.0 --port 8001
   2. Frontend: cd frontend && npm run dev  (runs on http://localhost:5173)
 
 Run: python tests/e2e_frontend_fastqc_multiqc.py

@@ -37,7 +37,7 @@ See **`scripts/ec2/README.md`** for file descriptions.
 | Aspect | Notes |
 |--------|--------|
 | **Workflow** | Push → `git pull` on EC2 → reinstall deps if needed → restart service. Common for small teams. |
-| **Parity with “local”** | Same repo layout, `python -m backend.main_with_mcp` (or `uvicorn`), `sessions/` on disk (use `HELIX_SESSIONS_DIR` or default). **Do not** run `npm run dev` for beta testers on the internet; use **`npm run build`** + a web server. |
+| **Parity with “local”** | Same repo layout, `python -m backend.main` (or `uvicorn`), `sessions/` on disk (use `HELIX_SESSIONS_DIR` or default). **Do not** run `npm run dev` for beta testers on the internet; use **`npm run build`** + a web server. |
 | **Secrets** | Never commit `.env`. Put API keys on the server only (`/opt/helix/.env` or systemd `EnvironmentFile`). |
 | **HTTPS** | Browsers expect HTTPS for real users. Use **Caddy** or **Nginx + Let’s Encrypt** (or **ACM + load balancer** if you add one later). |
 | **Updates** | `git pull` can leave a broken venv if dependencies change; run `./scripts/ec2/update-from-git.sh` (or install deps after every pull). |

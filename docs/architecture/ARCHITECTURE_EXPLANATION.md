@@ -77,7 +77,7 @@
 - Needs a server to run
 
 **Where it runs:**
-- **Development**: `uvicorn main_with_mcp:app` → runs locally on `localhost:8001`
+- **Development**: `uvicorn main:app` → runs locally on `localhost:8001`
 - **Production**: ✅ Deployed to ECS Fargate → accessible via ALB
 
 **Current URL:**
@@ -94,7 +94,7 @@ http://helix--Publi-7CO3kaz1lrRR-443122446.us-west-1.elb.amazonaws.com
 ```bash
 # Terminal 1: Backend
 cd backend
-uvicorn main_with_mcp:app --reload --port 8001
+uvicorn main:app --reload --port 8001
 
 # Terminal 2: Frontend  
 cd frontend

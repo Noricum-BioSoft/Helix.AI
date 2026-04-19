@@ -6,6 +6,16 @@ export interface QuickExample {
   command: string;
 }
 
+export interface UploadedSessionFile {
+  file_id?: string;
+  name: string;
+  size: number;
+  status?: 'ready' | 'uploading' | 'uploaded' | 'failed';
+  error?: string;
+  local_path?: string;
+  uploaded_at?: string;
+}
+
 export interface PromptDesignProps {
   command: string;
   onCommandChange: (value: string) => void;
@@ -15,7 +25,7 @@ export interface PromptDesignProps {
   agentLoading: boolean;
   placeholder?: string;
   dragActive: boolean;
-  uploadedFiles: Array<{ name: string; content: string }>;
+  uploadedFiles: UploadedSessionFile[];
   onFileRemove: (index?: number) => void;
   onDropZoneDragOver: (event: React.DragEvent) => void;
   onDropZoneDragLeave: (event: React.DragEvent) => void;

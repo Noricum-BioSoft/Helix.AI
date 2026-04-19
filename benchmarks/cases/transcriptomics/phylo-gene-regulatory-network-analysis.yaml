@@ -1,0 +1,48 @@
+id: case-phylo-gene-regulatory-network-analysis
+title: Gene Regulatory Network Analysis
+source_refs:
+- source: phylo
+  source_use_case_id: phylo-gene-regulatory-network-analysis
+  source_url: https://phylo.bio/use-cases
+family: network_regulatory_analysis
+difficulty: advanced
+risk_class: medium
+input_fixtures:
+- fixture_id: phylo-gene-regulatory-network-analysis-input
+  path: fixtures/transcriptomics/phylo-grn-analysis.v1.tsv
+  expected_format: TSV (gene_id/gene_name/sample_* expression matrix + module_hint)
+  checksum_sha256: 3aba2d97eb53b9969840c998707226c92c050fc11542efd0ef6d290a3d27cab8
+prompt: Perform the 'Gene Regulatory Network Analysis' workflow for the provided inputs.
+  Use the appropriate network regulatory analysis capability and return a scientifically
+  defensible result with explicit assumptions.
+expected_route: network_analysis
+forbidden_routes:
+- sequence_alignment
+- single_cell_analysis
+forbidden_fallbacks:
+- sequence_alignment
+required_steps:
+- ingest_tabular
+- build_network
+- analyze_modules
+- summarize_and_explain
+required_outputs:
+- plot
+- report
+- explanation
+safety_requirements:
+- explicit_assumptions
+- uncertainty_note
+provenance_requirements:
+- manifest_v1_present
+- lineage_edges_present
+- fallback_events_present
+- route_decision_trace_present
+scoring:
+  weights:
+    routing_correctness: 0.25
+    workflow_correctness: 0.2
+    output_quality: 0.2
+    safety_caveats: 0.1
+    provenance_completeness: 0.15
+    replay_reproducibility: 0.1

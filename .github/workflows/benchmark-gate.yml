@@ -1,0 +1,117 @@
+name: Benchmark Gate
+
+on:
+  pull_request:
+    paths:
+      - "benchmarks/**"
+      - "tests/unit/benchmarks/**"
+      - ".github/workflows/benchmark-gate.yml"
+  workflow_dispatch:
+    inputs:
+      observations_path:
+        description: "Path to run observations JSON (relative to repo root)"
+        required: false
+        default: "benchmarks/fixtures/example_run_observations.json"
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyyaml pytest
+
+      - name: Bootstrap required artifact structure
+        run: |
+          python benchmarks/compliance/bootstrap_artifacts.py
+
+      - name: Run scorer unit tests
+        run: |
+          python -m pytest tests/unit/benchmarks/test_use_case_gate_scorer.py -q
+
+      - name: Validate scenario files parse and have required fields
+        run: |
+          python - <<'PY'
+          import sys, yaml
+          from pathlib import Path
+          required = [
+              "id", "title", "family", "expected_route",
+              "forbidden_routes", "forbidden_fallbacks",
+              "required_steps", "required_outputs",
+              "safety_requirements", "provenance_requirements",
+          ]
+          missing = []
+          for path in sorted(Path("benchmarks/cases").rglob("*.yaml")):
+              data = yaml.safe_load(path.read_text()) or {}
+              for key in required:
+                  if key not in data:
+                      missing.append((str(path), key))
+          if missing:
+              for p, k in missing:
+                  print(f"missing field '{k}' in {p}")
+              sys.exit(1)
+          print(f"validated {sum(1 for _ in Path('benchmarks/cases').rglob('*.yaml'))} scenarios")
+          PY
+
+      - name: Validate catalog-scenario parity
+        run: |
+          python benchmarks/compliance/validate_catalog_scenario_parity.py
+
+      - name: Validate fixture compliance registry coverage
+        run: |
+          python benchmarks/compliance/validate_fixture_compliance.py
+
+      - name: Validate routing migration policy guards
+        run: |
+          python benchmarks/compliance/validate_routing_policy.py
+
+      - name: Validate security policy baseline
+        run: |
+          python benchmarks/compliance/validate_security_policy.py
+
+      - name: Validate performance and cost policy baseline
+        run: |
+          python benchmarks/compliance/validate_performance_cost_policy.py
+
+      - name: Validate artifacts readiness contract
+        run: |
+          python benchmarks/compliance/validate_artifacts_readiness.py
+
+      - name: Run gate suite
+        id: gate
+        run: |
+          OBS_PATH="${{ github.event.inputs.observations_path }}"
+          if [ -z "$OBS_PATH" ]; then
+            OBS_PATH="benchmarks/fixtures/example_run_observations.json"
+          fi
+          mkdir -p artifacts/benchmark_results
+          python -m benchmarks.scoring.run_suite \
+            --cases-dir benchmarks/cases \
+            --observations "$OBS_PATH" \
+            --report artifacts/benchmark_results/gate_report.json || true
+          python - <<'PY'
+          import json, sys
+          r = json.loads(open("artifacts/benchmark_results/gate_report.json").read())
+          print(f"status={r['release_gate_status']} total={r['total_cases']} pass={r['gate_pass_count']} fail={r['gate_fail_count']}")
+          print(f"missing={len(r['missing_observations'])} critical={len(r['critical_failures'])}")
+          if r["critical_failures"]:
+              print("CRITICAL FAILURES:")
+              for c in r["critical_failures"]:
+                  print(f"  - {c}")
+              sys.exit(1)
+          PY
+
+      - name: Upload gate report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-gate-report
+          path: artifacts/benchmark_results/gate_report.json

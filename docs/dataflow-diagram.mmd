@@ -1,0 +1,99 @@
+flowchart TD
+    A[Prompt from frontend] --> B[Load Session / Memory State]
+
+    B --> C{Interpret in Context}
+
+    C -->|Question / explanation| D[BioinformaticsGuru]
+    D --> E[Persist conversation state]
+    E --> F[Respond to user]
+
+    C -->|New workflow request| G[Resolve artifacts / historical state]
+    C -->|Follow-up on prior artifacts| G
+    C -->|Debug failed run| G
+    C -->|Answer to clarification| H[Resume from saved checkpoint]
+    C -->|Provide missing inputs| I[Bind inputs to pending workflow]
+    C -->|Approve pending plan| J[Execute approved plan]
+    C -->|Revise / reject plan| K[Workflow Planner Agent]
+
+    H --> G
+    I --> G
+
+    G --> L{Artifacts / state resolved?}
+
+    L -->|Ambiguous| M[Ask for clarification]
+    L -->|Missing inputs / missing artifact| N[Ask for required inputs]
+    L -->|Resolved| K
+
+    K --> O{Enough context to plan?}
+
+    O -->|No| M
+    O -->|Yes| P[Build / revise workflow plan]
+
+    P --> Q{Concrete inputs available for execution?}
+
+    Q -->|No| N
+    Q -->|Yes| R{User approval required?}
+
+    R -->|Yes| S[Present plan to user]
+    S --> T[Save checkpoint: WAITING_FOR_APPROVAL]
+    T --> F
+
+    R -->|No| U[Infrastructure Decision Agent]
+
+    C -->|Approve pending plan| V[Load pending plan + checkpoint]
+    V --> W{Bindings valid?}
+    W -->|No| N
+    W -->|Yes| U
+
+    M --> X[Save checkpoint: WAITING_FOR_CLARIFICATION]
+    X --> F
+
+    N --> Y[Save checkpoint: WAITING_FOR_INPUTS]
+    Y --> F
+
+    U --> Z{All tools available?}
+
+    Z -->|Yes| AA[Execute Pipeline]
+    Z -->|No| AB{Can compose or generate?}
+
+    AB -->|Compose existing tools| AA
+    AB -->|Generate new tool| AC[Tool Generator Agent]
+    AC --> AA
+    AB -->|Cannot proceed safely| M
+
+    AA --> AD{Successful execution?}
+
+    AD -->|Yes| AE[Register artifacts]
+    AE --> AF[Update lineage + branch state]
+    AF --> AG[Save state: COMPLETED]
+    AG --> AH[Report results to user]
+    AH --> F
+
+    AD -->|Needs user input| AI[Ask for additional inputs / clarification]
+    AI --> AJ[Save checkpoint: FAILED_WAITING_FOR_USER]
+    AJ --> F
+
+    AD -->|No| AK[Failure Recovery / Bug Fix Agent]
+
+    AK --> AL{Recovery path}
+
+    AL -->|Retry step| AA
+    AL -->|Patch and rerun| AA
+    AL -->|Need user guidance| AJ
+
+    subgraph Memory_and_State
+        B1[Conversation memory]
+        B2[Workflow state]
+        B3[Artifact registry]
+        B4[Lineage / branches]
+        B5[Checkpoint manager]
+    end
+
+    B --- B1
+    B --- B2
+    G --- B3
+    AF --- B4
+    X --- B5
+    Y --- B5
+    T --- B5
+    AJ --- B5

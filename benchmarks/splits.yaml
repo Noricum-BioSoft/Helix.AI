@@ -1,0 +1,21 @@
+schema_version: 1.0.0
+updated_at_utc: "2026-04-16T00:00:00Z"
+description: >
+  Locked benchmark split assignments for Helix Next release gating.
+  Cases must not move between splits without benchmark lead approval.
+
+policies:
+  lock_splits: true
+  require_change_control: true
+  holdout_visible_to_implementers: false
+
+splits:
+  dev:
+    - case-tabular-phylo-biomarker-panel-design
+    - case-transcriptomics-ngs101-bulk-rnaseq-core-de
+  validation:
+    - case-routing-safety-tabular-no-sequence-fallback
+  release_holdout:
+    - holdout-tabular-crossmodal-001
+    - holdout-transcriptomics-lineage-replay-001
+

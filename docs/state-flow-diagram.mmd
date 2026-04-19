@@ -1,0 +1,120 @@
+stateDiagram-v2
+    [*] --> LoadSessionState
+
+    LoadSessionState --> InterpretInContext
+
+    state "Interpret In Context" as InterpretInContext {
+        [*] --> ClassifyIntent
+        ClassifyIntent --> QuestionIntent
+        ClassifyIntent --> NewWorkflowIntent
+        ClassifyIntent --> AnswerClarificationIntent
+        ClassifyIntent --> ProvideInputsIntent
+        ClassifyIntent --> ApprovePlanIntent
+        ClassifyIntent --> RevisePlanIntent
+        ClassifyIntent --> FollowupArtifactIntent
+        ClassifyIntent --> DebugFailedRunIntent
+    }
+
+    QuestionIntent --> AnswerQuestion
+    AnswerQuestion --> PersistState
+    PersistState --> RespondToUser
+    RespondToUser --> [*]
+
+    NewWorkflowIntent --> ResolveArtifacts
+    FollowupArtifactIntent --> ResolveArtifacts
+    DebugFailedRunIntent --> ResolveArtifacts
+    AnswerClarificationIntent --> ResumeCheckpoint
+    ProvideInputsIntent --> BindInputs
+    ApprovePlanIntent --> ExecuteApprovedPlan
+    RevisePlanIntent --> Planner
+
+    ResumeCheckpoint --> ResolveArtifacts
+    BindInputs --> ResolveArtifacts
+
+    state "Artifact / State Resolution" as ResolveArtifacts {
+        [*] --> ResolveAliases
+        ResolveAliases --> ResolutionOK
+        ResolveAliases --> ResolutionAmbiguous
+        ResolveAliases --> ResolutionMissing
+    }
+
+    ResolutionAmbiguous --> WaitingForClarification
+    ResolutionMissing --> WaitingForInputs
+    ResolutionOK --> Planner
+
+    state "Workflow Planning" as Planner {
+        [*] --> CheckPlanningContext
+        CheckPlanningContext --> NeedClarification
+        CheckPlanningContext --> BuildPlan
+        BuildPlan --> NeedConcreteInputs
+        BuildPlan --> NeedsApproval
+        BuildPlan --> ReadyForExecution
+    }
+
+    NeedClarification --> WaitingForClarification
+    NeedConcreteInputs --> WaitingForInputs
+    NeedsApproval --> WaitingForApproval
+    ReadyForExecution --> InfrastructureDecision
+
+    state "Infrastructure Decision" as InfrastructureDecision {
+        [*] --> CheckToolAvailability
+        CheckToolAvailability --> ToolsAvailable
+        CheckToolAvailability --> CapabilityGap
+        CapabilityGap --> ComposeExistingTools
+        CapabilityGap --> ToolGenerationAllowed
+        CapabilityGap --> CannotProceed
+        ComposeExistingTools --> ExecutePipeline
+        ToolGenerationAllowed --> ToolGenerator
+        ToolGenerator --> ExecutePipeline
+        CannotProceed --> WaitingForClarification
+        ToolsAvailable --> ExecutePipeline
+    }
+
+    ExecuteApprovedPlan --> ValidateApprovedBindings
+    ValidateApprovedBindings --> ExecutePipeline
+    ValidateApprovedBindings --> WaitingForInputs
+
+    state "Execution" as ExecutePipeline {
+        [*] --> RunWorkflow
+        RunWorkflow --> ExecutionSucceeded
+        RunWorkflow --> ExecutionFailed
+        RunWorkflow --> ExecutionNeedsUser
+    }
+
+    ExecutionSucceeded --> RegisterArtifacts
+    RegisterArtifacts --> UpdateLineage
+    UpdateLineage --> Completed
+
+    ExecutionNeedsUser --> WaitingForInputs
+    ExecutionFailed --> FailureRecovery
+
+    state "Failure Recovery / Bug Fix" as FailureRecovery {
+        [*] --> DiagnoseFailure
+        DiagnoseFailure --> RetryStep
+        DiagnoseFailure --> PatchAndRerun
+        DiagnoseFailure --> AskUserForGuidance
+        RetryStep --> ExecutePipeline
+        PatchAndRerun --> ExecutePipeline
+        AskUserForGuidance --> FailedWaitingForUser
+    }
+
+    WaitingForClarification --> PersistCheckpointClarification
+    PersistCheckpointClarification --> RespondToUser
+
+    WaitingForInputs --> PersistCheckpointInputs
+    PersistCheckpointInputs --> RespondToUser
+
+    WaitingForApproval --> PersistCheckpointApproval
+    PersistCheckpointApproval --> RespondToUser
+
+    FailedWaitingForUser --> PersistCheckpointFailure
+    PersistCheckpointFailure --> RespondToUser
+
+    Completed --> PersistCompletionState
+    PersistCompletionState --> RespondToUser
+
+    state "Waiting For Clarification" as WaitingForClarification
+    state "Waiting For Inputs" as WaitingForInputs
+    state "Waiting For Approval" as WaitingForApproval
+    state "Failed Waiting For User" as FailedWaitingForUser
+    state "Completed" as Completed

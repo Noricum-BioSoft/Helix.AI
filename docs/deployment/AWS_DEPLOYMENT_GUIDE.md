@@ -2,6 +2,8 @@
 
 This guide provides step-by-step instructions for deploying Helix.AI to AWS using automated deployment scripts and infrastructure as code.
 
+> **Quick revisit:** For a concise architecture, CDK vs app deploy, GitHub secrets, and checklists, see **[DEPLOYMENT_OVERVIEW.md](DEPLOYMENT_OVERVIEW.md)**.
+
 ## Table of Contents
 
 1. [Overview](#overview)
@@ -437,41 +439,43 @@ The project includes a GitHub Actions workflow (`.github/workflows/deploy.yml`) 
 
 ### Required GitHub Secrets
 
-Add these secrets in your GitHub repository settings:
+The workflow (`.github/workflows/deploy.yml`) uses **IAM access keys** (`aws-actions/configure-aws-credentials`), not OIDC. Add these in **Repository → Settings → Secrets and variables → Actions**:
 
-1. `AWS_REGION`: AWS region (e.g., `us-east-1`)
-2. `AWS_ACCOUNT_ID`: Your AWS account ID
-3. `AWS_OIDC_ROLE_ARN`: IAM role ARN for GitHub OIDC authentication
-4. `ECR_REPOSITORY`: ECR repository name (e.g., `helix-backend`)
-5. `S3_BUCKET`: S3 bucket name for frontend
-6. `VITE_API_BASE_URL`: Backend API URL for frontend build
-7. `CLOUDFRONT_DISTRIBUTION_ID`: CloudFront distribution ID (optional)
-8. `ECS_CLUSTER_NAME`: ECS cluster name (optional - for auto ECS updates)
-9. `ECS_SERVICE_NAME`: ECS service name (optional)
-10. `ECS_TASK_DEFINITION_FAMILY`: Task definition family (optional)
+**Backend deploy (minimum):**
 
-### Setting Up GitHub OIDC
+| Secret | Description |
+|--------|-------------|
+| `AWS_ACCESS_KEY_ID` | IAM user access key with ECR/ECS (and S3/CloudFront if deploying frontend) |
+| `AWS_SECRET_ACCESS_KEY` | Matching secret |
+| `AWS_REGION` | e.g. `us-west-1` |
+| `ECR_REPOSITORY` | E.g. `helix-ai-backend` |
 
-1. **Create IAM OIDC Identity Provider** (if not exists):
-   ```bash
-   aws iam create-open-id-connect-provider \
-     --url https://token.actions.githubusercontent.com \
-     --client-id-list sts.amazonaws.com \
-     --thumbprint-list 6938fd4d98bab03faadb97b34396831e3780aea1
-   ```
+**Frontend deploy (also set `S3_BUCKET`):**
 
-2. **Create IAM Role for GitHub Actions**:
-   - Trust policy: Allow `token.actions.githubusercontent.com`
-   - Conditions: Match repository and branch
-   - Permissions: ECR, ECS, S3, CloudFront access
+| Secret | Description |
+|--------|-------------|
+| `S3_BUCKET` | Frontend static site bucket name |
+| `VITE_API_BASE_URL` | API URL embedded in the Vite build (often CloudFront or ALB URL) |
 
-3. **Get Role ARN** and add to GitHub secrets as `AWS_OIDC_ROLE_ARN`
+**Optional (recommended so CI updates ECS after push):**
 
-### Workflow Trigger
+| Secret | Description |
+|--------|-------------|
+| `ECS_CLUSTER_NAME` | From CDK output `ECSClusterName` |
+| `ECS_SERVICE_NAME` | From CDK output `ECSServiceName` |
+| `ECS_TASK_DEFINITION_FAMILY` | From CDK output `ECSTaskDefinitionFamily` |
+| `CLOUDFRONT_DISTRIBUTION_ID` | For cache invalidation after `s3 sync` |
 
-The workflow triggers on:
-- Push to `main` branch
-- Manual trigger via GitHub Actions UI
+`AWS_ACCOUNT_ID` is listed in the workflow `env` block; set it if you add steps that need it.
+
+### Workflow trigger
+
+- Push to **`main`** or **`version_2.0`**
+- **Actions → Deploy to AWS → Run workflow** (manual)
+
+### Alternative: OIDC instead of long-lived keys
+
+The current workflow does **not** use OIDC. To switch to OIDC, you would replace the configure-aws-credentials step with `role-to-assume` and an IAM role trust policy for `token.actions.githubusercontent.com`. That is a separate change from the default workflow.
 
 ## Next Steps
 

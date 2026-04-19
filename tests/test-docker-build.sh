@@ -11,9 +11,9 @@ docker build -f backend/Dockerfile -t helix-ai-backend:test .
 # Test that the container can start and imports work
 echo ""
 echo "🐳 Testing container startup..."
-echo "Running: docker run --rm helix-ai-backend:test python -c 'import backend.main_with_mcp; print(\"✅ Import successful!\")'"
+echo "Running: docker run --rm helix-ai-backend:test python -c 'import backend.main; print(\"✅ Import successful!\")'"
 
-if docker run --rm helix-ai-backend:test python -c 'import backend.main_with_mcp; print("✅ Import successful!")' 2>&1; then
+if docker run --rm helix-ai-backend:test python -c 'import backend.main; print("✅ Import successful!")' 2>&1; then
     echo ""
     echo "✅ Import test passed!"
 else

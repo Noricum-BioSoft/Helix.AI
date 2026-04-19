@@ -1,0 +1,42 @@
+---
+description: Docs, scripts, and deployment rules for Helix.AI
+globs:
+  - "docs/**/*.md"
+  - "docs/**/*.mmd"
+  - "scripts/**/*.sh"
+  - "scripts/**/*.py"
+  - "scripts/aws/**/*"
+  - "scripts/ec2/**/*"
+  - "scripts/emr/**/*"
+  - "infrastructure/**/*"
+---
+
+# Documentation rules
+Helix.AI has substantial product, architecture, deployment, and troubleshooting documentation under `docs/`.
+
+When changing behavior, update relevant docs if affected:
+- `docs/architecture/`
+- `docs/api/`
+- `docs/deployment/`
+- `docs/getting-started/`
+- `docs/guides/`
+- `docs/reference/`
+- `docs/troubleshooting/`
+
+# Docs quality rules
+- Keep docs aligned with actual commands and code paths.
+- Prefer updating existing authoritative docs over adding redundant new docs.
+- If diagrams are changed, ensure related narrative text stays consistent.
+
+# Scripts and deployment rules
+Changes under `scripts/` and `infrastructure/` must be conservative and verifiable.
+Avoid broad deployment edits unless required by the task.
+
+# Verification rules
+If deployment or ops scripts change:
+- validate syntax where practical,
+- ensure referenced paths and env names are consistent,
+- document operational impact.
+
+# Troubleshooting updates
+If a recurring failure mode is discovered and fixed, add a note to troubleshooting docs when useful.

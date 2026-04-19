@@ -4,7 +4,7 @@ Cloud smoke test for Helix.AI backend.
 
 Runs a small suite of end-to-end checks against a running backend URL:
 - /health
-- /mcp/tools
+- /tools/list
 - /execute: Q&A
 - /execute: sequence alignment
 - /execute: phylogenetic tree
@@ -37,7 +37,7 @@ def _http_json(method: str, url: str, *, timeout: int = 30, payload: Optional[Di
 
 
 def _extract_job_id(execute_response: Dict[str, Any]) -> Optional[str]:
-    # Standard response shape from backend/main_with_mcp.py
+    # Standard response shape from backend/main.py
     data = execute_response.get("data") if isinstance(execute_response, dict) else None
     if isinstance(data, dict):
         results = data.get("results")
@@ -123,9 +123,9 @@ def main() -> int:
     assert health.get("status") == "healthy", health
     print("✓ /health")
 
-    tools = _http_json("GET", f"{backend}/mcp/tools", timeout=30)
+    tools = _http_json("GET", f"{backend}/tools/list", timeout=30)
     assert isinstance(tools.get("tools"), list), tools
-    print(f"✓ /mcp/tools ({len(tools['tools'])} tools)")
+    print(f"✓ /tools/list ({len(tools['tools'])} tools)")
 
     # Q&A
     qa = _http_json("POST", f"{backend}/execute", timeout=60, payload={"command": "What is a FASTQ file?"})

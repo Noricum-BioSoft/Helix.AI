@@ -45,7 +45,7 @@ async def test_handle_natural_command_pipeline_real_execution():
 
     from backend.command_router import CommandRouter
     from backend.execution_broker import ExecutionBroker, ExecutionRequest
-    from backend.main_with_mcp import dispatch_tool
+    from backend.main import dispatch_tool
     from backend.history_manager import history_manager
 
     # Use a dedicated sessions subdir so this test doesn't pollute the main sessions/ tree.
@@ -125,7 +125,7 @@ async def test_handle_natural_command_pipeline_real_execution():
     # Full E2E consensus requires data flow from step 1 → step 2; see docs/CONSENSUS_FROM_ALIGNMENT_GAP.md.
 
     # Persist plan result to session (pipeline execution summary only, no full_response/code)
-    from backend.main_with_mcp import _build_pipeline_execution_storage_result
+    from backend.main import _build_pipeline_execution_storage_result
     history_manager.ensure_session_exists(session_id)
     storage_result = _build_pipeline_execution_storage_result(result, session_id)
     history_manager.add_history_entry(

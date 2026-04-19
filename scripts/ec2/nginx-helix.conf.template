@@ -6,7 +6,8 @@
 
 server {
     listen 80;
-    server_name _;
+    # Use your real hostname before certbot, e.g. helix-beta.noricum-biosoft.com
+    server_name helix-beta.noricum-biosoft.com;
 
     root __HELIX_ROOT__/frontend/dist;
     index index.html;

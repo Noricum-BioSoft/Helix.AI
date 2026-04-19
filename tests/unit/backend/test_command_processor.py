@@ -705,7 +705,7 @@ class TestExecutePipelineFailureBehavior:
             return {"status": "success", "text": f"{tool_name} ok"}
 
         with patch("backend.job_manager.get_job_manager", return_value=fake_jm), patch(
-            "backend.main_with_mcp.dispatch_tool", new=AsyncMock(side_effect=_mock_dispatch_tool)
+            "backend.main.dispatch_tool", new=AsyncMock(side_effect=_mock_dispatch_tool)
         ), patch("threading.Thread", _InlineThread):
             result = await processor.execute_pipeline(command=command, session_id="s-fail-fast", session_context={})
 

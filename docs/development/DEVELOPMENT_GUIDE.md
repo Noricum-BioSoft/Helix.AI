@@ -67,7 +67,7 @@ cd Helix.AI
 
 ```
 backend/
-├── main_with_mcp.py          # FastAPI application with MCP integration
+├── main.py          # FastAPI application with MCP integration
 ├── command_router.py         # Natural language command routing
 ├── history_manager.py        # Session and history management
 ├── agent.py                  # LangChain agent with bioinformatics tools
@@ -85,7 +85,7 @@ frontend/src/
 │   ├── PlasmidVisualizer.tsx # Plasmid visualization
 │   └── DirectedEvolutionDemo.tsx
 ├── services/                 # API services
-│   └── mcpApi.ts            # MCP API client
+│   └── helixApi.ts            # MCP API client
 ├── utils/                    # Utilities
 │   └── commandParser.ts     # Command parsing utilities
 └── main.tsx                 # Application entry point
@@ -154,7 +154,7 @@ git push origin feature/new-bioinformatics-tool
        }
    ```
 
-2. **Add MCP endpoint** in `backend/main_with_mcp.py`:
+2. **Add MCP endpoint** in `backend/main.py`:
    ```python
    @app.post("/mcp/new-tool")
    async def new_tool_mcp(req: NewToolRequest):
@@ -266,9 +266,9 @@ git push origin feature/new-bioinformatics-tool
 
 #### Adding New API Services
 
-1. **Add service method** in `frontend/src/services/mcpApi.ts`:
+1. **Add service method** in `frontend/src/services/helixApi.ts`:
    ```typescript
-   export const mcpApi = {
+   export const helixApi = {
        // ... existing methods ...
        
        async newTool(param: string, sessionId?: string): Promise<any> {
@@ -286,7 +286,7 @@ git push origin feature/new-bioinformatics-tool
    ```typescript
    // In handleSubmit function
    if (tool === 'new_tool') {
-       const result = await mcpApi.newTool(params.param, sessionId);
+       const result = await helixApi.newTool(params.param, sessionId);
        // Handle result
    }
    ```
@@ -427,7 +427,7 @@ export const SequenceVisualizer: React.FC<SequenceVisualizerProps> = ({
 cd frontend && npm run build
 
 # Start production backend
-python backend/main_with_mcp.py --production
+python backend/main.py --production
 ```
 
 ## 🐛 Debugging
@@ -468,7 +468,7 @@ console.log('Debug data:', data);
 
 2. **CORS Issues**:
    ```python
-   # In backend/main_with_mcp.py
+   # In backend/main.py
    from fastapi.middleware.cors import CORSMiddleware
    
    app.add_middleware(

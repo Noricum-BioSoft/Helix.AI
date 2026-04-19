@@ -1,0 +1,203 @@
+schema_version: 1.0.0
+generated_at_utc: "2026-04-16T00:00:00Z"
+description: >
+  Source-tagged benchmark use-case catalog derived from Phylo and NGS101.
+  This file maps external use cases to Helix normalized capability families
+  and defines starter benchmark metadata used by scenario generation/scoring.
+
+sources:
+  - id: phylo
+    name: "Phylo Use Cases"
+    url: "https://phylo.bio/use-cases"
+  - id: ngs101
+    name: "NGS101 Tutorials"
+    url: "https://ngs101.com/tutorials/"
+
+normalized_capability_families:
+  - id: tabular_target_ranking
+    name: "Tabular Target Ranking"
+    summary: "Structured-table derivation/ranking/filtering for target prioritization."
+  - id: bulk_rnaseq_de
+    name: "Bulk RNA-seq Differential Expression"
+    summary: "QC -> quantification -> DEG -> pathway workflows for bulk RNA-seq."
+  - id: scrna_annotation
+    name: "Single-Cell Annotation"
+    summary: "scRNA QC/clustering/cell-type annotation workflows."
+  - id: cell_cell_communication
+    name: "Cell-Cell Communication"
+    summary: "Inference and interpretation of intercellular signaling interactions."
+  - id: variant_annotation
+    name: "Variant Annotation"
+    summary: "Annotate, prioritize, and interpret genomic variants."
+  - id: epigenomics_peak_analysis
+    name: "Epigenomics Peak Analysis"
+    summary: "Peak calling, differential binding/accessibility, and motif context."
+  - id: survival_biomarker_modeling
+    name: "Survival and Biomarker Modeling"
+    summary: "Outcome association, panel design, and predictive feature evaluation."
+  - id: network_regulatory_analysis
+    name: "Network/Regulatory Analysis"
+    summary: "Co-expression and gene regulatory network inference/interpretation."
+
+catalog_fields:
+  required:
+    - id
+    - source
+    - source_use_case_name
+    - normalized_primary_family
+    - difficulty
+    - risk_class
+    - input_modalities
+    - expected_output_types
+  enums:
+    difficulty: [basic, intermediate, advanced]
+    risk_class: [low, medium, high]
+    input_modalities:
+      - table
+      - bulk_rnaseq
+      - scrna
+      - genomics
+      - epigenomics
+      - clinical
+      - sequence
+    expected_output_types:
+      - table
+      - plot
+      - report
+      - model
+      - explanation
+      - workflow_plan
+
+use_cases:
+  - id: phylo-biomarker-panel-design
+    source: phylo
+    source_use_case_name: "Biomarker Panel Design"
+    source_url: "https://phylo.bio/use-cases"
+    normalized_primary_family: survival_biomarker_modeling
+    normalized_secondary_families:
+      - tabular_target_ranking
+    difficulty: intermediate
+    risk_class: medium
+    input_modalities:
+      - table
+      - clinical
+    expected_output_types:
+      - table
+      - report
+      - explanation
+    notes: "Likely includes feature prioritization and translational caveats."
+
+  - id: phylo-variant-annotation
+    source: phylo
+    source_use_case_name: "Variant Annotation"
+    source_url: "https://phylo.bio/use-cases"
+    normalized_primary_family: variant_annotation
+    normalized_secondary_families: []
+    difficulty: intermediate
+    risk_class: high
+    input_modalities:
+      - genomics
+    expected_output_types:
+      - table
+      - report
+      - explanation
+    notes: "High-risk due to potential downstream clinical interpretation."
+
+  - id: phylo-gene-regulatory-network-analysis
+    source: phylo
+    source_use_case_name: "Gene Regulatory Network Analysis"
+    source_url: "https://phylo.bio/use-cases"
+    normalized_primary_family: network_regulatory_analysis
+    normalized_secondary_families:
+      - bulk_rnaseq_de
+    difficulty: advanced
+    risk_class: medium
+    input_modalities:
+      - bulk_rnaseq
+      - table
+    expected_output_types:
+      - plot
+      - report
+      - explanation
+
+  - id: ngs101-bulk-rnaseq-core-de
+    source: ngs101
+    source_use_case_name: "Bulk RNA-seq Core Workflow (FASTQ to DEGs)"
+    source_url: "https://ngs101.com/tutorials/"
+    normalized_primary_family: bulk_rnaseq_de
+    normalized_secondary_families: []
+    difficulty: basic
+    risk_class: medium
+    input_modalities:
+      - bulk_rnaseq
+    expected_output_types:
+      - table
+      - plot
+      - report
+      - workflow_plan
+    notes: "Starter benchmark for default transcriptomics path correctness."
+
+  - id: ngs101-scrna-cellchat
+    source: ngs101
+    source_use_case_name: "Cell-Cell Communication (CellChat)"
+    source_url: "https://ngs101.com/tutorials/"
+    normalized_primary_family: cell_cell_communication
+    normalized_secondary_families:
+      - scrna_annotation
+    difficulty: advanced
+    risk_class: medium
+    input_modalities:
+      - scrna
+    expected_output_types:
+      - plot
+      - report
+      - explanation
+
+  - id: ngs101-chipseq-peak-calling
+    source: ngs101
+    source_use_case_name: "ChIP-seq From FASTQ to Peaks"
+    source_url: "https://ngs101.com/tutorials/"
+    normalized_primary_family: epigenomics_peak_analysis
+    normalized_secondary_families: []
+    difficulty: intermediate
+    risk_class: medium
+    input_modalities:
+      - epigenomics
+    expected_output_types:
+      - table
+      - plot
+      - report
+
+  - id: ngs101-gwas-plink
+    source: ngs101
+    source_use_case_name: "GWAS Using PLINK"
+    source_url: "https://ngs101.com/tutorials/"
+    normalized_primary_family: variant_annotation
+    normalized_secondary_families:
+      - survival_biomarker_modeling
+    difficulty: advanced
+    risk_class: high
+    input_modalities:
+      - genomics
+      - clinical
+    expected_output_types:
+      - table
+      - plot
+      - report
+      - explanation
+
+benchmark_split_policy:
+  dev:
+    target_source_mix:
+      phylo_min_fraction: 0.30
+      ngs101_min_fraction: 0.50
+  validation:
+    target_source_mix:
+      phylo_min_fraction: 0.25
+      ngs101_min_fraction: 0.50
+  release_holdout:
+    target_source_mix:
+      phylo_min_fraction: 0.25
+      ngs101_min_fraction: 0.50
+    notes: "Holdout scenarios should remain unseen to implementation agents."
+

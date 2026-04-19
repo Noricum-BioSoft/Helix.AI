@@ -122,7 +122,7 @@ def _score_single_turn(
 
 def _render(prompt: str, tool: str, result: dict, *, session_id: str = "sid") -> dict:
     """Convenience wrapper for build_standard_response."""
-    from backend.main_with_mcp import build_standard_response
+    from backend.main import build_standard_response
 
     return build_standard_response(
         prompt=prompt,
@@ -213,7 +213,7 @@ def test_use_historical_routes_to_handle_natural_command(command: str):
 
 def test_use_historical_handle_natural_command_is_not_staged():
     """handle_natural_command without approval semantics must NOT be staged."""
-    from backend.main_with_mcp import _should_stage_for_approval
+    from backend.main import _should_stage_for_approval
 
     assert _should_stage_for_approval(
         "handle_natural_command",

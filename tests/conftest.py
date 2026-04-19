@@ -2,7 +2,10 @@
 Pytest configuration to ensure project packages are importable during tests.
 """
 
+import asyncio
+import importlib
 import sys
+import warnings
 from pathlib import Path
 import pytest
 import os
@@ -30,6 +33,35 @@ TOOLS_PATH = PROJECT_ROOT / "tools"
 if str(TOOLS_PATH) not in sys.path:
     # Append so `PROJECT_ROOT` stays earlier on sys.path (so `import backend...` works).
     sys.path.append(str(TOOLS_PATH))
+
+# Keep `tools` bound to this repository's package even if another dependency
+# imports a third-party module named `tools` first.
+_tools_mod = sys.modules.get("tools")
+if _tools_mod is not None:
+    _origin = str(getattr(_tools_mod, "__file__", "") or "")
+    if str(PROJECT_ROOT / "tools") not in _origin:
+        sys.modules.pop("tools", None)
+        sys.modules.pop("tools.ncbi_tools", None)
+
+# Eager import makes `patch("tools.ncbi_tools....")` deterministic across suite order.
+importlib.import_module("tools")
+importlib.import_module("tools.ncbi_tools")
+
+@pytest.fixture(autouse=True)
+def _ensure_default_event_loop():
+    """
+    Some sync tests call asyncio.get_event_loop().run_until_complete(...).
+    On Python 3.13, prior tests may leave no current loop; ensure one exists.
+    """
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            loop = asyncio.get_event_loop_policy().get_event_loop()
+        if loop.is_closed():
+            raise RuntimeError("event loop was closed")
+    except Exception:
+        asyncio.get_event_loop_policy().set_event_loop(asyncio.new_event_loop())
+    yield
 
 
 def pytest_configure(config):

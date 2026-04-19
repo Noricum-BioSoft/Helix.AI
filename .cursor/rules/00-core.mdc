@@ -1,0 +1,69 @@
+---
+description: Core operating rules for Helix.AI
+alwaysApply: true
+---
+
+# Helix.AI mission
+Helix.AI is a full-stack multi-agent platform for bioinformatics and data analysis workflows.
+The system must support iterative analysis requests, workflow revision, bug fixing, plot updates, additional file ingestion, and benchmarked release readiness.
+
+# Primary objectives
+- Make safe, incremental, test-backed changes.
+- Prefer root-cause fixes over superficial patches.
+- Preserve workflow correctness, reproducibility, and observability.
+- Do not declare the system release-ready unless benchmark thresholds are satisfied.
+
+# Planning rules
+- Start substantial tasks in Plan Mode.
+- Save plans to `.cursor/plans/` with descriptive names.
+- Keep plans concise and implementation-oriented.
+- For large tasks, break work into backend, frontend, tests, and benchmarks.
+
+# Scope rules
+- Do not silently broaden scope.
+- If related issues are discovered, record them in `artifacts/worklog.md` and fix only if they are necessary for the current release gate or clearly coupled to the current task.
+
+# Safety rules
+- Never use production secrets, production data, or destructive external operations in autonomous workflows.
+- Use fixture data, sandbox data, or explicitly marked safe data.
+- Never hardcode credentials, tokens, or environment-specific secrets.
+
+# Completion rules
+A task is complete only when all of the following are true:
+1. relevant lint/type/tests pass,
+2. changed behavior is covered by tests,
+3. no benchmark threshold regresses beyond allowed limits,
+4. results are written into `artifacts/`,
+5. any remaining blockers are explicitly documented.
+
+# Required artifacts
+Write progress and evidence to:
+- `artifacts/worklog.md`
+- `artifacts/test_results/`
+- `artifacts/failure_summaries/`
+- `artifacts/benchmark_results/`
+- `artifacts/release_readiness.json`
+
+# Helix.AI priority areas
+When unsure, prioritize these subsystems:
+- `backend/`
+- `tests/`
+- `frontend/`
+- `docs/`
+- `scripts/`
+
+# Canonical entry points
+Key backend entry points:
+- `backend/main_with_mcp.py`
+- `backend/agent.py`
+- `backend/command_router.py`
+- `backend/execution_broker.py`
+
+Key workflow/session components:
+- `backend/history_manager.py`
+- `backend/workflow_executor.py`
+- `backend/workflow_checkpoint.py`
+
+Key frontend entry points:
+- `frontend/src/App.tsx`
+- `frontend/src/services/mcpApi.ts`

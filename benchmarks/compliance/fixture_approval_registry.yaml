@@ -1,0 +1,220 @@
+schema_version: 1.0.0
+updated_at_utc: "2026-04-16T00:00:00Z"
+description: >
+  Approval registry for benchmark fixtures used by executable cases.
+  Every fixture referenced by `benchmarks/cases/**/*.yaml` must have an entry.
+
+status_enums:
+  approval_status:
+    - approved
+    - approved_with_restrictions
+    - pending
+    - rejected
+  sensitivity_class:
+    - public
+    - internal
+    - restricted_human_data
+
+fixtures:
+  - fixture_path: fixtures/tabular/immunopeptidomics_media5.xlsx
+    source:
+      provider: bioRxiv supplemental dataset
+      source_url: "TBD"
+      source_use_case_id: phylo-biomarker-panel-design
+    license:
+      type: research_use
+      citation_required: true
+      redistribution_allowed: false
+    contains_human_data: true
+    contains_direct_identifiers: false
+    sensitivity_class: restricted_human_data
+    privacy_review:
+      reviewer_role: Security Lead
+      pii_scan: pass
+      notes: "Expression matrix style table; no direct identifiers expected."
+    approval_status: approved_with_restrictions
+    restrictions:
+      - "Use only in secured benchmark environments."
+      - "No raw fixture export in CI artifacts."
+      - "Only aggregate outputs in published benchmark reports."
+    retention_profile: restricted_human_default
+
+  - fixture_path: fixtures/tabular/targets.xlsx
+    source:
+      provider: internal regression fixture
+      source_url: internal
+      source_use_case_id: beta-tabular-misroute-regression
+    license:
+      type: internal_test_data
+      citation_required: false
+      redistribution_allowed: false
+    contains_human_data: false
+    contains_direct_identifiers: false
+    sensitivity_class: internal
+    privacy_review:
+      reviewer_role: Security Lead
+      pii_scan: pass
+      notes: "Synthetic/internal routing safety fixture."
+    approval_status: approved
+    restrictions:
+      - "Internal use only."
+    retention_profile: internal_default
+
+  - fixture_path: fixtures/transcriptomics/counts_matrix.tsv
+    source:
+      provider: internal benchmark fixture
+      source_url: internal
+      source_use_case_id: ngs101-bulk-rnaseq-core-de
+    license:
+      type: internal_test_data
+      citation_required: false
+      redistribution_allowed: false
+    contains_human_data: false
+    contains_direct_identifiers: false
+    sensitivity_class: internal
+    privacy_review:
+      reviewer_role: Security Lead
+      pii_scan: pass
+      notes: "Internal non-identifiable test matrix."
+    approval_status: approved
+    restrictions: []
+    retention_profile: internal_default
+
+  - fixture_path: fixtures/transcriptomics/sample_metadata.tsv
+    source:
+      provider: internal benchmark fixture
+      source_url: internal
+      source_use_case_id: ngs101-bulk-rnaseq-core-de
+    license:
+      type: internal_test_data
+      citation_required: false
+      redistribution_allowed: false
+    contains_human_data: false
+    contains_direct_identifiers: false
+    sensitivity_class: internal
+    privacy_review:
+      reviewer_role: Security Lead
+      pii_scan: pass
+      notes: "No direct identifiers; benchmark metadata only."
+    approval_status: approved
+    restrictions: []
+    retention_profile: internal_default
+
+  - fixture_path: fixtures/genomics/phylo-variant-annotation.v1.tsv
+    source:
+      provider: synthetic (internally generated, non-identifiable)
+      source_url: internal
+      source_use_case_id: phylo-variant-annotation
+    license:
+      type: internal_synthetic
+      citation_required: false
+      redistribution_allowed: true
+    contains_human_data: false
+    contains_direct_identifiers: false
+    sensitivity_class: public
+    checksum_sha256: fc2cddc48c8ba7b7cccc2734c355757c18eec9795d8f1f15e699023a4f91e762
+    privacy_review:
+      reviewer_role: Security Lead
+      pii_scan: pass
+      notes: >
+        Synthetic variant rows with no real individual genotypes.
+        Gene names are real (public knowledge); coordinates are representative.
+        No re-identification risk.
+    approval_status: approved
+    restrictions: []
+    retention_profile: internal_default
+
+  - fixture_path: fixtures/transcriptomics/phylo-grn-analysis.v1.tsv
+    source:
+      provider: synthetic (internally generated, non-identifiable)
+      source_url: internal
+      source_use_case_id: phylo-gene-regulatory-network-analysis
+    license:
+      type: internal_synthetic
+      citation_required: false
+      redistribution_allowed: true
+    contains_human_data: false
+    contains_direct_identifiers: false
+    sensitivity_class: public
+    checksum_sha256: 3aba2d97eb53b9969840c998707226c92c050fc11542efd0ef6d290a3d27cab8
+    privacy_review:
+      reviewer_role: Security Lead
+      pii_scan: pass
+      notes: >
+        Synthetic gene expression matrix (genes x samples).
+        Gene IDs are synthetic ENSGs; expression values are fabricated.
+        No individual sample origin data.
+    approval_status: approved
+    restrictions: []
+    retention_profile: internal_default
+
+  - fixture_path: fixtures/transcriptomics/ngs101-scrna-cellchat.v1.csv
+    source:
+      provider: synthetic (internally generated, non-identifiable)
+      source_url: internal
+      source_use_case_id: ngs101-scrna-cellchat
+    license:
+      type: internal_synthetic
+      citation_required: false
+      redistribution_allowed: true
+    contains_human_data: false
+    contains_direct_identifiers: false
+    sensitivity_class: public
+    checksum_sha256: 9d842aebd29e00b2b5add22f38a348d76706532fc8b05cc9537920067766f3be
+    privacy_review:
+      reviewer_role: Security Lead
+      pii_scan: pass
+      notes: >
+        Synthetic single-cell expression table with fabricated cell IDs and gene values.
+        Cell type labels are generic archetypes (T_cell, NK_cell, etc.).
+        No individual patient or donor data.
+    approval_status: approved
+    restrictions: []
+    retention_profile: internal_default
+
+  - fixture_path: fixtures/epigenomics/ngs101-chipseq-peak-calling.v1.bed
+    source:
+      provider: synthetic (internally generated, non-identifiable)
+      source_url: internal
+      source_use_case_id: ngs101-chipseq-peak-calling
+    license:
+      type: internal_synthetic
+      citation_required: false
+      redistribution_allowed: true
+    contains_human_data: false
+    contains_direct_identifiers: false
+    sensitivity_class: public
+    checksum_sha256: 67723817dd6f49076c0ae66fc188f2bf882f3ba0bea23fae80acceee2e41bfe8
+    privacy_review:
+      reviewer_role: Security Lead
+      pii_scan: pass
+      notes: >
+        Synthetic BED peak file with representative genomic coordinates.
+        Signal and score values are fabricated; no individual sample origin.
+    approval_status: approved
+    restrictions: []
+    retention_profile: internal_default
+
+  - fixture_path: fixtures/genomics/ngs101-gwas-plink.v1.tsv
+    source:
+      provider: synthetic (internally generated, non-identifiable)
+      source_url: internal
+      source_use_case_id: ngs101-gwas-plink
+    license:
+      type: internal_synthetic
+      citation_required: false
+      redistribution_allowed: true
+    contains_human_data: false
+    contains_direct_identifiers: false
+    sensitivity_class: public
+    checksum_sha256: fe30806dc4f423e12ef02af8c76e288b527fa4f97984a8d2e1de8f947ceb3c03
+    privacy_review:
+      reviewer_role: Security Lead
+      pii_scan: pass
+      notes: >
+        Synthetic GWAS summary statistics only (no individual-level genotypes).
+        SNP IDs are synthetic rs_SYN_XXXX; N per cell is homogeneous.
+        No re-identification risk from summary-level data.
+    approval_status: approved
+    restrictions: []
+    retention_profile: internal_default

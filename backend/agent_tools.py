@@ -1987,7 +1987,7 @@ def read_merging(
         Dictionary containing merge status and summary metrics.
     """
     # NOTE: This function is only used by the agent for tool mapping/recognition.
-    # Actual execution happens in main_with_mcp.py dispatch_tool() which directly
+    # Actual execution happens in main.py dispatch_tool() which directly
     # calls the read_merging module functions (merge_reads_from_s3 for S3, run_read_merging_raw for content).
     # The code below is never executed but serves as documentation of the tool's behavior.
     import read_merging
@@ -2935,7 +2935,7 @@ def bio_rerun(
         Dict with status, text summary, run_id, parent_run_id, delta metrics.
     """
     # NOTE: Actual execution is routed through dispatch_tool("bio_rerun", ...)
-    # in main_with_mcp.py which calls BioOrchestrator.rerun().
+    # in main.py which calls BioOrchestrator.rerun().
     # This @tool definition exists for agent routing and documentation.
     return {
         "status": "routed",
@@ -2969,7 +2969,7 @@ def bio_diff_runs(
         Dict with status, text summary of changes, parameter diffs, metric deltas.
     """
     # NOTE: Actual execution is routed through dispatch_tool("bio_diff_runs", ...)
-    # in main_with_mcp.py which calls BioOrchestrator.diff_runs().
+    # in main.py which calls BioOrchestrator.diff_runs().
     # This @tool definition exists for agent routing and documentation.
     return {
         "status": "routed",

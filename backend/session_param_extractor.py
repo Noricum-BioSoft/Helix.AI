@@ -59,10 +59,7 @@ def _uri_looks_like_fastq(uri: str) -> bool:
     if not uri or not isinstance(uri, str):
         return False
     u = uri.lower()
-    return any(
-        u.endswith(ext) or ext in u.split("/")[-1]
-        for ext in [".fastq", ".fq", ".fastq.gz", ".fq.gz"]
-    )
+    return bool(re.search(r"\.(?:fastq|fq)(?:\.gz)?(?:$|[?#])", u))
 
 
 def _uri_looks_like_fasta(uri: str) -> bool:
@@ -70,10 +67,7 @@ def _uri_looks_like_fasta(uri: str) -> bool:
     if not uri or not isinstance(uri, str):
         return False
     u = uri.lower()
-    return any(
-        u.endswith(ext) or ext in u.split("/")[-1]
-        for ext in [".fasta", ".fa", ".fas", ".fna"]
-    )
+    return bool(re.search(r"\.(?:fasta|fa|fas|fna)(?:\.gz)?(?:$|[?#])", u))
 
 
 def _extract_uris_from_result(result: Any) -> List[str]:

@@ -22,7 +22,7 @@ When a user sends a command to Helix.AI, it goes through multiple decision point
 
 ### 1. Request Reception (`/execute` endpoint)
 
-**Location**: `backend/main_with_mcp.py::execute()`
+**Location**: `backend/main.py::execute()`
 
 The FastAPI endpoint receives a POST request with:
 - `command`: User's natural language command
@@ -36,7 +36,7 @@ async def execute(req: CommandRequest, request: Request):
 
 ### 2. Preflight Checks
 
-**Location**: `backend/main_with_mcp.py::execute()`
+**Location**: `backend/main.py::execute()`
 
 Before processing, the system performs several checks:
 
@@ -75,7 +75,7 @@ session_context = history_manager.sessions[req.session_id]
 
 ### 2.5. Approval Gate and Session-Aware State Machine
 
-**Location**: `backend/main_with_mcp.py` (approval gate block) + `backend/workflow_checkpoint.py`
+**Location**: `backend/main.py` (approval gate block) + `backend/workflow_checkpoint.py`
 
 Before intent classification, the system checks whether this turn is part of an ongoing approval workflow.
 
@@ -262,7 +262,7 @@ If no existing tool matches, the system generates a new tool dynamically:
 
 **Code Flow**:
 ```python
-# In main_with_mcp.py::call_mcp_tool()
+# In main.py::call_mcp_tool()
 if tool_name == "tool_generator":
     # Discover inputs
     discovered_inputs = _discover_inputs_from_args(arguments, session_context)
@@ -420,7 +420,7 @@ decision = await self._evaluate_routing_policy(
 
 #### 7.1 Synchronous Execution
 
-**Location**: `backend/main_with_mcp.py::call_mcp_tool()`
+**Location**: `backend/main.py::call_mcp_tool()`
 
 For sync execution, tools run in one of these environments:
 
@@ -491,7 +491,7 @@ if decision.mode == "async":
 
 #### 8.1 Synchronous Results
 
-**Location**: `backend/main_with_mcp.py::execute()`
+**Location**: `backend/main.py::execute()`
 
 For sync execution, results are returned immediately:
 
@@ -533,7 +533,7 @@ return CustomJSONResponse(standard_response)
 
 #### 8.2 Asynchronous Results
 
-**Location**: `backend/main_with_mcp.py::execute()` + `/jobs/{job_id}/status` endpoint
+**Location**: `backend/main.py::execute()` + `/jobs/{job_id}/status` endpoint
 
 For async execution, results are returned via job status polling:
 
@@ -728,7 +728,7 @@ User Command
 
 ### Core Files
 
-- **`backend/main_with_mcp.py`**: FastAPI endpoints, approval gate, tool execution orchestration, `build_standard_response`
+- **`backend/main.py`**: FastAPI endpoints, approval gate, tool execution orchestration, `build_standard_response`
 - **`backend/workflow_checkpoint.py`**: `WorkflowState` enum and `WorkflowCheckpoint` dataclass — the session state machine definition
 - **`backend/history_manager.py`**: Session management, history storage, checkpoint persistence (`save_checkpoint`, `load_checkpoint`, `clear_checkpoint`)
 - **`backend/agent.py`**: BioAgent (LangGraph ReAct), tool mapping, Q&A handling

@@ -1,0 +1,61 @@
+id: case-transcriptomics-ngs101-bulk-rnaseq-core-de
+title: "NGS101 Bulk RNA-seq Core Differential Expression"
+source_refs:
+  - source: ngs101
+    source_use_case_id: ngs101-bulk-rnaseq-core-de
+    source_url: "https://ngs101.com/"
+family: transcriptomics_bulk_rnaseq
+difficulty: beginner
+risk_class: medium
+
+input_fixtures:
+  - fixture_id: counts_tsv
+    path: fixtures/transcriptomics/counts_matrix.tsv
+    expected_format: tsv
+    checksum_sha256: "TBD"
+  - fixture_id: metadata_tsv
+    path: fixtures/transcriptomics/sample_metadata.tsv
+    expected_format: tsv
+    checksum_sha256: "TBD"
+
+prompt: >
+  Run a standard treated vs control bulk RNA-seq differential expression
+  workflow with QC, volcano plot, and pathway enrichment.
+
+expected_route: bulk_rnaseq_analysis
+forbidden_routes:
+  - sequence_alignment
+forbidden_fallbacks:
+  - sequence_alignment
+
+required_steps:
+  - ingest_tabular
+  - validate_metadata
+  - run_qc
+  - run_differential_expression
+  - run_pathway_enrichment
+
+required_outputs:
+  - qc_report
+  - deg_table
+  - volcano_plot
+  - pathway_enrichment
+
+safety_requirements:
+  - model_assumption_note
+  - sample_size_warning_if_low_n
+
+provenance_requirements:
+  - manifest_v1_present
+  - lineage_edges_present
+  - replay_token_present
+
+scoring:
+  weights:
+    routing_correctness: 0.20
+    workflow_correctness: 0.25
+    output_quality: 0.20
+    safety_caveats: 0.10
+    provenance_completeness: 0.15
+    replay_reproducibility: 0.10
+

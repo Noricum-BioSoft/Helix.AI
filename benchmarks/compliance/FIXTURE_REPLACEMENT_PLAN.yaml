@@ -1,0 +1,129 @@
+schema_version: 1.0.0
+updated_at_utc: "2026-04-17T00:00:00Z"
+objective: >
+  Replace all pending placeholder fixtures with approved, benchmark-ready fixtures
+  before release gate execution.
+
+global_owners:
+  benchmark_owner_role: QA/Benchmark Lead
+  privacy_owner_role: Security Lead
+  data_curation_owner_role: Data Platform Engineer
+
+global_exit_criteria:
+  - "No `approval_status: pending` entries remain for release-gated fixtures."
+  - "All replacement fixtures pass privacy review and license checks."
+  - "Scenario files no longer reference `*.placeholder` fixture paths."
+  - "Benchmark gate workflow passes with real observations for replaced cases."
+
+milestones:
+  - id: m1-source-selection
+    target_window: "Sprint 1 / Week 1"
+    deliverables:
+      - "Finalize dataset source for each pending placeholder."
+      - "Record licensing and redistribution permissions."
+  - id: m2-fixture-build
+    target_window: "Sprint 1 / Week 2"
+    deliverables:
+      - "Create sanitized fixture files under `benchmarks/fixtures/`."
+      - "Add checksums and metadata in approval registry."
+  - id: m3-validation-and-cutover
+    target_window: "Sprint 1 / Week 3"
+    deliverables:
+      - "Update scenario files to new fixture paths."
+      - "Run compliance validator and benchmark gate suite."
+      - "Close pending statuses in registry."
+
+replacement_items:
+  - source_use_case_id: phylo-variant-annotation
+    current_fixture_path: fixtures/genomics/phylo-variant-annotation.placeholder
+    target_fixture_path: fixtures/genomics/phylo-variant-annotation.v1.tsv
+    owner_role: Data Platform Engineer
+    reviewer_roles:
+      - Security Lead
+      - QA/Benchmark Lead
+    candidate_source_strategy:
+      primary: "Public benchmark-friendly variant annotation demo dataset (non-identifiable)."
+      fallback: "Synthetic VCF + annotation truth table generated internally."
+    risk_notes:
+      - "High-risk family due to potential clinical interpretation."
+      - "Must include explicit disclaimer coverage checks."
+    required_acceptance_checks:
+      - "License permits internal benchmark redistribution."
+      - "No direct identifiers present."
+      - "Scenario expects route `variant_annotation` and passes forbidden fallback checks."
+      - "Fixture registered as `approved` or `approved_with_restrictions`."
+    target_milestone: m3-validation-and-cutover
+
+  - source_use_case_id: phylo-gene-regulatory-network-analysis
+    current_fixture_path: fixtures/transcriptomics/phylo-gene-regulatory-network-analysis.placeholder
+    target_fixture_path: fixtures/transcriptomics/phylo-grn-analysis.v1.tsv
+    owner_role: Data Platform Engineer
+    reviewer_roles:
+      - Security Lead
+      - QA/Benchmark Lead
+    candidate_source_strategy:
+      primary: "Public bulk RNA-seq expression matrix suitable for co-expression analysis."
+      fallback: "Synthetic expression matrix with embedded module structure."
+    risk_notes:
+      - "Needs stable signal for module/network assertions in scoring."
+    required_acceptance_checks:
+      - "Expression matrix schema documented (genes x samples)."
+      - "Network inference step reproducibility evaluated (tolerance recorded)."
+      - "No placeholder references remain in scenario file."
+    target_milestone: m3-validation-and-cutover
+
+  - source_use_case_id: ngs101-scrna-cellchat
+    current_fixture_path: fixtures/transcriptomics/ngs101-scrna-cellchat.placeholder
+    target_fixture_path: fixtures/transcriptomics/ngs101-scrna-cellchat.v1.h5ad
+    owner_role: Data Platform Engineer
+    reviewer_roles:
+      - Security Lead
+      - QA/Benchmark Lead
+    candidate_source_strategy:
+      primary: "Public scRNA tutorial dataset with permissive academic usage."
+      fallback: "Synthetic scRNA-like matrix + metadata with known cell labels."
+    risk_notes:
+      - "Potential human-origin data requires sensitivity review."
+    required_acceptance_checks:
+      - "Cell metadata redaction verified."
+      - "License and citation fields complete."
+      - "Cell-cell communication output traceability validated."
+    target_milestone: m3-validation-and-cutover
+
+  - source_use_case_id: ngs101-chipseq-peak-calling
+    current_fixture_path: fixtures/epigenomics/ngs101-chipseq-peak-calling.placeholder
+    target_fixture_path: fixtures/epigenomics/ngs101-chipseq-peak-calling.v1.bed
+    owner_role: Data Platform Engineer
+    reviewer_roles:
+      - Security Lead
+      - QA/Benchmark Lead
+    candidate_source_strategy:
+      primary: "Public ChIP-seq peak file and companion metadata."
+      fallback: "Synthetic peak intervals with labeled differential regions."
+    risk_notes:
+      - "Ensure fixture size is CI-friendly and deterministic."
+    required_acceptance_checks:
+      - "Peak schema contract documented."
+      - "Differential peak expectations represented in scorer observations."
+      - "Registry entry includes final checksum."
+    target_milestone: m3-validation-and-cutover
+
+  - source_use_case_id: ngs101-gwas-plink
+    current_fixture_path: fixtures/genomics/ngs101-gwas-plink.placeholder
+    target_fixture_path: fixtures/genomics/ngs101-gwas-plink.v1.tsv
+    owner_role: Data Platform Engineer
+    reviewer_roles:
+      - Security Lead
+      - QA/Benchmark Lead
+    candidate_source_strategy:
+      primary: "Public GWAS summary-statistics style dataset without individual-level genotypes."
+      fallback: "Synthetic GWAS summary table with known top loci."
+    risk_notes:
+      - "Avoid individual-level genotype fixtures in CI."
+      - "High-risk family; enforce interpretation disclaimer checks."
+    required_acceptance_checks:
+      - "Dataset is summary-level only."
+      - "No direct identifiers and no re-identification vectors."
+      - "Scenario route/fallback checks pass with replacement fixture."
+    target_milestone: m3-validation-and-cutover
+

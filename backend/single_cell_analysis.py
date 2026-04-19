@@ -5,7 +5,7 @@ Uses sklearn + pandas + matplotlib (no Seurat/scanpy required).
 For demo H5 data that is not available, generates realistic synthetic
 scRNA-seq data and runs the full pipeline so parameters are re-runnable.
 
-Public API (called from main_with_mcp.py and agent_tools.py):
+Public API (called from main.py and agent_tools.py):
   analyze_single_cell_data(data_file, data_format, steps, question, resolution) -> dict
 """
 from __future__ import annotations

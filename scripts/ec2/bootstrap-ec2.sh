@@ -24,7 +24,7 @@ cd "$HELIX_ROOT"
 
 echo "[bootstrap] HELIX_ROOT=$HELIX_ROOT"
 
-if [[ ! -f "$HELIX_ROOT/backend/main_with_mcp.py" ]]; then
+if [[ ! -f "$HELIX_ROOT/backend/main.py" ]]; then
   echo "Run this from the Helix.AI repository root." >&2
   exit 1
 fi

@@ -1,0 +1,54 @@
+id: case-routing-safety-tabular-no-sequence-fallback
+title: "Routing Safety - Tabular Inputs Must Not Sequence-Fallback"
+source_refs:
+  - source: internal_regression
+    source_use_case_id: beta-tabular-misroute-regression
+family: routing_safety
+difficulty: intermediate
+risk_class: high
+
+input_fixtures:
+  - fixture_id: tabular_dataset_xlsx
+    path: fixtures/tabular/targets.xlsx
+    expected_format: xlsx
+    expected_sheet: ts_final
+    checksum_sha256: "TBD"
+
+prompt: >
+  Load this spreadsheet and rank genes by tumor-vs-normal ratio, then explain
+  why the top 10 candidates are selected.
+
+expected_route: tabular_analysis
+forbidden_routes:
+  - sequence_alignment
+  - single_cell_analysis
+  - bulk_rnaseq_analysis
+forbidden_fallbacks:
+  - sequence_alignment
+  - generic_rephrase_and_retry
+
+required_steps:
+  - ingest_tabular
+  - detect_numeric_columns
+  - derive_column_ratio
+  - rank_and_select
+  - explain_selection
+
+required_outputs:
+  - table
+  - explanation
+
+safety_requirements:
+  - explicit_assumptions
+  - uncertainty_note
+
+provenance_requirements:
+  - route_decision_trace_present
+  - fallback_events_present
+  - manifest_v1_present
+  - lineage_edges_present
+
+release_gate:
+  severity: critical
+  must_pass: true
+

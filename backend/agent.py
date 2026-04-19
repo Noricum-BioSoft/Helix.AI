@@ -1766,7 +1766,7 @@ class CommandProcessor:
         Stage 5: Handoff to Execution Broker.
         
         This is a synchronous handoff - the broker will be invoked by the router
-        in main_with_mcp.py. We just validate the handoff is allowed.
+        in main.py. We just validate the handoff is allowed.
         
         Returns:
             Tool mapping for broker
@@ -2297,7 +2297,7 @@ class CommandProcessor:
             print(f"[execute_pipeline] Non-FASTQ workflow tools: {sorted(step_tools)}")
 
         # ── 3. Execute each tool, collect results ───────────────────────────
-        from backend.main_with_mcp import dispatch_tool   # lazy import inside agent
+        from backend.main import dispatch_tool   # lazy import inside agent
 
         seq_payload = fasta_sequences or command
         fetch_args: Dict[str, object] = {}
@@ -2650,7 +2650,7 @@ async def handle_command(
 ):
     """
     Use agent for tool mapping only - identify which tool to use and parameters.
-    Tool execution is handled by the router/tool path in main_with_mcp.py.
+    Tool execution is handled by the router/tool path in main.py.
     
     When execute_plan=True the agent will attempt to dispatch each pipeline step
     as an async job rather than returning another plan document.

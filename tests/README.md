@@ -232,7 +232,7 @@ test('renders plasmid visualization with correct data', () => {
 ```python
 # tests/integration/test_workflows/test_phylogenetic_workflow.py
 import pytest
-from backend.main_with_mcp import app
+from backend.main import app
 from fastapi.testclient import TestClient
 
 def test_complete_phylogenetic_workflow():
@@ -274,7 +274,7 @@ def test_complete_phylogenetic_workflow():
 3. **API Connection Issues**:
    ```bash
    # Ensure backend is running
-   python backend/main_with_mcp.py &
+   python backend/main.py &
    ```
 
 ### Debug Mode

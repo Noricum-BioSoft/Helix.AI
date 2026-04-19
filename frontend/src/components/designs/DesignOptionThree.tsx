@@ -164,7 +164,7 @@ export const DesignOptionThree: React.FC<PromptDesignProps> = ({
               <Tab.Pane eventKey="upload">
                 <h5>Upload Sequence Files</h5>
                 <p className="text-muted small">
-                  Drag and drop FASTA/CSV files or pick one from your computer. Uploaded files stay in context for subsequent commands.
+                  Drag and drop supported files or pick one from your computer. Max 20 MB per file; uploaded files stay in session context for subsequent commands.
                 </p>
                 <div
                   className={`p-5 text-center rounded-4 border ${dragActive ? 'border-brand-blue bg-blue-subtle' : 'border-brand-gold bg-gold-subtle'}`}
@@ -176,7 +176,7 @@ export const DesignOptionThree: React.FC<PromptDesignProps> = ({
                 >
                   <div className="mb-3" style={{ fontSize: '3rem' }}>🗂️</div>
                   <h6 className="fw-semibold">Drop FASTA or CSV files here</h6>
-                  <p className="text-muted small mb-3">{dragActive ? 'Release to upload your file.' : 'Supports FASTA (.fasta, .fa, .fas), CSV (.csv), TXT (.txt) formats.'}</p>
+                  <p className="text-muted small mb-3">{dragActive ? 'Release to upload your file.' : 'Supports FASTA/FASTQ/CSV/TXT (optionally .gz), up to 20 MB each.'}</p>
                   <Button variant="outline-primary" onClick={onBrowseClick}>Browse Files</Button>
                 </div>
 
@@ -193,7 +193,11 @@ export const DesignOptionThree: React.FC<PromptDesignProps> = ({
                         <div key={index} className="d-flex justify-content-between align-items-center mb-2 pb-2 border-bottom">
                           <div>
                             <div className="fw-semibold small">{file.name}</div>
-                            <div className="text-muted small">{file.content.length.toLocaleString()} characters</div>
+                            <div className="text-muted small">
+                              {(file.size / (1024 * 1024)).toFixed(2)} MB
+                              {file.status ? ` • ${file.status}` : ''}
+                              {file.error ? ` • ${file.error}` : ''}
+                            </div>
                           </div>
                           <Button variant="outline-secondary" size="sm" onClick={() => onFileRemove(index)}>
                             Remove

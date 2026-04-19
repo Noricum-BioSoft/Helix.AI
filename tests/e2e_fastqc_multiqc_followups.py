@@ -3,7 +3,7 @@
 End-to-end test: 16S demo + FastQC/MultiQC follow-ups via API.
 
 Run with backend on localhost:8001:
-  HELIX_MOCK_MODE=1 uvicorn backend.main_with_mcp:app --host 0.0.0.0 --port 8001
+  HELIX_MOCK_MODE=1 uvicorn backend.main:app --host 0.0.0.0 --port 8001
 
 Then: python tests/e2e_fastqc_multiqc_followups.py
 

@@ -3,7 +3,8 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { MSAView } from 'react-msaview';
 import Plot from 'react-plotly.js';
-import { API_BASE_URL, mcpApi } from './services/mcpApi';
+import { API_BASE_URL, helixApi } from './services/helixApi';
+import type { UploadedFileResponse } from './services/helixApi';
 import { CommandParser, ParsedCommand } from './utils/commandParser';
 import { PlasmidDataVisualizer, PlasmidRepresentativesVisualizer } from './components/PlasmidVisualizer';
 import { PhylogeneticTree } from './components/PhylogeneticTree';
@@ -14,7 +15,7 @@ import Button from 'react-bootstrap/Button';
 import Card from 'react-bootstrap/Card';
 import Modal from 'react-bootstrap/Modal';
 import { DesignOptionOne, DesignOptionTwo, DesignOptionThree } from './components/designs';
-import type { PromptDesignProps, QuickExample } from './components/designs';
+import type { PromptDesignProps, QuickExample, UploadedSessionFile } from './components/designs';
 import { getExampleWithSequences, sampleSequences } from './utils/sampleSequences';
 import { theme } from './theme';
 import { JobsPanel } from './components/JobsPanel';
@@ -24,6 +25,24 @@ import { getDemoScenarioById, getDemoScenarioByTool, getDemoScenarioByCommandAnd
 import { ThinkingIndicator, ActivityIndicator } from './components/ThinkingIndicator';
 
 const SESSION_STORAGE_KEY = 'helix_session_id';
+const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+const MAX_UPLOAD_MB = 20;
+const ALLOWED_UPLOAD_EXTENSIONS = [
+  // Sequence / FASTA / FASTQ
+  '.fasta',
+  '.fa',
+  '.fas',
+  '.fastq',
+  '.fq',
+  '.gz',
+  // Tabular / structured data
+  '.csv',
+  '.tsv',
+  '.xlsx',
+  '.xls',
+  // Generic text
+  '.txt',
+];
 
 interface HistoryItem {
   input: string;
@@ -88,7 +107,7 @@ function App() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [commandMode, setCommandMode] = useState<'structured' | 'natural'>('natural');
   const [activeTab, setActiveTab] = useState<string>('command');
-  const [uploadedFiles, setUploadedFiles] = useState<Array<{ name: string; content: string }>>([]);
+  const [uploadedFiles, setUploadedFiles] = useState<UploadedSessionFile[]>([]);
   const [workflowContext, setWorkflowContext] = useState<WorkflowContext>({});
   const [isInitialized, setIsInitialized] = useState(false);
   // Track which pipeline commands have already been submitted so the Execute button
@@ -159,7 +178,7 @@ function App() {
     setSessionModalOpen(true);
     setSessionInfoLoading(true);
     try {
-      const info = await mcpApi.getSessionInfo(sessionId);
+      const info = await helixApi.getSessionInfo(sessionId);
       setSessionInfo(info);
     } catch (error) {
       console.error('Failed to fetch session info:', error);
@@ -171,7 +190,7 @@ function App() {
 
   const handleNewSession = async () => {
     try {
-      const res = await mcpApi.createSession() as { session_id: string };
+      const res = await helixApi.createSession() as { session_id: string };
       setSessionId(res.session_id);
       try {
         sessionStorage.setItem(SESSION_STORAGE_KEY, res.session_id);
@@ -220,7 +239,7 @@ function App() {
         try {
           const stored = sessionStorage.getItem(SESSION_STORAGE_KEY);
           if (stored && stored.trim()) {
-            const info = await mcpApi.getSessionInfo(stored) as { session?: { history?: unknown[] } };
+            const info = await helixApi.getSessionInfo(stored) as { session?: { history?: unknown[] } };
             id = stored;
             sessionData = info;
             console.log('Session restored from storage:', stored);
@@ -231,7 +250,7 @@ function App() {
           } catch {}
         }
         if (!id) {
-          const res = await mcpApi.createSession() as { session_id: string };
+          const res = await helixApi.createSession() as { session_id: string };
           id = res.session_id;
           try {
             sessionStorage.setItem(SESSION_STORAGE_KEY, id);
@@ -257,7 +276,7 @@ function App() {
 
   const checkServerHealth = async () => {
     try {
-      const health = await mcpApi.healthCheck();
+      const health = await helixApi.healthCheck();
       const status = (health as any)?.status;
       if (typeof status !== 'string' || !status.trim()) {
         throw new Error('Invalid health response');
@@ -266,6 +285,103 @@ function App() {
     } catch (error) {
       setServerStatus('error');
       console.error('Server health check failed:', error);
+    }
+  };
+
+  const mapUploadedApiFile = (file: UploadedFileResponse): UploadedSessionFile => ({
+    file_id: file.file_id,
+    name: file.original_filename || file.filename,
+    size: file.size,
+    status: 'uploaded',
+    local_path: file.local_path,
+    uploaded_at: file.uploaded_at,
+  });
+
+  const ensureSessionId = async (): Promise<string> => {
+    if (sessionId) return sessionId;
+    const res = await helixApi.createSession() as { session_id: string };
+    setSessionId(res.session_id);
+    try {
+      sessionStorage.setItem(SESSION_STORAGE_KEY, res.session_id);
+    } catch {
+      // ignore storage errors
+    }
+    return res.session_id;
+  };
+
+  const validateSelectedFiles = (files: File[]): { accepted: File[]; rejected: UploadedSessionFile[] } => {
+    const accepted: File[] = [];
+    const rejected: UploadedSessionFile[] = [];
+    files.forEach((file) => {
+      const lowerName = file.name.toLowerCase();
+      const hasValidExt = ALLOWED_UPLOAD_EXTENSIONS.some((ext) => lowerName.endsWith(ext))
+        || lowerName.endsWith('.fastq.gz')
+        || lowerName.endsWith('.fq.gz');
+      if (!hasValidExt) {
+        rejected.push({
+          name: file.name,
+          size: file.size,
+          status: 'failed',
+          error: 'Unsupported type — accepted: FASTA/FASTQ (.fa .fas .fasta .fastq .fq .gz), tabular (.csv .tsv .xlsx .xls), or .txt',
+        });
+        return;
+      }
+      if (file.size > MAX_UPLOAD_BYTES) {
+        rejected.push({
+          name: file.name,
+          size: file.size,
+          status: 'failed',
+          error: `Exceeds ${MAX_UPLOAD_MB}MB`,
+        });
+        return;
+      }
+      accepted.push(file);
+    });
+    return { accepted, rejected };
+  };
+
+  const handleUploadFiles = async (files: File[]) => {
+    if (!files.length) return;
+
+    const { accepted, rejected } = validateSelectedFiles(files);
+    if (rejected.length > 0) {
+      setUploadedFiles((prev) => [...prev, ...rejected]);
+    }
+    if (accepted.length === 0) {
+      return;
+    }
+
+    const uploading: UploadedSessionFile[] = accepted.map((file) => ({
+      name: file.name,
+      size: file.size,
+      status: 'uploading',
+    }));
+    setUploadedFiles((prev) => [...prev, ...uploading]);
+
+    try {
+      const sid = await ensureSessionId();
+      const response = await helixApi.uploadSessionFiles(sid, accepted);
+      const uploaded = (response.files || []).map(mapUploadedApiFile);
+      setUploadedFiles((prev) => {
+        const withoutPending = prev.filter(
+          (entry) => !(entry.status === 'uploading' && accepted.some((file) => file.name === entry.name && file.size === entry.size)),
+        );
+        return [...withoutPending, ...uploaded];
+      });
+    } catch (error) {
+      console.error('Upload failed:', error);
+      setUploadedFiles((prev) => {
+        const withoutPending = prev.filter(
+          (entry) => !(entry.status === 'uploading' && accepted.some((file) => file.name === entry.name && file.size === entry.size)),
+        );
+        const failed = accepted.map((file) => ({
+          name: file.name,
+          size: file.size,
+          status: 'failed' as const,
+          error: 'Upload failed',
+        }));
+        return [...withoutPending, ...failed];
+      });
     }
   };
 
@@ -345,24 +461,13 @@ function App() {
       console.log('Enhanced command:', finalCommand);
       console.log('Workflow context before sending:', workflowContext);
       
-      // If there are uploaded files, append their content to the command
-      if (uploadedFiles.length > 0) {
-        uploadedFiles.forEach((file) => {
-          // Detect R1/R2 pattern for paired-end FASTQ files
-          if (file.name.includes('R1') || file.name.includes('_1') || file.name.endsWith('_1.fastq') || file.name.includes('_R1')) {
-            finalCommand = `${finalCommand}\n\nForward reads (${file.name}):\n${file.content}`;
-          } else if (file.name.includes('R2') || file.name.includes('_2') || file.name.endsWith('_2.fastq') || file.name.includes('_R2')) {
-            finalCommand = `${finalCommand}\n\nReverse reads (${file.name}):\n${file.content}`;
-          } else {
-            finalCommand = `${finalCommand}\n\nFile content (${file.name}):\n${file.content}`;
-          }
-        });
-      }
+      // Uploaded files are now persisted server-side under the session directory.
+      // Commands should reference session context rather than embedding file contents.
       
       // ALWAYS use the agent endpoint - never bypass it
       // The agent will handle routing, tool selection, and execution
       console.log('Calling agent via /execute endpoint...');
-      response = await mcpApi.executeCommand(finalCommand, sessionId || undefined);
+      response = await helixApi.executeCommand(finalCommand, sessionId || undefined);
       console.log('Agent response:', response);
       
       // Update session ID if the backend created one automatically
@@ -488,7 +593,6 @@ function App() {
     } finally {
       if (clearInputsAfter) {
         setCommand('');
-        setUploadedFiles([]); // Clear uploaded files after processing
       }
       setLoading(false);
     }
@@ -507,21 +611,11 @@ function App() {
     try {
       let finalCommand = enhanceCommandWithContext(command);
 
-      if (uploadedFiles.length > 0) {
-        uploadedFiles.forEach((file) => {
-          if (file.name.includes('R1') || file.name.includes('_1') || file.name.endsWith('_1.fastq') || file.name.includes('_R1')) {
-            finalCommand = `${finalCommand}\n\nForward reads (${file.name}):\n${file.content}`;
-          } else if (file.name.includes('R2') || file.name.includes('_2') || file.name.endsWith('_2.fastq') || file.name.includes('_R2')) {
-            finalCommand = `${finalCommand}\n\nReverse reads (${file.name}):\n${file.content}`;
-          } else {
-            finalCommand = `${finalCommand}\n\nFile content (${file.name}):\n${file.content}`;
-          }
-        });
-      }
+      // Uploaded files are persisted by session and should not be inlined into prompts.
 
       // ALWAYS use /execute endpoint - the agent handles everything
       // If files are needed, they should be included in the command text or handled by the agent
-      const response = await mcpApi.executeCommand(finalCommand, sessionId || undefined);
+      const response = await helixApi.executeCommand(finalCommand, sessionId || undefined);
 
       if ((response as any).session_id && !sessionId) {
         const sid = (response as any).session_id;
@@ -550,7 +644,6 @@ function App() {
       setHistory(prev => [historyItem, ...prev]);
     } finally {
       setCommand('');
-      setUploadedFiles([]);
       setAgentLoading(false);
     }
   };
@@ -564,7 +657,7 @@ function App() {
     setExecutedPipelineCommands(prev => new Set([...prev, originalCommand]));
     const activityId = addActivity('Submitting pipeline jobs...');
     try {
-      const response = await mcpApi.executePipelinePlan(originalCommand, sessionId || undefined);
+      const response = await helixApi.executePipelinePlan(originalCommand, sessionId || undefined);
       if ((response as any).session_id && !sessionId) {
         const sid = (response as any).session_id;
         setSessionId(sid);
@@ -620,23 +713,7 @@ function App() {
     setDragActive(false);
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       const files = Array.from(e.dataTransfer.files);
-      const newFiles: Array<{ name: string; content: string }> = [];
-      let filesRead = 0;
-      
-      files.forEach((file) => {
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          const content = event.target?.result as string;
-          newFiles.push({ name: file.name, content });
-          filesRead++;
-          
-          // When all files are read, update state
-          if (filesRead === files.length) {
-            setUploadedFiles(prev => [...prev, ...newFiles]);
-          }
-        };
-        reader.readAsText(file);
-      });
+      void handleUploadFiles(files);
     }
   };
 
@@ -655,23 +732,8 @@ function App() {
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       const files = Array.from(e.target.files);
-      const newFiles: Array<{ name: string; content: string }> = [];
-      let filesRead = 0;
-      
-      files.forEach((file) => {
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          const content = event.target?.result as string;
-          newFiles.push({ name: file.name, content });
-          filesRead++;
-          
-          // When all files are read, update state
-          if (filesRead === files.length) {
-            setUploadedFiles(prev => [...prev, ...newFiles]);
-          }
-        };
-        reader.readAsText(file);
-      });
+      void handleUploadFiles(files);
+      e.target.value = '';
     }
   };
 
@@ -2627,7 +2689,7 @@ function App() {
           type="file"
           ref={fileInputRef}
           style={{ display: 'none' }}
-          accept=".fasta,.fa,.fas,.fastq,.csv,.txt"
+          accept=".fasta,.fa,.fas,.fastq,.fq,.gz,.csv,.tsv,.xlsx,.xls,.txt"
           multiple
           onChange={handleFileInput}
         />
@@ -2911,7 +2973,9 @@ function App() {
                     <strong>{file.name}</strong>
                     <br />
                     <small className="text-muted">
-                      Content length: {file.content.length.toLocaleString()} characters
+                      {(file.size / (1024 * 1024)).toFixed(2)} MB
+                      {file.status ? ` • ${file.status}` : ''}
+                      {file.error ? ` • ${file.error}` : ''}
                     </small>
                   </div>
                   <button 

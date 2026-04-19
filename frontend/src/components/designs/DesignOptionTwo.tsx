@@ -174,7 +174,11 @@ export const DesignOptionTwo: React.FC<PromptDesignProps> = ({
                       <div key={index} className="d-flex justify-content-between align-items-center mb-2 pb-2 border-bottom">
                         <div>
                           <div className="fw-semibold small">{file.name}</div>
-                          <div className="text-muted small">{file.content.length.toLocaleString()} characters</div>
+                          <div className="text-muted small">
+                            {(file.size / (1024 * 1024)).toFixed(2)} MB
+                            {file.status ? ` • ${file.status}` : ''}
+                            {file.error ? ` • ${file.error}` : ''}
+                          </div>
                         </div>
                         <Button variant="outline-secondary" size="sm" onClick={() => onFileRemove(index)}>
                           Remove

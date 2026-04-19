@@ -1,0 +1,51 @@
+id: case-phylo-variant-annotation
+title: Variant Annotation
+source_refs:
+- source: phylo
+  source_use_case_id: phylo-variant-annotation
+  source_url: https://phylo.bio/use-cases
+family: variant_annotation
+difficulty: intermediate
+risk_class: high
+input_fixtures:
+- fixture_id: phylo-variant-annotation-input
+  path: fixtures/genomics/phylo-variant-annotation.v1.tsv
+  expected_format: TSV (CHROM/POS/REF/ALT/GENE/CONSEQUENCE/IMPACT/scores)
+  checksum_sha256: fc2cddc48c8ba7b7cccc2734c355757c18eec9795d8f1f15e699023a4f91e762
+prompt: Perform the 'Variant Annotation' workflow for the provided inputs. Use the
+  appropriate variant annotation capability and return a scientifically defensible
+  result with explicit assumptions.
+expected_route: variant_annotation
+forbidden_routes:
+- sequence_alignment
+- single_cell_analysis
+- bulk_rnaseq_analysis
+forbidden_fallbacks:
+- sequence_alignment
+- generic_rephrase_and_retry
+required_steps:
+- ingest_variants
+- annotate
+- prioritize
+- summarize_and_explain
+required_outputs:
+- table
+- report
+- explanation
+safety_requirements:
+- explicit_assumptions
+- uncertainty_note
+- clinical_interpretation_disclaimer
+provenance_requirements:
+- manifest_v1_present
+- lineage_edges_present
+- fallback_events_present
+- route_decision_trace_present
+scoring:
+  weights:
+    routing_correctness: 0.25
+    workflow_correctness: 0.2
+    output_quality: 0.2
+    safety_caveats: 0.1
+    provenance_completeness: 0.15
+    replay_reproducibility: 0.1

@@ -83,7 +83,7 @@ class DeployedBackendTester:
     
     def list_tools(self) -> Dict[str, Any]:
         """List available tools"""
-        response = self._make_request('GET', '/mcp/tools')
+        response = self._make_request('GET', '/tools/list')
         assert response.status_code == 200, f"Expected 200, got {response.status_code}"
         return response.json()
 

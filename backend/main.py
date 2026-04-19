@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException
-from fastapi import Request
+from fastapi import File, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel
@@ -14,6 +14,7 @@ import os
 import shutil
 import numpy as np
 import logging
+import re
 from datetime import datetime, timezone
 import uuid
 
@@ -38,7 +39,7 @@ logger = logging.getLogger(__name__)
 logger.info("Backend application starting up...")
 # Reload with updated env vars
 
-from backend.history_manager import history_manager
+from backend.history_manager import history_manager, sanitize_command_for_storage
 from backend.tool_schemas import list_tool_schemas
 from backend.context_builder import _truncate_sequence
 from backend.orchestration.action_planner import (
@@ -57,6 +58,11 @@ from backend.orchestration.execution_router import (
     normalize_fastqc_parameters,
     preflight_tool_bindings as router_preflight_tool_bindings,
 )
+from backend.orchestration.upload_intake_policy import (
+    evaluate_upload_intake,
+    get_policy_profile,
+    policy_profile_defaults,
+)
 from backend.orchestration.artifact_resolver import resolve_semantic_reference
 from backend.orchestration.tool_registry import dispatch_via_registry
 from backend.orchestration.visualization_resolver import determine_visualization_type
@@ -66,7 +72,7 @@ from backend.execution_broker import ExecutionBroker, ExecutionRequest
 
 # NOTE: handle_command from backend.agent is lazily imported inline (not at module level)
 # to avoid loading heavy LLM dependencies (langgraph, langchain) during server startup.
-# This keeps lightweight endpoints like /health and /mcp/tools fast, and allows the service
+# This keeps lightweight endpoints like /health and /tools/list fast, and allows the service
 # to work in sandbox/CI environments where LLM dependencies may not be installed.
 # See the three locations where "from backend.agent import handle_command" appears for details.
 
@@ -377,10 +383,12 @@ def _analyze_plan_execution(steps: List[Dict[str, Any]]) -> Dict[str, Any]:
 def _store_pending_plan(session_id: str, command: str, plan: Dict[str, Any]) -> None:
     if not (hasattr(history_manager, "sessions") and session_id in history_manager.sessions):
         return
+    command_storage = sanitize_command_for_storage(command)
     history_manager.sessions[session_id]["pending_plan"] = {
-        "command": command,
+        "command": command_storage["command"],
         "plan": plan,
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "command_storage": command_storage["meta"],
     }
 
 
@@ -497,12 +505,12 @@ class CommandRequest(BaseModel):
     session_id: Optional[str] = None
     execute_plan: Optional[bool] = False  # True → skip planning, dispatch each step as async job
 
-class MCPToolRequest(BaseModel):
+class HelixToolRequest(BaseModel):
     tool_name: str
     arguments: Dict[str, Any]
     session_id: Optional[str] = None
 
-class MCPResponse(BaseModel):
+class HelixToolResponse(BaseModel):
     success: bool
     result: Dict[str, Any]
     error: Optional[str] = None
@@ -550,8 +558,41 @@ class AgentCommandRequest(BaseModel):
 # Limits and validation utilities
 # -------------------------------
 # Max upload size for hosted/small-dataset mode. Enforced on prompt attachments and dataset register.
-# Set HELIX_MAX_UPLOAD_BYTES (bytes) or HELIX_MAX_UPLOAD_MB (megabytes). Default 10 MB; set to 0 to disable limit.
-TEN_MB_BYTES = 10 * 1024 * 1024
+# Set HELIX_MAX_UPLOAD_BYTES (bytes) or HELIX_MAX_UPLOAD_MB (megabytes). Default 20 MB; set to 0 to disable limit.
+TWENTY_MB_BYTES = 20 * 1024 * 1024
+UPLOAD_CHUNK_BYTES = 1024 * 1024  # 1MB
+ALLOWED_UPLOAD_EXTENSIONS = {
+    # Sequence / FASTA / FASTQ
+    ".fasta",
+    ".fa",
+    ".fas",
+    ".fastq",
+    ".fq",
+    ".gz",
+    # Tabular / structured data
+    ".csv",
+    ".tsv",
+    ".xlsx",
+    ".xls",
+    # Variants
+    ".vcf",
+    ".bcf",
+    # Genomic intervals / annotation
+    ".bed",
+    ".gff",
+    ".gff3",
+    ".gtf",
+    # Single-cell
+    ".h5ad",
+    ".loom",
+    ".h5",
+    # Alignment
+    ".sam",
+    ".bam",
+    ".cram",
+    # Generic text
+    ".txt",
+}
 
 def _get_max_upload_bytes() -> int:
     """Return max allowed upload size in bytes. 0 means no limit (backend behavior unchanged)."""
@@ -567,13 +608,87 @@ def _get_max_upload_bytes() -> int:
             return int(float(val) * 1024 * 1024)
         except ValueError:
             pass
-    return TEN_MB_BYTES
+    return TWENTY_MB_BYTES
+
+
+def _sanitize_uploaded_filename(filename: str) -> str:
+    """Normalize a user-provided filename to a safe local file name."""
+    base = Path(filename or "").name.strip()
+    if not base:
+        base = f"upload-{uuid.uuid4().hex[:8]}.dat"
+    sanitized = re.sub(r"[^A-Za-z0-9._-]", "_", base)
+    sanitized = sanitized.lstrip(".")
+    if not sanitized:
+        sanitized = f"upload-{uuid.uuid4().hex[:8]}.dat"
+    return sanitized
+
+
+def _is_allowed_uploaded_filename(filename: str) -> bool:
+    lower_name = filename.lower()
+    if lower_name.endswith(".fastq.gz") or lower_name.endswith(".fq.gz"):
+        return True
+    return any(lower_name.endswith(ext) for ext in ALLOWED_UPLOAD_EXTENSIONS)
+
+
+def _emit_policy_audit_event(event_type: str, session_id: str, payload: Dict[str, Any]) -> None:
+    event = {
+        "event_type": event_type,
+        "session_id": session_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "payload": payload,
+    }
+    logger.info("POLICY_AUDIT %s", json.dumps(event, default=str))
+
+
+def _get_policy_pending_uploads(session_id: str) -> List[Dict[str, Any]]:
+    session = history_manager.get_session(session_id) or {}
+    metadata = session.get("metadata", {})
+    uploaded_files = metadata.get("uploaded_files", []) or []
+    pending: List[Dict[str, Any]] = []
+    for entry in uploaded_files:
+        if bool(entry.get("requires_policy_approval")) and entry.get("policy_state") == "approval_required":
+            pending.append(entry)
+    return pending
+
+
+def _approve_policy_pending_uploads(session_id: str, approver_note: str) -> int:
+    session = history_manager.get_session(session_id)
+    if not session:
+        return 0
+    metadata = session.setdefault("metadata", {})
+    uploaded_files = metadata.setdefault("uploaded_files", [])
+    approved_count = 0
+    for entry in uploaded_files:
+        if bool(entry.get("requires_policy_approval")) and entry.get("policy_state") == "approval_required":
+            entry["policy_state"] = "approved_for_execution"
+            entry["policy_approved_at"] = datetime.now(timezone.utc).isoformat()
+            entry["policy_approval_note"] = approver_note
+            approved_count += 1
+    if approved_count > 0:
+        session["updated_at"] = datetime.now().isoformat()
+        history_manager._save_session(session_id)  # noqa: SLF001 - central session persistence hook
+    return approved_count
+
+
+def _make_unique_path(path: Path) -> Path:
+    if not path.exists():
+        return path
+    stem = path.stem
+    suffix = path.suffix
+    counter = 1
+    while True:
+        candidate = path.with_name(f"{stem}_{counter}{suffix}")
+        if not candidate.exists():
+            return candidate
+        counter += 1
 
 MAX_PROMPT_TOKENS = 20000  # Relax limit to avoid false 413s for longer prompts
 MAX_PROMPTS_PER_DAY = 100
+MAX_SESSIONS_PER_HOUR = int(os.getenv("HELIX_MAX_SESSIONS_PER_HOUR", "60"))
 
 # In-memory per-identity counters. In production, move to Redis or DB.
 _daily_prompt_counters: Dict[str, Dict[str, int]] = {}
+_hourly_session_create_counters: Dict[str, Dict[str, int]] = {}
 
 def _get_request_identity(req: Request, session_id: Optional[str]) -> str:
     """
@@ -594,6 +709,31 @@ def _check_and_increment_daily_counter(identity: str) -> None:
     if count >= MAX_PROMPTS_PER_DAY:
         raise HTTPException(status_code=429, detail=f"Daily prompt limit reached ({MAX_PROMPTS_PER_DAY}). Try again tomorrow.")
     by_identity[day] = count + 1
+
+
+def _current_hour_bucket() -> str:
+    now = datetime.now(timezone.utc)
+    return now.strftime("%Y-%m-%dT%H:00Z")
+
+
+def _check_and_increment_session_create_counter(request: Request) -> None:
+    """Limit session creation bursts by source IP to reduce bot-driven session churn."""
+    client_ip = request.client.host if request and request.client else "unknown"
+    # Keep local development flows unrestricted.
+    if client_ip in {"127.0.0.1", "::1"}:
+        return
+    by_ip = _hourly_session_create_counters.setdefault(client_ip, {})
+    hour = _current_hour_bucket()
+    count = by_ip.get(hour, 0)
+    if count >= MAX_SESSIONS_PER_HOUR:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                "Session creation rate limit exceeded for this source. "
+                f"Try again next hour (limit: {MAX_SESSIONS_PER_HOUR}/hour)."
+            ),
+        )
+    by_ip[hour] = count + 1
 
 def _estimate_token_count(text: str) -> int:
     """
@@ -1012,29 +1152,23 @@ async def _execute_routed_tool(
     )
     params = norm.arguments
     if not norm.ok and isinstance(norm.result, dict):
-        std = build_standard_response(
-            prompt=req.command,
-            tool=selected_tool,
-            result=norm.result,
-            session_id=req.session_id,
-            mcp_route="/execute",
-            success=True,
+        return await _dispatch_result(
+            req,
+            selected_tool,
+            norm.result,
+            tool_args=params,
             execution_path=validation_execution_path,
         )
-        return CustomJSONResponse(std)
 
     preflight = _preflight_tool_bindings(selected_tool, params)
     if isinstance(preflight, dict):
-        std = build_standard_response(
-            prompt=req.command,
-            tool=selected_tool,
-            result=preflight,
-            session_id=req.session_id,
-            mcp_route="/execute",
-            success=True,
+        return await _dispatch_result(
+            req,
+            selected_tool,
+            preflight,
+            tool_args=params,
             execution_path=f"{validation_execution_path}_binding",
         )
-        return CustomJSONResponse(std)
 
     if selected_tool == "fastqc_quality_analysis":
         if "session_id" not in params:
@@ -1736,7 +1870,7 @@ def build_standard_response(
     return response
 
 def _validate_files(files: Optional[List[Dict[str, Any]]]) -> None:
-    """Reject uploads that exceed HELIX_MAX_UPLOAD_BYTES / HELIX_MAX_UPLOAD_MB (default 10 MB). No limit if set to 0."""
+    """Reject uploads that exceed HELIX_MAX_UPLOAD_BYTES / HELIX_MAX_UPLOAD_MB (default 20 MB). No limit if set to 0."""
     if not files:
         return
     max_bytes = _get_max_upload_bytes()
@@ -1755,6 +1889,147 @@ def _validate_files(files: Optional[List[Dict[str, Any]]]) -> None:
                 status_code=413,
                 detail=f"Uploaded file #{idx+1} content exceeds the allowed size limit ({max_bytes // (1024*1024)} MB)."
             )
+
+
+async def _persist_upload_to_session(
+    session_id: str,
+    upload: UploadFile,
+    *,
+    max_bytes: int,
+) -> Dict[str, Any]:
+    """Persist one uploaded file under session uploads/raw and return metadata."""
+    original_name = upload.filename or "upload.dat"
+    safe_name = _sanitize_uploaded_filename(original_name)
+    if not _is_allowed_uploaded_filename(safe_name):
+        raise HTTPException(
+            status_code=415,
+            detail=(
+                f"Unsupported file type for '{original_name}'. "
+                "Allowed: FASTA/FASTQ (.fa .fas .fasta .fastq .fq .gz), "
+                "tabular (.csv .tsv .xlsx .xls), "
+                "variants (.vcf .bcf), intervals (.bed .gff .gff3 .gtf), "
+                "single-cell (.h5ad .loom .h5), alignment (.sam .bam .cram), "
+                "plain text (.txt)."
+            ),
+        )
+
+    upload_paths = history_manager.ensure_session_upload_directories(session_id)
+    raw_dir = Path(upload_paths["raw"])
+    dest_path = _make_unique_path(raw_dir / safe_name)
+
+    first_chunk = await upload.read(UPLOAD_CHUNK_BYTES)
+    intake_decision = evaluate_upload_intake(
+        filename=safe_name,
+        content_type=upload.content_type or "application/octet-stream",
+        first_chunk=first_chunk,
+    )
+    if intake_decision.decision == "block":
+        await upload.close()
+        _emit_policy_audit_event(
+            "upload_blocked",
+            session_id,
+            {
+                "filename": original_name,
+                "sanitized_filename": safe_name,
+                "content_type": upload.content_type or "application/octet-stream",
+                "intake_policy": intake_decision.to_dict(),
+            },
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Upload blocked by intake policy for '{original_name}'. "
+                f"Reason: {intake_decision.reason}"
+            ),
+        )
+
+    size = len(first_chunk or b"")
+    try:
+        with open(dest_path, "wb") as out_f:
+            if first_chunk:
+                if max_bytes > 0 and size > max_bytes:
+                    out_f.close()
+                    try:
+                        dest_path.unlink()
+                    except Exception:
+                        pass
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(
+                            f"File '{original_name}' exceeds the allowed upload size "
+                            f"({max_bytes // (1024*1024)} MB)."
+                        ),
+                    )
+                out_f.write(first_chunk)
+            while True:
+                chunk = await upload.read(UPLOAD_CHUNK_BYTES)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if max_bytes > 0 and size > max_bytes:
+                    out_f.close()
+                    try:
+                        dest_path.unlink()
+                    except Exception:
+                        pass
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(
+                            f"File '{original_name}' exceeds the allowed upload size "
+                            f"({max_bytes // (1024*1024)} MB)."
+                        ),
+                    )
+                out_f.write(chunk)
+    finally:
+        await upload.close()
+
+    # ── Upload-time file profiling ────────────────────────────────────────────
+    # Run the format-appropriate profiler synchronously in a thread pool so we
+    # don't block the event loop.  Profiling errors are non-fatal: we log them
+    # and continue with an empty schema_preview.
+    schema_preview: Dict[str, Any] = {}
+    try:
+        from backend.file_intelligence.profiler import profile_file, SUPPORTED_EXTENSIONS
+        suffix = Path(safe_name).suffix.lower()
+        if suffix in SUPPORTED_EXTENSIONS or suffix == ".gz":
+            loop = asyncio.get_running_loop()
+            schema_preview = await loop.run_in_executor(
+                None, profile_file, str(dest_path.resolve())
+            )
+    except Exception as _prof_exc:
+        logger.warning("upload profiling failed for %s: %s", safe_name, _prof_exc)
+
+    file_id = f"upload_{uuid.uuid4().hex[:12]}"
+    metadata = {
+        "file_id": file_id,
+        "name": original_name,
+        "filename": dest_path.name,
+        "original_filename": original_name,
+        "size": size,
+        "content_type": upload.content_type or "application/octet-stream",
+        "local_path": str(dest_path.resolve()),
+        "relative_path": str(dest_path.relative_to(history_manager.storage_dir.resolve())),
+        "uploaded_at": datetime.now(timezone.utc).isoformat(),
+        "s3_bucket": None,
+        "s3_key": "",
+        "intake_policy": intake_decision.to_dict(),
+        "requires_policy_approval": bool(intake_decision.approval_required),
+        "policy_state": "approval_required" if intake_decision.approval_required else "cleared",
+        "schema_preview": schema_preview,
+    }
+    if not history_manager.add_uploaded_file(session_id, metadata):
+        raise HTTPException(status_code=500, detail=f"Failed to persist uploaded file '{original_name}'")
+    _emit_policy_audit_event(
+        "upload_accepted",
+        session_id,
+        {
+            "filename": original_name,
+            "sanitized_filename": safe_name,
+            "size": size,
+            "intake_policy": intake_decision.to_dict(),
+        },
+    )
+    return metadata
 
 class PlasmidVisualizationRequest(BaseModel):
     vector_name: Optional[str] = None
@@ -1787,9 +2062,10 @@ class SessionRequest(BaseModel):
     user_id: Optional[str] = None
 
 @app.post("/session/create")
-async def create_session(req: SessionRequest):
+async def create_session(req: SessionRequest, request: Request):
     """Create a new session for tracking user interactions."""
     try:
+        _check_and_increment_session_create_counter(request)
         session_id = history_manager.create_session(req.user_id)
         return {
             "success": True,
@@ -1800,9 +2076,10 @@ async def create_session(req: SessionRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/create_session")
-async def create_session_alias():
+async def create_session_alias(request: Request):
     """Alias for /session/create to support frontend compatibility."""
     try:
+        _check_and_increment_session_create_counter(request)
         session_id = history_manager.create_session()
         return {
             "session_id": session_id
@@ -2286,6 +2563,79 @@ async def get_session_files(session_id: str):
         logger.error(f"Error getting session files: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.post("/session/{session_id}/uploads")
+async def upload_session_files(session_id: str, files: List[UploadFile] = File(...)):
+    """Upload one or more files into session-local upload directories."""
+    try:
+        session = history_manager.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+        if not files:
+            raise HTTPException(status_code=400, detail="No files provided")
+
+        max_bytes = _get_max_upload_bytes()
+        uploaded: List[Dict[str, Any]] = []
+        for upload in files:
+            file_info = await _persist_upload_to_session(session_id, upload, max_bytes=max_bytes)
+            uploaded.append(file_info)
+
+        profile = get_policy_profile()
+        profile_defaults = policy_profile_defaults(profile)
+        approval_required_count = sum(
+            1 for item in uploaded if bool(item.get("requires_policy_approval"))
+        )
+
+        return {
+            "success": True,
+            "session_id": session_id,
+            "files": uploaded,
+            "uploaded_count": len(uploaded),
+            "max_upload_mb": (max_bytes // (1024 * 1024)) if max_bytes > 0 else None,
+            "policy_profile": profile,
+            "policy_defaults": profile_defaults,
+            "approval_required_uploads": approval_required_count,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error uploading files to session {session_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/session/{session_id}/uploads/approve")
+async def approve_policy_uploads(session_id: str, request: Request):
+    """Approve policy-gated uploaded files for downstream execution."""
+    session = history_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+
+    pending = _get_policy_pending_uploads(session_id)
+    if not pending:
+        return {
+            "success": True,
+            "session_id": session_id,
+            "approved_count": 0,
+            "pending_before": 0,
+        }
+
+    approved_count = _approve_policy_pending_uploads(session_id, "approved_via_upload_approval_endpoint")
+    _emit_policy_audit_event(
+        "upload_policy_approved",
+        session_id,
+        {
+            "approved_count": approved_count,
+            "pending_before": len(pending),
+            "source_ip": request.client.host if request and request.client else "unknown",
+        },
+    )
+    return {
+        "success": True,
+        "session_id": session_id,
+        "approved_count": approved_count,
+        "pending_before": len(pending),
+    }
+
 @app.post("/execute")
 async def execute(req: CommandRequest, request: Request):
     logger.info(f"📥 Received execute request: command='{req.command[:100]}...', session_id={req.session_id}")
@@ -2317,6 +2667,40 @@ async def execute(req: CommandRequest, request: Request):
             "[Checkpoint] session=%s state=%s resume_node=%s",
             req.session_id, _checkpoint.state.value, _checkpoint.resume_node,
         )
+
+        pending_policy_uploads = _get_policy_pending_uploads(req.session_id)
+        if _is_approval_command(req.command) and pending_policy_uploads:
+            approved_count = _approve_policy_pending_uploads(
+                req.session_id, "approved_via_execute_approval_command"
+            )
+            _emit_policy_audit_event(
+                "upload_policy_approved",
+                req.session_id,
+                {
+                    "approved_count": approved_count,
+                    "pending_before": len(pending_policy_uploads),
+                    "via": "execute_approval_command",
+                },
+            )
+            pending_policy_uploads = _get_policy_pending_uploads(req.session_id)
+
+        if req.execute_plan and pending_policy_uploads:
+            _emit_policy_audit_event(
+                "execute_blocked_policy_pending_uploads",
+                req.session_id,
+                {
+                    "pending_upload_count": len(pending_policy_uploads),
+                    "command": req.command[:200],
+                },
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Execution blocked: one or more uploaded files require policy approval "
+                    "before high-risk execution. Approve them via /session/{session_id}/uploads/approve "
+                    "or issue an approval command first."
+                ),
+            )
 
         # ── Route by checkpoint state ─────────────────────────────────────────
         # Case D: user is approving a pending plan
@@ -2463,7 +2847,7 @@ async def execute(req: CommandRequest, request: Request):
                 try:
                     _approval_tool, _approval_params = await asyncio.wait_for(
                         asyncio.get_running_loop().run_in_executor(
-                            None, lambda: _approval_router.route_command(req.command, session_context)
+                            None, lambda: _approval_router.route_command_with_shadow(req.command, session_context)
                         ),
                         timeout=_gate_timeout_s,
                     )
@@ -2558,7 +2942,7 @@ async def execute(req: CommandRequest, request: Request):
             import time as _t
             from backend.command_router import CommandRouter as _PreRouter
             _pre_router = _PreRouter()
-            _pre_tool, _pre_params = _pre_router.route_command(req.command, session_context)
+            _pre_tool, _pre_params = _pre_router.route_command_with_shadow(req.command, session_context)
             logger.info(f"[Phase2c] route_command → tool='{_pre_tool}'")
             if _pre_tool in _phase2c_validation_tools:
                 # FastQC with session_resolution_error or validation failure, or MultiQC unsupported
@@ -2617,7 +3001,7 @@ async def execute(req: CommandRequest, request: Request):
             agent_start_time = time.time()
             # Lazy import: Import backend.agent only when needed, not at module import time.
             # This avoids loading heavy LLM dependencies (langgraph, langchain) during server startup,
-            # keeping lightweight endpoints like /health and /mcp/tools fast and allowing the service
+            # keeping lightweight endpoints like /health and /tools/list fast and allowing the service
             # to work in sandbox/CI environments where LLM dependencies may not be installed.
             from backend.agent import handle_command
             agent_timeout_s = int(os.getenv("HELIX_AGENT_TIMEOUT_S", "25"))
@@ -2650,7 +3034,7 @@ async def execute(req: CommandRequest, request: Request):
                 # Apply same validation as deterministic router: unsupported tools and session-aware FastQC
                 from backend.command_router import CommandRouter as _AgentCheckRouter
                 _check_router = _AgentCheckRouter()
-                _check_tool, _check_params = _check_router.route_command(req.command, session_context)
+                _check_tool, _check_params = _check_router.route_command_with_shadow(req.command, session_context)
                 if _check_tool == "unsupported_tool":
                     _check_params = _check_params or {}
                     _check_params.setdefault("session_id", req.session_id)
@@ -2688,11 +3072,15 @@ async def execute(req: CommandRequest, request: Request):
             # return a safe response instead of routing into CommandRouter/tool-gen.
             # Classify intent here (only when needed in fallback path) to avoid redundant classification
             from backend.intent_classifier import classify_intent
-            intent = classify_intent(
-                req.command,
-                session_context=session_context,
-                workflow_state=_checkpoint.state.value,
-            )
+            try:
+                intent = classify_intent(
+                    req.command,
+                    session_context=session_context,
+                    workflow_state=_checkpoint.state.value,
+                )
+            except TypeError:
+                # Backward-compatible path for tests/mocks or legacy classifier call shapes.
+                intent = classify_intent(req.command)
             if intent.intent != "execute":
                 # Allowlist: deterministic read-only tools that answer questions from
                 # local session state (no tool generation, no cloud side effects).
@@ -2741,22 +3129,27 @@ async def execute(req: CommandRequest, request: Request):
             from backend.command_router import CommandRouter
             command_router = CommandRouter()
 
-            # If this looks like a workflow, build a Plan IR and execute via broker.
+            # If this looks like a workflow, execute Plan IR directly via broker.
             if _looks_like_workflow(req.command):
                 plan = command_router.route_plan(req.command, session_context)
-                _store_pending_plan(req.session_id, req.command, plan)
-                plan_preview = {
-                    "status": "success",
-                    "type": "plan_result",
-                    "plan_version": plan.get("version", "v1") if isinstance(plan, dict) else "v1",
-                    "steps": (plan.get("steps") if isinstance(plan, dict) else []) or [],
-                    "execute_ready": True,
-                    "approval_required": True,
-                }
+                broker = _get_execution_broker()
+                result = await broker.execute_tool(
+                    ExecutionRequest(
+                        tool_name="__plan__",
+                        arguments={"plan": plan, "session_id": req.session_id},
+                        session_id=req.session_id,
+                        original_command=req.command,
+                        session_context=session_context,
+                    )
+                )
+                _apply_session_context_side_effects(req.session_id, "__plan__", result)
+                storage_result = _build_pipeline_execution_storage_result(result, req.session_id)
                 return await _dispatch_result(
-                    req, "__plan__", plan_preview,
+                    req,
+                    "__plan__",
+                    storage_result,
                     tool_args={"plan": plan, "session_id": req.session_id},
-                    execution_path="fallback_router_plan_pending_approval",
+                    execution_path="fallback_router_plan_execute",
                 )
 
             tool_name, parameters = command_router.route_command(req.command, session_context)
@@ -2812,7 +3205,7 @@ async def agent_command(req: AgentCommandRequest, request: Request):
         agent_start_time = time.time()
         # Lazy import: Import backend.agent only when needed, not at module import time.
         # This avoids loading heavy LLM dependencies (langgraph, langchain) during server startup,
-        # keeping lightweight endpoints like /health and /mcp/tools fast and allowing the service
+        # keeping lightweight endpoints like /health and /tools/list fast and allowing the service
         # to work in sandbox/CI environments where LLM dependencies may not be installed.
         from backend.agent import handle_command
         result = await handle_command(req.prompt, session_id=session_id, session_context=session_context)
@@ -2922,7 +3315,7 @@ async def agent_command(req: AgentCommandRequest, request: Request):
             "session_id": req.session_id
         })
 
-@app.post("/mcp/sequence-alignment")
+@app.post("/tools/sequence-alignment")
 async def sequence_alignment_mcp(req: SequenceAlignmentRequest):
     """Perform sequence alignment using MCP server with session tracking."""
     try:
@@ -2964,7 +3357,7 @@ async def sequence_alignment_mcp(req: SequenceAlignmentRequest):
             "session_id": req.session_id
         })
 
-@app.post("/mcp/mutate-sequence")
+@app.post("/tools/mutate-sequence")
 async def mutate_sequence_mcp(req: MutationRequest):
     """Generate sequence mutations using MCP server with session tracking."""
     try:
@@ -3024,7 +3417,7 @@ async def mutate_sequence_mcp(req: MutationRequest):
             "session_id": req.session_id
         })
 
-@app.post("/mcp/analyze-sequence-data")
+@app.post("/tools/analyze-sequence-data")
 async def analyze_sequence_data_mcp(req: AnalysisRequest):
     """Analyze sequence data using MCP server with session tracking."""
     try:
@@ -3059,7 +3452,7 @@ async def analyze_sequence_data_mcp(req: AnalysisRequest):
             "session_id": req.session_id
         })
 
-@app.post("/mcp/select-variants")
+@app.post("/tools/select-variants")
 async def select_variants_mcp(req: VariantSelectionRequest):
     """Select variants from previous mutation results."""
     try:
@@ -3104,7 +3497,7 @@ async def select_variants_mcp(req: VariantSelectionRequest):
             "session_id": req.session_id
         })
 
-@app.post("/mcp/parse-command")
+@app.post("/tools/parse-command")
 async def parse_command_mcp(req: CommandParseRequest):
     """Parse a natural language command into structured parameters."""
     try:
@@ -3129,7 +3522,7 @@ async def parse_command_mcp(req: CommandParseRequest):
             "session_id": req.session_id
         })
 
-@app.post("/mcp/execute-command")
+@app.post("/tools/execute-command")
 async def execute_command_mcp(req: CommandExecuteRequest):
     """Execute a parsed command using appropriate tools."""
     try:
@@ -3153,7 +3546,7 @@ async def execute_command_mcp(req: CommandExecuteRequest):
             "error": str(e)
         })
 
-@app.post("/mcp/handle-natural-command")
+@app.post("/tools/handle-natural-command")
 async def handle_natural_command_mcp(req: NaturalCommandRequest):
     """Handle a natural language command by parsing and executing it."""
     try:
@@ -3178,7 +3571,7 @@ async def handle_natural_command_mcp(req: NaturalCommandRequest):
             "session_id": req.session_id
         })
 
-@app.post("/mcp/visualize-alignment")
+@app.post("/tools/visualize-alignment")
 async def visualize_alignment_mcp(alignment_file: str, output_format: str = "png"):
     """Visualize sequence alignment using MCP server."""
     try:
@@ -3197,7 +3590,7 @@ async def visualize_alignment_mcp(alignment_file: str, output_format: str = "png
             "error": str(e)
         })
 
-@app.post("/mcp/plasmid-visualization")
+@app.post("/tools/plasmid-visualization")
 async def plasmid_visualization_mcp(req: PlasmidVisualizationRequest):
     """Generate plasmid visualization data from vector, cloning sites, and insert sequence."""
     try:
@@ -3252,7 +3645,7 @@ async def plasmid_visualization_mcp(req: PlasmidVisualizationRequest):
             "session_id": req.session_id
         })
 
-@app.post("/mcp/plasmid-for-representatives")
+@app.post("/tools/plasmid-for-representatives")
 async def plasmid_for_representatives_mcp(req: PlasmidForRepresentativesRequest):
     """Generate plasmid visualizations for representative sequences from clustering."""
     try:
@@ -3299,7 +3692,7 @@ async def plasmid_for_representatives_mcp(req: PlasmidForRepresentativesRequest)
             "session_id": req.session_id
         })
 
-@app.post("/mcp/read-trimming")
+@app.post("/tools/read-trimming")
 async def read_trimming_mcp(req: ReadTrimmingRequest):
     """Perform read trimming using MCP tooling."""
     try:
@@ -3332,7 +3725,7 @@ async def read_trimming_mcp(req: ReadTrimmingRequest):
             "session_id": req.session_id
         })
 
-@app.post("/mcp/read-merging")
+@app.post("/tools/read-merging")
 async def read_merging_mcp(req: ReadMergingRequest):
     """Merge paired-end reads using MCP tooling."""
     try:
@@ -3364,7 +3757,7 @@ async def read_merging_mcp(req: ReadMergingRequest):
             "session_id": req.session_id
         })
 
-@app.get("/mcp/tools")
+@app.get("/tools/list")
 async def list_mcp_tools():
     """List available MCP tools from centralized schema registry."""
     try:
@@ -3779,6 +4172,90 @@ async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
     )
     if handled:
         return registry_result
+
+    # ── Tabular QA (Code Interpreter) ─────────────────────────────────────────
+    if tool_name == "tabular_qa":
+        from backend.tabular_qa.agent import run_tabular_qa
+        session_id = arguments.get("session_id", "")
+        question = arguments.get("question") or arguments.get("command") or arguments.get("objective", "")
+        file_path = arguments.get("file_path", "")
+        sheet = arguments.get("sheet")
+        profile = arguments.get("profile") or {}
+
+        # If no explicit file_path, find first tabular file in session uploads
+        if not file_path and session_id:
+            session_data = history_manager.get_session(session_id) or {}
+            for up in (session_data.get("uploaded_files") or []):
+                name = (up.get("filename") or up.get("name") or "").lower()
+                if any(name.endswith(ext) for ext in {".csv", ".tsv", ".xlsx", ".xls"}):
+                    file_path = up.get("local_path") or ""
+                    profile = up.get("schema_preview") or profile
+                    break
+
+        if not file_path:
+            return {
+                "status": "error",
+                "text": "No tabular file found in session. Please upload a CSV, TSV, or Excel file first.",
+            }
+
+        qa_result = run_tabular_qa(
+            question=question,
+            session_id=session_id,
+            file_path=file_path,
+            profile=profile,
+            sheet=sheet,
+        )
+        return {
+            "status": "success" if qa_result["success"] else "error",
+            "text": qa_result["answer"],
+            "result": qa_result.get("result"),
+            "code": qa_result.get("code"),
+            "attempts": qa_result.get("attempts"),
+        }
+
+    # ── Tabular analysis (deterministic operations) ───────────────────────────
+    if tool_name == "tabular_analysis":
+        from backend.ds_pipeline.pipelines.ingest import ingest_tabular
+        session_id = arguments.get("session_id", "")
+        data_path = arguments.get("data_path", "")
+        sheet = arguments.get("sheet")
+
+        if not data_path and session_id:
+            session_data = history_manager.get_session(session_id) or {}
+            for up in (session_data.get("uploaded_files") or []):
+                name = (up.get("filename") or up.get("name") or "").lower()
+                if any(name.endswith(ext) for ext in {".csv", ".tsv", ".xlsx", ".xls"}):
+                    data_path = up.get("local_path") or ""
+                    break
+
+        if not data_path:
+            return {
+                "status": "error",
+                "text": "No tabular file found. Please upload a CSV, TSV, or Excel file first.",
+            }
+
+        try:
+            _conn, df, meta = ingest_tabular(data_path, sheet=sheet)
+            return {
+                "status": "success",
+                "text": (
+                    f"Loaded {meta['n_rows']} rows × {meta['n_cols']} columns"
+                    + (f" from sheet '{meta['source_sheet']}'" if meta.get('source_sheet') else "")
+                    + ". Ready for analysis."
+                ),
+                "schema_preview": {
+                    "n_rows": meta["n_rows"],
+                    "n_cols": meta["n_cols"],
+                    "columns": [c["name"] for c in meta["columns"]],
+                    "source_sheet": meta.get("source_sheet"),
+                    "available_sheets": meta.get("available_sheets"),
+                    "sample": meta["sample"],
+                },
+                "objective": arguments.get("objective", ""),
+                "operations": arguments.get("operations", []),
+            }
+        except Exception as exc:
+            return {"status": "error", "text": str(exc)}
 
     if tool_name == "sequence_alignment":
         import alignment
@@ -4422,7 +4899,7 @@ async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
         # Use the BioAgent path (system prompt from agent.md) for natural commands
         # Lazy import: Import backend.agent only when needed, not at module import time.
         # This avoids loading heavy LLM dependencies (langgraph, langchain) during server startup,
-        # keeping lightweight endpoints like /health and /mcp/tools fast and allowing the service
+        # keeping lightweight endpoints like /health and /tools/list fast and allowing the service
         # to work in sandbox/CI environments where LLM dependencies may not be installed.
         from backend.agent import handle_command
         command = arguments.get("command", "")
@@ -5733,5 +6210,5 @@ async def startup_event():
 
 if __name__ == "__main__":
     import uvicorn
-    # Run as package module (start.sh uses `python -m backend.main_with_mcp`)
-    uvicorn.run("backend.main_with_mcp:app", host="0.0.0.0", port=8001, reload=True)
+    # Run as package module (start.sh uses `python -m backend.main`)
+    uvicorn.run("backend.main:app", host="0.0.0.0", port=8001, reload=True)

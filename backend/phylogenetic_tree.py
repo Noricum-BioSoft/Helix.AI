@@ -4,7 +4,7 @@ phylogenetic_tree.py — Python-native phylogenetic analysis.
 Uses BioPython (pairwise2, Phylo, SeqRecord) + ete3 for tree visualisation.
 No external binaries required (MAFFT / IQ-TREE2 / R).
 
-Public API (called from main_with_mcp.py and agent_tools.py):
+Public API (called from main.py and agent_tools.py):
   run_phylogenetic_tree_raw(aligned_sequences: str) -> dict
   run_phylogenetic_tree(aligned_sequences: str)     -> dict   (alias)
   run_clustering_from_tree(aligned_sequences: str, num_clusters: int) -> dict

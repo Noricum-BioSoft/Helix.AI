@@ -52,7 +52,70 @@ curl -s http://127.0.0.1/health
 # 5. Security group: open TCP 80 (and 443 after HTTPS)
 ```
 
-HTTPS: `sudo certbot --nginx -d your.domain` (after DNS points to the instance).
+### HTTPS — `helix-beta.noricum-biosoft.com`
+
+1. **DNS (where `noricum-biosoft.com` is hosted)**  
+   Create an **A record**: **name** `helix-beta` → **value** the instance’s **public IPv4** (today often `54.176.128.13`; if you stop/start the instance or use Elastic IP, update the record).
+
+2. **Security group**  
+   Inbound: **TCP 443** from `0.0.0.0/0` (and **80** if not already, for HTTP redirect / Let’s Encrypt).
+
+3. **Nginx `server_name`** (so Certbot matches the vhost)  
+   On the server, edit `/etc/nginx/conf.d/helix.conf` and set:
+   ```nginx
+   server_name helix-beta.noricum-biosoft.com;
+   ```
+   (Replace `server_name _;` if present.) Then:
+   ```bash
+   sudo nginx -t && sudo systemctl reload nginx
+   ```
+
+4. **Install Certbot** (not installed by default). Pick **one** block that matches the OS:
+
+   **Amazon Linux 2023** (`dnf` available; `/etc/os-release` says “Amazon Linux 2023”):
+   ```bash
+   sudo dnf install -y certbot python3-certbot-nginx
+   ```
+
+   **Amazon Linux 2** (older; uses `yum` / `amazon-linux-extras`): **EPEL is required** — without it, `yum` reports `No package certbot available`.
+   ```bash
+   sudo amazon-linux-extras install epel -y
+   sudo yum install -y certbot python3-certbot-nginx
+   ```
+   If install still fails, try: `sudo yum --enablerepo=epel install -y certbot python3-certbot-nginx`
+
+   **If `python3-certbot-nginx` is not found** (common on AL2 when EPEL is hidden by repo priorities), install Certbot + the Nginx plugin via **pip**:
+   ```bash
+   sudo yum install -y python3-pip
+   sudo python3 -m pip install --upgrade pip
+   sudo python3 -m pip install certbot certbot-nginx
+   ```
+   **Amazon Linux 2 + pip:** system Python uses **OpenSSL 1.0.2**; **`urllib3` 2.x refuses to load** (`ImportError: urllib3 v2.0 only supports OpenSSL 1.1.1+`). Pin urllib3 to 1.x, then run Certbot:
+   ```bash
+   sudo python3 -m pip install 'urllib3<2'
+   sudo /usr/local/bin/certbot plugins   # should list nginx
+   sudo /usr/local/bin/certbot --nginx -d helix-beta.noricum-biosoft.com
+   ```
+
+   **Debian/Ubuntu:**
+   ```bash
+   sudo apt-get update && sudo apt-get install -y certbot python3-certbot-nginx
+   ```
+
+5. **Obtain certificate and wire Nginx**
+   ```bash
+   sudo certbot --nginx -d helix-beta.noricum-biosoft.com
+   ```
+   Follow prompts (email, agree to terms). Certbot will add TLS and usually redirect HTTP→HTTPS.
+
+6. **Check**  
+   Open `https://helix-beta.noricum-biosoft.com` — the browser should show a normal secure connection (no “Not secure” for plain HTTP to the IP).
+
+**Note:** Use the **hostname** in the browser, not the raw IP, so the certificate matches.
+
+---
+
+HTTPS (generic): `sudo certbot --nginx -d your.domain` (after DNS points to the instance and `server_name` matches).
 
 Updates after you push to GitHub:
 

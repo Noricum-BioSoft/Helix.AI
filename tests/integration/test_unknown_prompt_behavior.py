@@ -20,7 +20,7 @@ def _isolate(tmp_path, monkeypatch):
 
 
 def _client() -> TestClient:
-    from backend.main_with_mcp import app
+    from backend.main import app
 
     return TestClient(app)
 

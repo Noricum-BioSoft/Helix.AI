@@ -415,7 +415,7 @@ class HelixStack(Stack):
                         "/create_session",
                         "/execute",
                         "/agent",
-                        "/mcp/*",
+                        "/tools/*",
                     ]
                 )
             ],
@@ -527,7 +527,7 @@ class HelixStack(Stack):
                 "/create_session": api_behavior,
                 "/execute": api_behavior,
                 "/agent": api_behavior,
-                "/mcp/*": api_behavior,
+                "/tools/*": api_behavior,
                 "/session/*": api_behavior,
                 "/jobs/*": api_behavior,
             },

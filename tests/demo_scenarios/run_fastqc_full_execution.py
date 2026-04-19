@@ -87,7 +87,7 @@ async def run_full_fastqc_execution(
         print(f"✅ Session created: {session_id}\n")
     except Exception as e:
         print(f"❌ Failed to create session: {e}")
-        print(f"   Is the backend running? Try: uv run python -m backend.main_with_mcp")
+        print(f"   Is the backend running? Try: uv run python -m backend.main")
         raise
     
     # Build command

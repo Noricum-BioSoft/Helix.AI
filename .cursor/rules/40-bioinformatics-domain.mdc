@@ -1,0 +1,46 @@
+---
+description: Bioinformatics and iterative analysis domain rules for Helix.AI
+alwaysApply: true
+---
+
+# Domain model
+Helix.AI supports iterative scientific analysis workflows.
+A user may:
+- request a workflow directly,
+- ask the system to generate a workflow,
+- revise the workflow mid-execution,
+- update plots,
+- add supplementary data files,
+- ask the system to debug or correct prior outputs,
+- rerun downstream analysis after upstream changes.
+
+# Domain correctness requirements
+Always preserve:
+- clear provenance of outputs,
+- reproducibility where feasible,
+- explicit mapping from user intent to workflow steps,
+- safe handling of incomplete or inconsistent inputs,
+- meaningful review and correction loops.
+
+# Bioinformatics-specific expectations
+For biological and data-analysis workflows, verify:
+- input file format assumptions,
+- schema compatibility across files,
+- metadata alignment,
+- workflow step ordering,
+- plot labels and axis meaning,
+- result traceability,
+- review/revision path after user feedback.
+
+# Iterative workflow rules
+Any change affecting iterative behavior must verify:
+- a workflow can be revised after initial execution,
+- plots can be changed without corrupting state,
+- supplemental files can be integrated without losing history,
+- checkpoints remain consistent after plan changes,
+- agent review and rerun behavior stays coherent.
+
+# Scientific integrity rules
+- Do not silently fabricate analytical certainty.
+- Surface uncertainty, assumptions, and invalid input issues explicitly.
+- Prefer safe failure over misleading success.

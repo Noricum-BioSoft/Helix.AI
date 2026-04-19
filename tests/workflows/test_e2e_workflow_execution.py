@@ -95,7 +95,7 @@ class WorkflowExecutionTester:
         print(f"   Parameters: {parameters}")
         
         # Create a simple tool executor for testing
-        # In production, this would be dispatch_tool from main_with_mcp.py
+        # In production, this would be dispatch_tool from main.py
         async def dummy_tool_executor(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             """Dummy executor for E2E tests - actual execution happens via job manager."""
             return {

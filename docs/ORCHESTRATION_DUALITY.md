@@ -77,7 +77,7 @@ result = await handle_command(
 - Staged functions with integrated policy checks
 
 ### Used By (PRODUCTION)
-✅ **HTTP API** (`backend/main_with_mcp.py`):
+✅ **HTTP API** (`backend/main.py`):
 - `/execute` endpoint → `handle_command()`
 - `/chat` endpoint → `handle_command()`
 - `/mcp/call_tool` with `bioinformatics_agent` → `handle_command()`
@@ -521,7 +521,7 @@ see tests/demo_scenarios/test_scenarios.py.
 - **PRIMARY Orchestrator:** `backend/agent.py`
 - **EXPERIMENTAL Orchestrator:** `backend/orchestrator.py`
 - **Agent Registry:** `backend/config/agent_registry.py`
-- **HTTP API:** `backend/main_with_mcp.py`
+- **HTTP API:** `backend/main.py`
 - **CLI Demo:** `backend/cli_demo.py`
 - **System Overview:** `docs/SYSTEM_OVERVIEW.md`
 

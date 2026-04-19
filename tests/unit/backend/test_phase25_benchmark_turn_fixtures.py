@@ -1,5 +1,5 @@
 from backend.artifact_resolver import resolve_semantic_reference
-from backend.main_with_mcp import (
+from backend.main import (
     _historical_recreation_ready_for_execution,
     _analyze_plan_execution,
     _is_approval_command,

@@ -103,7 +103,7 @@ echo ""
 
 # Test 4: List available tools via MCP endpoint
 echo "4️⃣ Testing tool listing..."
-TOOLS_RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 10 "${BACKEND_URL}/mcp/tools" || echo "FAILED")
+TOOLS_RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 10 "${BACKEND_URL}/tools/list" || echo "FAILED")
 TOOLS_HTTP_CODE=$(echo "$TOOLS_RESPONSE" | tail -n1)
 TOOLS_BODY=$(echo "$TOOLS_RESPONSE" | sed '$d')
 
