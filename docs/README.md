@@ -46,7 +46,12 @@ This directory contains the documentation needed for **release** and ongoing dev
 | Document | Description |
 |----------|-------------|
 | [**getting-started/ENVIRONMENT_SETUP.md**](getting-started/ENVIRONMENT_SETUP.md) | Environment variables, API keys, `.env` setup. |
-| [**deployment/AWS_DEPLOYMENT_GUIDE.md**](deployment/AWS_DEPLOYMENT_GUIDE.md) | AWS deployment (CDK, ECS, etc.). |
+| [**deployment/DEPLOYMENT_OVERVIEW.md**](deployment/DEPLOYMENT_OVERVIEW.md) | **Start here for AWS deploy:** architecture, CDK vs app layer, `deploy.sh`, GitHub Actions secrets, checklists. |
+| [**deployment/AWS_DEPLOYMENT_GUIDE.md**](deployment/AWS_DEPLOYMENT_GUIDE.md) | Full AWS deployment guide (steps, troubleshooting, hardening). |
+| [**deployment/AWS_COST_INVESTIGATION.md**](deployment/AWS_COST_INVESTIGATION.md) | Cost drivers, optional EC2, Cost Explorer tips. |
+| [**deployment/BETA_DEPLOYMENT_CHEAP.md**](deployment/BETA_DEPLOYMENT_CHEAP.md) | **Cheapest beta:** EC2 + EBS vs S3 mount; why not mount S3 for `sessions/`. |
+| [**deployment/EC2_GIT_BETA.md**](deployment/EC2_GIT_BETA.md) | **EC2 + GitHub:** clone, pull, systemd — beta like “local” on a server. |
+| [**../scripts/ec2/README.md**](../scripts/ec2/README.md) | systemd unit + `update-from-git.sh` for EC2. |
 | [**development/DEVELOPMENT_GUIDE.md**](development/DEVELOPMENT_GUIDE.md) | Development setup, running locally, contributing. |
 | [**development/RELEASE_READINESS_ROADMAP.md**](development/RELEASE_READINESS_ROADMAP.md) | Coding-agent roadmap to fix stability, routing, and release-readiness issues. |
 | [**development/KNOWN_GOOD_SMOKE_COMMANDS.md**](development/KNOWN_GOOD_SMOKE_COMMANDS.md) | Short, known-good smoke command set (5 demos + 3 unknown prompts). |

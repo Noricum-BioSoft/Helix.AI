@@ -223,7 +223,7 @@ else
 fi
 
 # Start the enhanced MCP backend
-python -m backend.main_with_mcp &
+python -m backend.main &
 BACKEND_PID=$!
 
 # Wait for backend

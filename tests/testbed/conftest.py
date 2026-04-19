@@ -35,7 +35,7 @@ def client(tmp_path, monkeypatch):
     history_manager.sessions = {}
     history_manager._sessions_loaded = True
 
-    from backend.main_with_mcp import app
+    from backend.main import app
     return TestClient(app)
 
 

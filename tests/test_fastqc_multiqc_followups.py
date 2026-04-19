@@ -127,7 +127,7 @@ Output prefix: s3://noricum-ngs-data/test-output/amplicon-demo/"""
     print("✓ Test 4: 'run MultiQC' -> unsupported_tool with alternatives")
 
     # Test 5: Dispatch FastQC with invalid inputs -> validation error with clear message
-    from backend.main_with_mcp import dispatch_tool
+    from backend.main import dispatch_tool
     bad_result = await dispatch_tool("fastqc_quality_analysis", {
         "input_r1": "s3://bucket/merged.fasta",
         "input_r2": "s3://bucket/merged.fasta",  # Same file + FASTA format

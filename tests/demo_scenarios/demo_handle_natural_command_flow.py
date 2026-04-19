@@ -32,7 +32,7 @@ ACAGCAGAGGTGTTATTCCCTATGGTGCCCTTTTTATAGGTCATCTTGACGGCTCTAGACATAATCTGACAGCGATGCTT
 
 
 def _looks_like_workflow(cmd: str) -> bool:
-    """Replicate main_with_mcp logic so we can show why single-sentence prompt does not get a plan."""
+    """Replicate main logic so we can show why single-sentence prompt does not get a plan."""
     c = (cmd or "").lower()
     if any(tok in c for tok in ["apply code patch", "apply patch:", "replace script with", "replace the script with"]) or "```" in c:
         return False

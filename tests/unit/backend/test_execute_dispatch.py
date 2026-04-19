@@ -51,13 +51,13 @@ def _isolate(tmp_path, monkeypatch):
     history_manager.sessions = {}
     history_manager._sessions_loaded = True
 
-    import backend.main_with_mcp as _mwm
+    import backend.main as _mwm
 
     _mwm._daily_prompt_counters.clear()
 
 
 def _client() -> TestClient:
-    from backend.main_with_mcp import app
+    from backend.main import app
 
     return TestClient(app)
 
@@ -100,8 +100,8 @@ class TestPrologue:
         The HTTPException(429) is caught by execute()'s outer try/except and
         converted to a structured error body (HTTP 200, success=False).
         """
-        import backend.main_with_mcp as _mwm
-        from backend.main_with_mcp import MAX_PROMPTS_PER_DAY, _today_iso
+        import backend.main as _mwm
+        from backend.main import MAX_PROMPTS_PER_DAY, _today_iso
 
         session_id = "rate-limit-test-session"
         day = _today_iso()
@@ -171,7 +171,7 @@ class TestS3Browse:
         async def _mock_call(tool, params):
             return {"status": "success", "text": f"mock {tool}"}
 
-        monkeypatch.setattr("backend.main_with_mcp.dispatch_tool", _mock_call)
+        monkeypatch.setattr("backend.main.dispatch_tool", _mock_call)
 
         client = _client()
         client.post(
@@ -224,7 +224,7 @@ def mock_tool_executor(monkeypatch):
             }
         return {"status": "success", "text": f"mock {tool}"}
 
-    monkeypatch.setattr("backend.main_with_mcp.dispatch_tool", _mock)
+    monkeypatch.setattr("backend.main.dispatch_tool", _mock)
 
 
 class TestDemoFastPaths:
@@ -365,7 +365,7 @@ class TestCommandRouterFastPath:
                 }
             return {"status": "success", "text": f"mock {tool}"}
 
-        monkeypatch.setattr("backend.main_with_mcp.dispatch_tool", _mock_call)
+        monkeypatch.setattr("backend.main.dispatch_tool", _mock_call)
 
         client = _client()
         r = client.post(
@@ -391,7 +391,7 @@ class TestCommandRouterFastPath:
                 }
             return {"status": "success", "text": f"mock {tool}"}
 
-        monkeypatch.setattr("backend.main_with_mcp.dispatch_tool", _mock_call)
+        monkeypatch.setattr("backend.main.dispatch_tool", _mock_call)
 
         client = _client()
         r = client.post(
@@ -430,7 +430,7 @@ class TestCommandRouterFastPath:
                 }
             return {"status": "success", "text": f"mock {tool}"}
 
-        monkeypatch.setattr("backend.main_with_mcp.dispatch_tool", _mock_call)
+        monkeypatch.setattr("backend.main.dispatch_tool", _mock_call)
 
         client = _client()
         r = client.post(
@@ -516,7 +516,7 @@ class TestAgentPath:
             }
         )
         monkeypatch.setattr(
-            "backend.main_with_mcp._get_execution_broker", lambda: mock_broker
+            "backend.main._get_execution_broker", lambda: mock_broker
         )
 
         client = _client()
@@ -555,7 +555,7 @@ class TestAgentPath:
             return_value={"status": "success", "text": "fallback done"}
         )
         monkeypatch.setattr(
-            "backend.main_with_mcp._get_execution_broker", lambda: mock_broker
+            "backend.main._get_execution_broker", lambda: mock_broker
         )
 
         client = _client()
@@ -576,7 +576,7 @@ def _disable_phase2c(monkeypatch):
     async def _raise(tool: str, params: dict) -> dict:
         raise Exception("Phase2c intentionally disabled for fallback test")
 
-    monkeypatch.setattr("backend.main_with_mcp.dispatch_tool", _raise)
+    monkeypatch.setattr("backend.main.dispatch_tool", _raise)
 
 
 class TestFallbackPath:
@@ -620,7 +620,7 @@ class TestFallbackPath:
 
         mock_broker.execute_tool = _capture
         monkeypatch.setattr(
-            "backend.main_with_mcp._get_execution_broker", lambda: mock_broker
+            "backend.main._get_execution_broker", lambda: mock_broker
         )
 
         # Use a command with " then " that classify_intent won't block
@@ -646,7 +646,7 @@ class TestFallbackPath:
             return_value={"status": "success", "text": "mutated", "result": {}}
         )
         monkeypatch.setattr(
-            "backend.main_with_mcp._get_execution_broker", lambda: mock_broker
+            "backend.main._get_execution_broker", lambda: mock_broker
         )
 
         # Ensure fallback handles this as an "execute" intent
@@ -683,7 +683,7 @@ class TestSessionContextSideEffects:
     def test_mutation_stores_variants_in_session_context(self):
         """mutate_sequence result with 'statistics.variants' → session populated."""
         from backend.history_manager import history_manager
-        from backend.main_with_mcp import _apply_session_context_side_effects
+        from backend.main import _apply_session_context_side_effects
 
         sid = "test-mutation-session"
         history_manager.sessions[sid] = {}
@@ -708,7 +708,7 @@ class TestSessionContextSideEffects:
     def test_alignment_stores_fasta_in_session_context(self):
         """sequence_alignment result → FASTA string stored in session."""
         from backend.history_manager import history_manager
-        from backend.main_with_mcp import _apply_session_context_side_effects
+        from backend.main import _apply_session_context_side_effects
 
         sid = "test-alignment-session"
         history_manager.sessions[sid] = {}
@@ -732,7 +732,7 @@ class TestSessionContextSideEffects:
     def test_other_tools_do_not_pollute_session_context(self):
         """Unrelated tool results leave the session dict untouched."""
         from backend.history_manager import history_manager
-        from backend.main_with_mcp import _apply_session_context_side_effects
+        from backend.main import _apply_session_context_side_effects
 
         sid = "test-noop-session"
         history_manager.sessions[sid] = {}
@@ -744,7 +744,7 @@ class TestSessionContextSideEffects:
 
     def test_missing_session_id_does_not_crash(self):
         """If session_id is not in sessions, no exception is raised."""
-        from backend.main_with_mcp import _apply_session_context_side_effects
+        from backend.main import _apply_session_context_side_effects
 
         # Should silently do nothing — session doesn't exist
         _apply_session_context_side_effects(
@@ -782,7 +782,7 @@ class TestErrorHandling:
 
     def test_is_success_classifies_all_variants(self):
         """_is_success covers all documented result shapes."""
-        from backend.main_with_mcp import _is_success
+        from backend.main import _is_success
 
         # Non-dict / unknown → success
         assert _is_success(None) is True
@@ -802,7 +802,7 @@ class TestErrorHandling:
 
     def test_extract_metadata_top_level_fields(self):
         """_extract_metadata reads run_id/parent_run_id from the top-level dict."""
-        from backend.main_with_mcp import _extract_metadata
+        from backend.main import _extract_metadata
 
         result = {
             "run_id": "r-top",
@@ -817,7 +817,7 @@ class TestErrorHandling:
 
     def test_extract_metadata_nested_result_subdict(self):
         """_extract_metadata falls back to nested 'result' sub-dict."""
-        from backend.main_with_mcp import _extract_metadata
+        from backend.main import _extract_metadata
 
         result = {
             "status": "success",
@@ -829,7 +829,7 @@ class TestErrorHandling:
 
     def test_extract_metadata_non_dict_result(self):
         """_extract_metadata returns a valid dict even for non-dict results."""
-        from backend.main_with_mcp import _extract_metadata
+        from backend.main import _extract_metadata
 
         meta = _extract_metadata("not a dict", tool_args={"x": 1})
         assert meta["inputs"] is None

@@ -4,7 +4,7 @@ import Button from 'react-bootstrap/Button';
 import Badge from 'react-bootstrap/Badge';
 import Spinner from 'react-bootstrap/Spinner';
 import Modal from 'react-bootstrap/Modal';
-import { mcpApi } from '../services/mcpApi';
+import { helixApi } from '../services/helixApi';
 
 type JobStatus = {
   job_id: string;
@@ -43,7 +43,7 @@ export const JobsPanel: React.FC<JobsPanelProps> = ({ show, onHide, jobIds }) =>
         const results = await Promise.all(
           uniqueJobIds.map(async (jobId) => {
             try {
-              const job = await mcpApi.getJob(jobId);
+              const job = await helixApi.getJob(jobId);
               return [jobId, job] as const;
             } catch (e) {
               return [jobId, { job_id: jobId, status: 'error', error: String(e) }] as const;
@@ -92,7 +92,7 @@ export const JobsPanel: React.FC<JobsPanelProps> = ({ show, onHide, jobIds }) =>
     setLoadingResults(true);
 
     try {
-      const response = await mcpApi.getJobResults(jobId);
+      const response = await helixApi.getJobResults(jobId);
       setJobResults(response.results || response);
     } catch (error: any) {
       setResultsError(error?.response?.data?.detail || error?.message || 'Failed to load job results');

@@ -1,0 +1,48 @@
+id: case-ngs101-chipseq-peak-calling
+title: ChIP-seq From FASTQ to Peaks
+source_refs:
+- source: ngs101
+  source_use_case_id: ngs101-chipseq-peak-calling
+  source_url: https://ngs101.com/tutorials/
+family: epigenomics_peak_analysis
+difficulty: intermediate
+risk_class: medium
+input_fixtures:
+- fixture_id: ngs101-chipseq-peak-calling-input
+  path: fixtures/epigenomics/ngs101-chipseq-peak-calling.v1.bed
+  expected_format: BED (CHROM/START/END/name/score/strand/signalValue/pValue/qValue/summit)
+  checksum_sha256: 67723817dd6f49076c0ae66fc188f2bf882f3ba0bea23fae80acceee2e41bfe8
+prompt: Perform the 'ChIP-seq From FASTQ to Peaks' workflow for the provided inputs.
+  Use the appropriate epigenomics peak analysis capability and return a scientifically
+  defensible result with explicit assumptions.
+expected_route: epigenomics_analysis
+forbidden_routes:
+- single_cell_analysis
+- bulk_rnaseq_analysis
+forbidden_fallbacks:
+- sequence_alignment
+required_steps:
+- ingest_reads_or_peaks
+- run_qc
+- call_or_compare_peaks
+- summarize_and_explain
+required_outputs:
+- table
+- plot
+- report
+safety_requirements:
+- explicit_assumptions
+- uncertainty_note
+provenance_requirements:
+- manifest_v1_present
+- lineage_edges_present
+- fallback_events_present
+- route_decision_trace_present
+scoring:
+  weights:
+    routing_correctness: 0.25
+    workflow_correctness: 0.2
+    output_quality: 0.2
+    safety_caveats: 0.1
+    provenance_completeness: 0.15
+    replay_reproducibility: 0.1

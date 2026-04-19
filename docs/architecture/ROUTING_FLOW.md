@@ -1,6 +1,6 @@
 # Routing Flow
 
-This page documents the request routing in `backend/main_with_mcp.py` and `backend/command_router.py`.
+This page documents the request routing in `backend/main.py` and `backend/command_router.py`.
 
 ## Current Flow
 

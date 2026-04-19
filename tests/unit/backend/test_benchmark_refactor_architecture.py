@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from backend.artifact_resolver import build_alias_index, resolve_semantic_reference
-from backend.main_with_mcp import _is_approval_command
+from backend.main import _is_approval_command
 from benchmarks.bio_benchmark_scorer import score_benchmark_run
 
 

@@ -232,7 +232,7 @@ class TestToolGeneratorIntegration:
     )
     async def test_unknown_tool_triggers_generator(self):
         """Test that unknown tools trigger the tool-generator-agent."""
-        from backend.main_with_mcp import dispatch_tool
+        from backend.main import dispatch_tool
         
         # This should trigger the tool-generator-agent
         # We'll mock it to avoid actual LLM calls in unit tests

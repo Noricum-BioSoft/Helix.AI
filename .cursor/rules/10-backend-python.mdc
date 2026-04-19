@@ -1,0 +1,81 @@
+---
+description: Python backend rules for Helix.AI orchestration and workflow logic
+globs:
+  - "backend/**/*.py"
+  - "agents/**/*.py"
+  - "tools/**/*.py"
+  - "shared/**/*.py"
+  - "tests/backend/**/*.py"
+  - "tests/unit/**/*.py"
+  - "tests/integration/**/*.py"
+  - "tests/workflows/**/*.py"
+---
+
+# Backend commands
+Use the smallest relevant verification first, then expand.
+
+Preferred commands:
+- `pytest -q`
+- `pytest tests/unit -q`
+- `pytest tests/integration -q`
+- `pytest tests/backend -q`
+- `pytest tests/workflows -q`
+- `pytest tests/evals -q`
+
+If configured in this repo, also run:
+- `ruff check backend tests`
+- `mypy backend`
+
+# Backend architecture focus
+The most important backend modules are:
+- runtime/routing:
+  - `backend/main_with_mcp.py`
+  - `backend/agent.py`
+  - `backend/command_router.py`
+  - `backend/execution_broker.py`
+- session/history/workflow:
+  - `backend/history_manager.py`
+  - `backend/workflow_executor.py`
+  - `backend/workflow_checkpoint.py`
+- orchestration:
+  - `backend/orchestration/`
+- domain pipelines:
+  - `backend/bio_pipeline/`
+  - `backend/ds_pipeline/`
+- supporting contracts/config/tools/prompts:
+  - `backend/config/`
+  - `backend/tools/`
+  - `backend/contracts/`
+  - `backend/prompts/`
+
+# Change rules
+- Prefer fixing workflow state transitions, tool contracts, and orchestration boundaries over adding ad hoc conditionals.
+- If changing prompts or contracts, verify downstream parsing and tool invocation behavior.
+- If changing checkpoint/history behavior, verify resume/replay and iterative workflows.
+- If changing command routing or execution brokering, verify both happy-path and partial-failure behavior.
+
+# Required backend test coverage for bug fixes
+For each backend bug fix, add or update tests covering relevant combinations of:
+- user provides an explicit workflow plan,
+- system generates a workflow plan,
+- workflow execution spans multiple agents,
+- retry behavior after tool or step failure,
+- workflow checkpoint save/resume,
+- history/session continuity,
+- additional file ingestion after initial run,
+- plot or output regeneration after refinement request,
+- malformed intermediate output handling,
+- contract/schema validation.
+
+# Bio and DS pipeline expectations
+Changes under `backend/bio_pipeline/` and `backend/ds_pipeline/` must preserve:
+- reproducibility,
+- workflow reviewability,
+- result provenance,
+- deterministic handling of structured inputs where feasible,
+- safe failure messages for bad or incomplete data.
+
+# Logging and diagnostics
+- Prefer actionable logs and explicit error categories.
+- Do not swallow exceptions without adding structured context.
+- If a failure is user-recoverable, surface a clear remediation path.

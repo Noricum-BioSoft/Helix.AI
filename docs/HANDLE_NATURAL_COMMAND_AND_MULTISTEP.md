@@ -23,7 +23,7 @@ Yes: we support that mix. Below is where it comes from and where the gaps are.
 
 ### 1. Explicit workflow (user says “A then B”)
 
-- **Detection:** In `main_with_mcp.py`, `_looks_like_workflow(command)` is true when the command contains delimiters like `" and then "`, `" then "`, `"->"`, `"\n"`, `";"` (and length > 20).
+- **Detection:** In `main.py`, `_looks_like_workflow(command)` is true when the command contains delimiters like `" and then "`, `" then "`, `"->"`, `"\n"`, `";"` (and length > 20).
 - **Plan building:** `command_router.route_plan(command, session_context)` splits the command on those delimiters and calls `route_command(part)` for each part. So each step gets a **tool name** (or `handle_natural_command`).
 - **Execution:** The broker runs `__plan__` with that plan. For each step it calls `_tool_executor(step.tool_name, step.arguments)`:
   - If `step.tool_name` is a **toolbox tool** (e.g. `sequence_alignment`, `fastqc_quality_analysis`), that tool is invoked directly.

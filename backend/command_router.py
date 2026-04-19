@@ -230,6 +230,46 @@ class CommandRouter:
             "suggested_steps": suggested_steps,
         }
         return (tool, base)
+
+    def route_command_with_shadow(
+        self, command: str, session_context: Dict[str, Any]
+    ) -> Tuple[str, Dict[str, Any]]:
+        """
+        Route command and optionally append shadow-routing diagnostics.
+
+        Shadow mode is observability-only and does not override the selected route.
+        Set HELIX_ROUTER_SHADOW_MODE=1 to enable.
+        """
+        tool_name, params = self.route_command(command, session_context)
+        if os.getenv("HELIX_ROUTER_SHADOW_MODE", "0").lower() not in ("1", "true", "yes"):
+            return tool_name, params
+
+        safe_params: Dict[str, Any] = dict(params or {})
+        shadow_payload: Dict[str, Any] = {
+            "enabled": True,
+            "selected_tool": tool_name,
+            "shadow_tool": None,
+            "disagrees": False,
+            "skipped_reason": None,
+        }
+
+        # If LLM-first mode is already enabled, shadow routing is not informative.
+        if os.getenv("HELIX_LLM_ROUTER_FIRST", "0").lower() in ("1", "true", "yes"):
+            shadow_payload["skipped_reason"] = "llm_router_first_enabled"
+            safe_params["router_shadow"] = shadow_payload
+            return tool_name, safe_params
+
+        llm_shadow = self._route_with_llm(command, session_context)
+        if llm_shadow is None:
+            shadow_payload["skipped_reason"] = "llm_router_unavailable"
+            safe_params["router_shadow"] = shadow_payload
+            return tool_name, safe_params
+
+        shadow_tool, _shadow_params = llm_shadow
+        shadow_payload["shadow_tool"] = shadow_tool
+        shadow_payload["disagrees"] = bool(shadow_tool and shadow_tool != tool_name)
+        safe_params["router_shadow"] = shadow_payload
+        return tool_name, safe_params
     
     def route_command(self, command: str, session_context: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
         """
@@ -578,6 +618,22 @@ class CommandRouter:
             print(f"🔧 Command router: Matched 'vendor' -> dna_vendor_research")
             return 'dna_vendor_research', self._extract_parameters(command, 'dna_vendor_research', session_context)
         
+        # ── TABULAR QA — conversational data questions about an uploaded file ──
+        # Fires when the user asks an open-ended question (what, which, how many,
+        # show me, compare…) and a tabular file is present in the session.
+        # Must come BEFORE tabular_analysis so "what are the top genes?" routes
+        # to the Code Interpreter rather than the deterministic ops layer.
+        if self._is_tabular_qa_command(command_lower, session_context):
+            print("🔧 Command router: Matched 'tabular QA' -> tabular_qa")
+            return "tabular_qa", self._extract_tabular_qa_params(command, session_context)
+
+        # ── TABULAR ANALYSIS (early guard, before plasmid / vendor checks) ─────
+        # Wins over broad-keyword routes like plasmid ("express" in "expression")
+        # when a concrete table-operation verb + file reference is present.
+        if self._is_tabular_analysis_command(command_lower, session_context):
+            print("🔧 Command router: Matched 'tabular analysis' [early] -> tabular_analysis")
+            return "tabular_analysis", self._extract_tabular_params(command, session_context)
+
         # Check for plasmid for representatives (HIGH PRIORITY - before general plasmid)
         if any(phrase in command_lower for phrase in ['insert representatives', 'express representatives', 'clone representatives', 'vector representatives', 'plasmid representatives']):
             print(f"🔧 Command router: Matched 'plasmid representatives' -> plasmid_for_representatives")
@@ -671,8 +727,8 @@ class CommandRouter:
                 "run_id": run_id,
             }
 
-        # Default fallback - try to route to sequence_alignment for alignment-like commands
-        if any(phrase in command_lower for phrase in ['align', 'alignment', 'sequences']):
+        # Default fallback - only for sequence-like requests with concrete molecular cues.
+        if self._should_sequence_alignment_fallback(command, command_lower):
             print(f"🔧 Command router: Defaulting to sequence_alignment for alignment command")
             return "sequence_alignment", self._extract_parameters(command, 'sequence_alignment', session_context)
         
@@ -761,6 +817,15 @@ class CommandRouter:
         if re.search(r'\b(dna|rna sequence|nucleotide|amino acid|peptide)\b', command, re.IGNORECASE):
             return True
         return False
+
+    def _should_sequence_alignment_fallback(self, command: str, command_lower: str) -> bool:
+        """Conservative default fallback gate for sequence_alignment."""
+        has_alignment_language = any(
+            phrase in command_lower for phrase in ("align", "alignment", "sequences")
+        )
+        if not has_alignment_language:
+            return False
+        return self._has_sequence_cues(command)
 
     def route_plan(self, command: str, session_context: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -1871,13 +1936,160 @@ class CommandRouter:
     def _is_ds_run_command(self, command_lower: str) -> bool:
         return any(phrase in command_lower for phrase in self._DS_PHRASES)
 
+    # ── Tabular QA routing (conversational Code Interpreter) ─────────────────
+
+    _TABULAR_QA_QUESTION_PREFIXES = (
+        # Unambiguous question/command openers — safe to match only at the START
+        # of the command.  We intentionally exclude very short or common words
+        # (e.g. "do", "find", "list", "count") to prevent mid-sentence keyword
+        # collisions that hijack unrelated routes (e.g. vendor research, NCBI
+        # fetch) when a tabular file happens to be in the session.
+        "what ", "what's ", "whats ", "what is ", "what are ",
+        "which ", "how many ", "how much ",
+        "show me ", "give me ", "tell me ",
+        "describe ", "summarize ", "summarise ",
+        "compare ", "is there ", "are there ",
+        "does ", "plot ", "visualize ", "visualise ",
+        "distribution of ", "histogram of ", "scatter ",
+        "correlation ", "explain ", "why ",
+    )
+
+    def _is_tabular_qa_command(
+        self, command_lower: str, session_context: dict
+    ) -> bool:
+        """
+        True when the command is an open-ended question about an uploaded tabular
+        file.  Requires a tabular file to be present in the session — without one
+        there is nothing to query against.
+
+        Matching strategy: only startswith() — never substring — to prevent
+        short prefixes like "do" or "find" from hijacking commands that merely
+        contain those words mid-sentence (e.g. "vendor" contains "do",
+        "window" contains "do", "playlist" contains "list").
+        """
+        if not self._has_tabular_file_in_session(session_context):
+            return False
+        return any(command_lower.startswith(p) for p in self._TABULAR_QA_QUESTION_PREFIXES)
+
+    def _extract_tabular_qa_params(
+        self, command: str, session_context: dict
+    ) -> dict:
+        session_id = session_context.get("session_id", "")
+        # Pick first tabular upload with its profile
+        file_path = ""
+        profile: dict = {}
+        sheet = None
+        for up in (session_context.get("uploaded_files") or []):
+            name = (up.get("filename") or up.get("name") or "").lower()
+            if any(name.endswith(ext) for ext in self._TABULAR_UPLOAD_EXTENSIONS):
+                file_path = up.get("local_path") or up.get("path") or ""
+                profile = up.get("schema_preview") or {}
+                break
+        # Sheet from command
+        sheet_match = re.search(
+            r"sheet[:\s]+['\"]?([A-Za-z0-9_ ]+)['\"]?", command, re.IGNORECASE
+        )
+        if sheet_match:
+            sheet = sheet_match.group(1).strip() or None
+        return {
+            "session_id": session_id,
+            "question": command,
+            "file_path": file_path,
+            "profile": profile,
+            "sheet": sheet,
+        }
+
+    # ── Tabular analysis routing ──────────────────────────────────────────────
+
+    _TABULAR_OPERATION_PHRASES = (
+        "rank", "ranking", "sort", "sort by", "order by",
+        "ratio", "derive column", "derived column", "calculate ratio",
+        "compute ratio", "filter rows", "filter table", "select rows",
+        "pivot", "group by", "aggregate", "normalize column",
+        "top k", "top n", "highest", "lowest", "compare columns",
+        "median ratio", "expression ratio", "tumor vs", "tumor/normal",
+    )
+    _TABULAR_FILE_PATTERN = re.compile(
+        r'[\w./\\-]+\.(csv|tsv|xlsx|xls|txt)\b', re.IGNORECASE
+    )
+    _TABULAR_UPLOAD_EXTENSIONS = {".csv", ".tsv", ".xlsx", ".xls"}
+
+    def _has_tabular_file_in_session(self, session_context: Dict[str, Any]) -> bool:
+        """Return True if any uploaded file in the session is a tabular format."""
+        uploads = session_context.get("uploaded_files") or []
+        for up in uploads:
+            name = (up.get("filename") or up.get("name") or "").lower()
+            if any(name.endswith(ext) for ext in self._TABULAR_UPLOAD_EXTENSIONS):
+                return True
+        return False
+
+    def _is_tabular_analysis_command(
+        self, command_lower: str, session_context: Dict[str, Any]
+    ) -> bool:
+        """
+        True when the command expresses an explicit table-operation intent.
+
+        Requires BOTH:
+        - a table-operation verb (rank, sort, ratio, derive column, …), AND
+        - a tabular file reference in the command OR a tabular file in the session.
+        """
+        has_table_op = any(p in command_lower for p in self._TABULAR_OPERATION_PHRASES)
+        if not has_table_op:
+            return False
+        has_file_ref = bool(self._TABULAR_FILE_PATTERN.search(command_lower))
+        has_session_file = self._has_tabular_file_in_session(session_context)
+        return has_file_ref or has_session_file
+
+    def _extract_tabular_params(
+        self, command: str, session_context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Extract tabular-analysis parameters from the command + session context."""
+        session_id = session_context.get("session_id", "")
+
+        # File path — prefer explicit reference, fall back to session uploads
+        data_path = ""
+        m = self._TABULAR_FILE_PATTERN.search(command)
+        if m:
+            data_path = m.group(0)
+        if not data_path:
+            for up in (session_context.get("uploaded_files") or []):
+                name = (up.get("filename") or up.get("name") or "").lower()
+                if any(name.endswith(ext) for ext in self._TABULAR_UPLOAD_EXTENSIONS):
+                    data_path = up.get("path") or up.get("filename") or name
+                    break
+
+        # Sheet name — look for quoted sheet references or "sheet <name>"
+        sheet = None
+        sheet_match = re.search(
+            r"sheet[:\s]+['\"]?([A-Za-z0-9_ ]+)['\"]?|['\"]([A-Za-z0-9_ ]+)['\"]?\s+sheet",
+            command, re.IGNORECASE,
+        )
+        if sheet_match:
+            sheet = (sheet_match.group(1) or sheet_match.group(2) or "").strip() or None
+
+        # Operations — collect any explicit operation keywords present
+        command_lower = command.lower()
+        operations = [p for p in self._TABULAR_OPERATION_PHRASES if p in command_lower]
+
+        # Column references — simple heuristic: quoted names or CamelCase tokens
+        columns = re.findall(r"['\"]([^'\"]+)['\"]", command)
+
+        return {
+            "session_id": session_id,
+            "data_path": data_path,
+            "sheet": sheet,
+            "operations": operations,
+            "column_refs": columns,
+            "objective": command,
+        }
+
     def _extract_ds_run_params(self, command: str, session_context: Dict[str, Any]) -> Dict[str, Any]:
         command_lower = command.lower()
         session_id = session_context.get("session_id", "")
 
-        # Data file path
+        # Data file path — match CSV, TSV, and Excel
         data_path = ""
-        path_match = re.search(r'[\w./\\-]+\.csv', command, re.IGNORECASE)
+        path_match = re.search(r'[\w./\\-]+\.(csv|tsv|xlsx|xls)\b', command, re.IGNORECASE)
         if path_match:
             data_path = path_match.group(0)
 

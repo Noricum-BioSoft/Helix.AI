@@ -242,7 +242,7 @@ async def demo_code_generator(backend_url: str = "http://localhost:8001"):
             print(f"✅ Session created: {session_id}\n")
         except Exception as e:
             print(f"❌ Failed to create session: {e}")
-            print(f"   Is the backend running? Try: uv run python -m backend.main_with_mcp")
+            print(f"   Is the backend running? Try: uv run python -m backend.main")
             raise
         
         command = """
@@ -903,7 +903,7 @@ Requirements:
             print(f"   # Download: aws s3 cp {output_location}test_mate_R1_fastqc.html .")
         
         print("\n📝 Where to find execution logs:")
-        print("   • Backend logs: Check the terminal where you ran 'uv run python -m backend.main_with_mcp'")
+        print("   • Backend logs: Check the terminal where you ran 'uv run python -m backend.main'")
         print("   • Sandbox logs: Docker container logs (if using sandbox)")
         print(f"   • Session ID: {session_id} (for debugging)")
         

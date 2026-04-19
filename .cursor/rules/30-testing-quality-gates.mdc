@@ -1,0 +1,56 @@
+---
+description: Testing and quality gate protocol for Helix.AI
+alwaysApply: true
+---
+
+# Testing philosophy
+Helix.AI is an iterative, multi-agent platform.
+Tests must validate not just single function correctness, but workflow reliability, iterative refinement, and recovery from partial failures.
+
+# Test execution order
+Use this progression:
+1. targeted unit tests,
+2. targeted integration tests,
+3. workflow or end-to-end tests if orchestration or UI changed,
+4. evals/benchmark runs if behavior quality, routing quality, or release status may change.
+
+# Relevant test areas
+Use these test areas as appropriate:
+- `tests/unit/`
+- `tests/integration/`
+- `tests/frontend/`
+- `tests/backend/`
+- `tests/evals/`
+- `tests/demo_scenarios/`
+- `tests/workflows/`
+
+# Required evidence for each defect fix
+For each issue fixed, produce:
+- failing reproduction or strong failure evidence,
+- code fix,
+- added or updated test coverage,
+- passing verification result,
+- short root-cause note in `artifacts/worklog.md`.
+
+# Regression policy
+Never remove failing tests just to achieve green status.
+Only update snapshots, fixtures, or expectations when behavior change is intentional and documented.
+
+# Failure triage
+When multiple failures exist:
+1. identify the root-cause cluster,
+2. fix highest-impact systemic failures first,
+3. rerun smallest meaningful suite,
+4. expand verification only after local green status.
+
+# Artifact policy
+Write:
+- raw summaries to `artifacts/test_results/`,
+- concise failure explanations to `artifacts/failure_summaries/`,
+- overall progress notes to `artifacts/worklog.md`.
+
+# Blocker policy
+If a failure cannot be fixed safely in current scope:
+- do not fake a pass,
+- document the blocker,
+- explain impact on release readiness.

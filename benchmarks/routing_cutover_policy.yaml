@@ -1,0 +1,41 @@
+schema_version: 1.0.0
+updated_at_utc: "2026-04-17T00:00:00Z"
+description: >
+  Router migration policy for transitioning from phrase-heavy routing to
+  semantic/capability routing with shadow validation and rollback controls.
+
+shadow_mode:
+  env_flag: HELIX_ROUTER_SHADOW_MODE
+  enabled_default: false
+  telemetry_field: router_shadow
+  required_metrics:
+    - route_disagreement_rate
+    - forbidden_fallback_count
+    - misclassification_rate
+
+cutover_thresholds:
+  # Gate semantic-router-first activation by measured quality in shadow runs.
+  max_route_disagreement_rate: 0.12
+  max_misclassification_rate: 0.05
+  max_forbidden_fallback_count: 0
+  min_shadow_sample_size: 100
+
+cutover_steps:
+  - "Enable HELIX_ROUTER_SHADOW_MODE in staging and capture shadow metrics."
+  - "Validate threshold compliance across validation and release-holdout benchmark suites."
+  - "Enable HELIX_LLM_ROUTER_FIRST for staged cohorts only."
+  - "Promote to full rollout only after two consecutive threshold-passing windows."
+
+rollback_triggers:
+  - condition: "forbidden_fallback_count > 0"
+    action: "Disable HELIX_LLM_ROUTER_FIRST and keep HELIX_ROUTER_SHADOW_MODE enabled."
+  - condition: "misclassification_rate exceeds max_misclassification_rate for 2 consecutive windows"
+    action: "Revert to deterministic-first routing and open P0 incident."
+  - condition: "release benchmark gate fails on routing_safety scenarios"
+    action: "Block release and execute routing rollback playbook."
+
+rollback_procedure:
+  - "Set HELIX_LLM_ROUTER_FIRST=0 in active environment."
+  - "Confirm deterministic router health via benchmark-gate workflow."
+  - "Capture failure summary in artifacts/failure_summaries/."
+  - "File remediation tasks before next cutover attempt."

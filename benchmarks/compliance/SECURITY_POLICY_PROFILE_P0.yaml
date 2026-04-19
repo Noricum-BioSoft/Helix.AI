@@ -1,0 +1,42 @@
+schema_version: 1.0.0
+updated_at_utc: "2026-04-17T00:00:00Z"
+profile_id: p0
+description: >
+  P0 security/policy profile defaults and enforcement points for Helix Next.
+
+defaults:
+  upload_intake_enabled: true
+  block_suspicious_payloads: true
+  approval_for_restricted_human_data: true
+  audit_enabled: true
+  sandbox_required_for_untrusted_execution: true
+
+enforcement_points:
+  - id: upload_intake
+    location: backend.main._persist_upload_to_session
+    controls:
+      - extension_allowlist
+      - payload_scan
+      - sensitivity_classification
+      - policy_gate_block_or_allow
+      - policy_audit_event
+  - id: approval_gate
+    location: backend.main.execute
+    controls:
+      - workflow_approval_staging
+      - policy_pending_upload_execution_block
+      - policy_approval_audit_event
+  - id: routing_policy_guard
+    location: benchmarks/compliance/validate_routing_policy.py
+    controls:
+      - block_broad_sequence_fallback_regression
+  - id: fixture_compliance
+    location: benchmarks/compliance/validate_fixture_compliance.py
+    controls:
+      - fixture_license_and_sensitivity_registry_coverage
+
+audit_event_types:
+  - upload_blocked
+  - upload_accepted
+  - upload_policy_approved
+  - execute_blocked_policy_pending_uploads

@@ -15,7 +15,7 @@ This frontend application provides a user-friendly interface for interacting wit
 ### Components
 
 - **App.tsx**: Main application component with command interface
-- **services/mcpApi.ts**: API service for communicating with MCP server
+- **services/helixApi.ts**: API service for communicating with MCP server
 - **utils/commandParser.ts**: Intelligent command parsing and routing
 
 ### Command Routing
@@ -44,7 +44,7 @@ npm run dev
 3. Ensure the backend MCP server is running:
 ```bash
 cd ../backend
-python main_with_mcp.py
+python main.py
 ```
 
 ## Usage
@@ -107,7 +107,7 @@ The frontend communicates with the backend through these endpoints:
    - Create a new parsing method
    - Update the main `parseCommand` method
 
-2. Update the API service in `services/mcpApi.ts`:
+2. Update the API service in `services/helixApi.ts`:
    - Add new interface for the request
    - Add new method to call the endpoint
 
@@ -136,7 +136,7 @@ The application includes comprehensive error handling:
 1. **Server Connection Failed**:
    - Ensure the backend is running on port 8001
    - Check CORS settings in the backend
-   - Verify the API_BASE_URL in mcpApi.ts
+   - Verify the API_BASE_URL in helixApi.ts
 
 2. **Commands Not Working**:
    - Check the command parser keywords

@@ -17,6 +17,7 @@ import logging
 import tempfile
 import subprocess
 import time
+import shutil
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 import json
@@ -853,119 +854,125 @@ async def _execute_generated_code(
         try:
             # Get Docker image name
             biotools_image = os.getenv('HELIX_BIOTOOLS_IMAGE', 'helix-biotools:latest')
-            
-            # Check if Docker is available
-            docker_check = subprocess.run(
-                ["docker", "--version"],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            
-            if docker_check.returncode != 0:
-                logger.warning("⚠️  Docker not available, falling back to local/EC2 execution")
+
+            # Check if Docker is available without throwing noisy tracebacks.
+            docker_path = shutil.which("docker")
+            if not docker_path:
+                logger.warning("⚠️  Docker binary not found, falling back to local/EC2 execution")
             else:
-                # Check if image exists
-                image_check = subprocess.run(
-                    ["docker", "images", "-q", biotools_image],
+                docker_check = subprocess.run(
+                    [docker_path, "--version"],
                     capture_output=True,
                     text=True,
                     timeout=5
                 )
-                
-                if not image_check.stdout.strip():
-                    logger.warning(f"⚠️  Docker image {biotools_image} not found, falling back to local/EC2 execution")
-                    logger.warning(f"💡 Build it with: docker build -f backend/Dockerfile.biotools -t {biotools_image} .")
+                if docker_check.returncode != 0:
+                    logger.warning("⚠️  Docker command unavailable, falling back to local/EC2 execution")
+                    docker_path = None
+                if not docker_path:
+                    # Fall through to local/EC2 execution path below.
+                    pass
                 else:
-                    # Save code to persistent location for debugging
-                    debug_dir = PROJECT_ROOT / "sessions" / "generated_code"
-                    debug_dir.mkdir(parents=True, exist_ok=True)
-                    
-                    # Create meaningful filename
-                    import re
-                    tool_name = re.sub(r'[^a-zA-Z0-9_-]', '_', original_command[:50])
-                    timestamp = time.strftime("%Y%m%d_%H%M%S")
-                    debug_filename = f"{tool_name}_{timestamp}.py"
-                    debug_path = debug_dir / debug_filename
-                    
-                    # Save to both debug location and temp file for execution
-                    debug_path.write_text(code)
-                    
-                    temp_file = tempfile.NamedTemporaryFile(
-                        mode='w',
-                        suffix='.py',
-                        delete=False,
-                        dir='/tmp'
+                # Check if image exists
+                    image_check = subprocess.run(
+                        [docker_path, "images", "-q", biotools_image],
+                        capture_output=True,
+                        text=True,
+                        timeout=5
                     )
-                    temp_file.write(code)
-                    temp_file.flush()
-                    temp_file_path = temp_file.name
-                    temp_file.close()
-                    
-                    logger.info(f"🐳 Executing in Docker sandbox: {biotools_image}")
-                    logger.info(f"📝 Code saved to: {temp_file_path}")
-                    logger.info(f"💾 Debug copy saved to: {debug_path}")
-                    
-                    try:
-                        env_args: List[str] = []
-                        for key, value in exec_env_vars.items():
-                            env_args.extend(["-e", f"{key}={value}"])
-
-                        # Forward AWS credentials/config to Docker for S3 access
-                        aws_env_keys = [
-                            "AWS_ACCESS_KEY_ID",
-                            "AWS_SECRET_ACCESS_KEY",
-                            "AWS_SESSION_TOKEN",
-                            "AWS_DEFAULT_REGION",
-                            "AWS_REGION",
-                            "AWS_PROFILE"
-                        ]
-                        for key in aws_env_keys:
-                            if os.getenv(key):
-                                env_args.extend(["-e", f"{key}={os.getenv(key)}"])
-
-                        aws_credentials_dir = os.path.expanduser("~/.aws")
-                        aws_volume_args: List[str] = []
-                        if os.path.isdir(aws_credentials_dir):
-                            aws_volume_args = ["-v", f"{aws_credentials_dir}:/root/.aws:ro"]
-
-                        # Execute code in Docker sandbox
-                        result = subprocess.run(
-                            [
-                                "docker", "run", "--rm",
-                                *env_args,
-                                *aws_volume_args,
-                                "-v", f"{temp_file_path}:/code/script.py:ro",
-                                "-w", "/sandbox/work",
-                                "--memory", "4g",
-                                "--cpus", "2",
-                                "--network", "host",  # For S3 access
-                                biotools_image,
-                                "python", "/code/script.py"
-                            ],
-                            capture_output=True,
-                            text=True,
-                            timeout=300
+                
+                    if not image_check.stdout.strip():
+                        logger.warning(f"⚠️  Docker image {biotools_image} not found, falling back to local/EC2 execution")
+                        logger.warning(f"💡 Build it with: docker build -f backend/Dockerfile.biotools -t {biotools_image} .")
+                    else:
+                        # Save code to persistent location for debugging
+                        debug_dir = PROJECT_ROOT / "sessions" / "generated_code"
+                        debug_dir.mkdir(parents=True, exist_ok=True)
+                        
+                        # Create meaningful filename
+                        import re
+                        tool_name = re.sub(r'[^a-zA-Z0-9_-]', '_', original_command[:50])
+                        timestamp = time.strftime("%Y%m%d_%H%M%S")
+                        debug_filename = f"{tool_name}_{timestamp}.py"
+                        debug_path = debug_dir / debug_filename
+                        
+                        # Save to both debug location and temp file for execution
+                        debug_path.write_text(code)
+                        
+                        temp_file = tempfile.NamedTemporaryFile(
+                            mode='w',
+                            suffix='.py',
+                            delete=False,
+                            dir='/tmp'
                         )
+                        temp_file.write(code)
+                        temp_file.flush()
+                        temp_file_path = temp_file.name
+                        temp_file.close()
                         
-                        # Cleanup temp file
+                        logger.info(f"🐳 Executing in Docker sandbox: {biotools_image}")
+                        logger.info(f"📝 Code saved to: {temp_file_path}")
+                        logger.info(f"💾 Debug copy saved to: {debug_path}")
+                        
                         try:
-                            os.unlink(temp_file_path)
-                        except:
-                            pass
-                        
-                        logger.info(f"🐳 Docker execution completed with exit code: {result.returncode}")
-                        
-                        if result.returncode == 0:
-                            logger.info("✅ Code executed successfully in Docker sandbox")
-                            return {
-                                "status": "success",
-                                "stdout": result.stdout,
-                                "stderr": result.stderr,
-                                "stderr_full": result.stderr,
-                                "exit_code": result.returncode
-                            }
-                        else:
+                            env_args: List[str] = []
+                            for key, value in exec_env_vars.items():
+                                env_args.extend(["-e", f"{key}={value}"])
+                            # Forward AWS credentials/config to Docker for S3 access
+                            aws_env_keys = [
+                                "AWS_ACCESS_KEY_ID",
+                                "AWS_SECRET_ACCESS_KEY",
+                                "AWS_SESSION_TOKEN",
+                                "AWS_DEFAULT_REGION",
+                                "AWS_REGION",
+                                "AWS_PROFILE"
+                            ]
+                            for key in aws_env_keys:
+                                if os.getenv(key):
+                                    env_args.extend(["-e", f"{key}={os.getenv(key)}"])
+
+                            aws_credentials_dir = os.path.expanduser("~/.aws")
+                            aws_volume_args: List[str] = []
+                            if os.path.isdir(aws_credentials_dir):
+                                aws_volume_args = ["-v", f"{aws_credentials_dir}:/root/.aws:ro"]
+
+                            # Execute code in Docker sandbox
+                            result = subprocess.run(
+                                [
+                                    docker_path, "run", "--rm",
+                                    *env_args,
+                                    *aws_volume_args,
+                                    "-v", f"{temp_file_path}:/code/script.py:ro",
+                                    "-w", "/sandbox/work",
+                                    "--memory", "4g",
+                                    "--cpus", "2",
+                                    "--network", "host",  # For S3 access
+                                    biotools_image,
+                                    "python", "/code/script.py"
+                                ],
+                                capture_output=True,
+                                text=True,
+                                timeout=300
+                            )
+
+                            # Cleanup temp file
+                            try:
+                                os.unlink(temp_file_path)
+                            except:
+                                pass
+
+                            logger.info(f"🐳 Docker execution completed with exit code: {result.returncode}")
+
+                            if result.returncode == 0:
+                                logger.info("✅ Code executed successfully in Docker sandbox")
+                                return {
+                                    "status": "success",
+                                    "stdout": result.stdout,
+                                    "stderr": result.stderr,
+                                    "stderr_full": result.stderr,
+                                    "exit_code": result.returncode
+                                }
+
                             logger.warning(f"⚠️  Docker execution failed with exit code {result.returncode}")
                             if result.stderr:
                                 # Log first 500 chars as warning
@@ -974,10 +981,10 @@ async def _execute_generated_code(
                                 logger.error(f"stderr (FULL):\n{result.stderr}")
                             else:
                                 logger.warning("stderr: N/A")
-                            
+
                             if result.stdout:
                                 logger.info(f"stdout:\n{result.stdout}")
-                            
+
                             return {
                                 "status": "error",
                                 "error": f"Code execution failed with return code {result.returncode}",
@@ -986,29 +993,31 @@ async def _execute_generated_code(
                                 "stderr_full": result.stderr,
                                 "exit_code": result.returncode
                             }
-                            
-                    except subprocess.TimeoutExpired:
-                        logger.error("❌ Docker execution timed out (300s)")
-                        try:
-                            os.unlink(temp_file_path)
-                        except:
-                            pass
-                        return {
-                            "status": "error",
-                            "error": "Execution timed out after 300 seconds",
-                            "stdout": "",
-                            "stderr": "Timeout"
-                        }
-                    except Exception as e:
-                        logger.error(f"❌ Docker execution exception: {e}", exc_info=True)
-                        try:
-                            os.unlink(temp_file_path)
-                        except:
-                            pass
-                        # Fall through to EC2/local execution
+
+                        except subprocess.TimeoutExpired:
+                            logger.error("❌ Docker execution timed out (300s)")
+                            try:
+                                os.unlink(temp_file_path)
+                            except:
+                                pass
+                            return {
+                                "status": "error",
+                                "error": "Execution timed out after 300 seconds",
+                                "stdout": "",
+                                "stderr": "Timeout"
+                            }
+                        except Exception as e:
+                            logger.error(f"❌ Docker execution exception: {e}", exc_info=True)
+                            try:
+                                os.unlink(temp_file_path)
+                            except:
+                                pass
+                            # Fall through to EC2/local execution
                         
+        except FileNotFoundError as e:
+            logger.warning(f"⚠️  Sandbox setup skipped: {e}. Falling back to local/EC2 execution")
         except Exception as e:
-            logger.error(f"❌ Sandbox setup failed: {e}", exc_info=True)
+            logger.error(f"❌ Sandbox setup failed: {e}")
             # Fall through to EC2/local execution
     
     # Check if EC2 execution is enabled.
@@ -1020,7 +1029,7 @@ async def _execute_generated_code(
     
     if use_ec2:
         try:
-            # Prefer package import. The backend is normally run as `python -m backend.main_with_mcp`,
+            # Prefer package import. The backend is normally run as `python -m backend.main`,
             # so `backend.ec2_executor` is the correct module path.
             try:
                 from backend.ec2_executor import get_ec2_executor

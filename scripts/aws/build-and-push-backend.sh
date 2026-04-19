@@ -94,7 +94,7 @@ docker build --platform linux/amd64 -f backend/Dockerfile -t ${ECR_REPO_NAME}:${
 # Step 2: Test the import works
 echo ""
 echo "🧪 Step 2: Testing import..."
-if docker run --rm ${ECR_REPO_NAME}:${IMAGE_TAG} python -c "import backend.main_with_mcp; print('✅ Import successful!')" > /dev/null 2>&1; then
+if docker run --rm ${ECR_REPO_NAME}:${IMAGE_TAG} python -c "import backend.main; print('✅ Import successful!')" > /dev/null 2>&1; then
     echo "✅ Import test passed!"
 else
     echo "❌ Import test failed! Fix the Docker image before pushing."

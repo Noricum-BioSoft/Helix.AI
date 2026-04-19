@@ -52,6 +52,14 @@ export OPENAI_API_KEY="your_openai_api_key_here"
 export DEEPSEEK_API_KEY="your_deepseek_api_key_here"
 ```
 
+## Session storage (local vs S3)
+
+| Variable | Purpose |
+|----------|---------|
+| `HELIX_LOCAL_SESSIONS_ONLY` | Set to `1` or `true` to **disable S3** for session initialization (EC2 beta with **only local disk**). Sessions are stored under `HELIX_SESSIONS_DIR` or `./sessions`. |
+| `HELIX_SESSIONS_DIR` | Absolute path for session files (e.g. `/var/lib/helix/sessions`). Also accepts `HELIX_STORAGE_DIR` as an alias. |
+| `S3_BUCKET_NAME` | Used for S3 session markers / cloud paths when **not** in local-only mode. |
+
 ## Troubleshooting
 
 ### Error: "DEEPSEEK_API_KEY must be set"

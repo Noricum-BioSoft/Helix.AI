@@ -1,0 +1,52 @@
+id: case-ngs101-gwas-plink
+title: GWAS Using PLINK
+source_refs:
+- source: ngs101
+  source_use_case_id: ngs101-gwas-plink
+  source_url: https://ngs101.com/tutorials/
+family: variant_annotation
+difficulty: advanced
+risk_class: high
+input_fixtures:
+- fixture_id: ngs101-gwas-plink-input
+  path: fixtures/genomics/ngs101-gwas-plink.v1.tsv
+  expected_format: TSV (SNP_ID/CHR/BP/alleles/BETA/SE/P_VALUE/OR/CI/N/GENE_NEAREST - summary stats only)
+  checksum_sha256: fe30806dc4f423e12ef02af8c76e288b527fa4f97984a8d2e1de8f947ceb3c03
+prompt: Perform the 'GWAS Using PLINK' workflow for the provided inputs. Use the appropriate
+  variant annotation capability and return a scientifically defensible result with
+  explicit assumptions.
+expected_route: variant_annotation
+forbidden_routes:
+- sequence_alignment
+- single_cell_analysis
+- bulk_rnaseq_analysis
+forbidden_fallbacks:
+- sequence_alignment
+- generic_rephrase_and_retry
+required_steps:
+- ingest_variants
+- annotate
+- prioritize
+- summarize_and_explain
+required_outputs:
+- table
+- plot
+- report
+- explanation
+safety_requirements:
+- explicit_assumptions
+- uncertainty_note
+- clinical_interpretation_disclaimer
+provenance_requirements:
+- manifest_v1_present
+- lineage_edges_present
+- fallback_events_present
+- route_decision_trace_present
+scoring:
+  weights:
+    routing_correctness: 0.25
+    workflow_correctness: 0.2
+    output_quality: 0.2
+    safety_caveats: 0.1
+    provenance_completeness: 0.15
+    replay_reproducibility: 0.1

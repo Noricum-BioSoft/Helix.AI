@@ -6,7 +6,7 @@ async def test_unknown_tool_does_not_trigger_toolgen_for_qa(monkeypatch):
     """
     Phase 4: ensure tool-generator-agent is only used when intent is execute.
     """
-    from backend.main_with_mcp import dispatch_tool
+    from backend.main import dispatch_tool
 
     called = {"toolgen": False}
 

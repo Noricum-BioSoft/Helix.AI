@@ -3,10 +3,10 @@
 ## Where the pipeline is executed
 
 - **Entry point:** `backend.execution_broker.ExecutionBroker._execute_plan_sync`
-- **Invoked from:** `backend.main_with_mcp` when `POST /execute` receives a command that `_looks_like_workflow(req.command)` (e.g. "align … then calculate the consensus").
+- **Invoked from:** `backend.main` when `POST /execute` receives a command that `_looks_like_workflow(req.command)` (e.g. "align … then calculate the consensus").
 - **Flow:** `execute()` → `broker.execute_tool(ExecutionRequest(tool_name="__plan__", arguments={"plan": plan, "session_id": ...}))` → `_execute_plan_sync(plan)` → for each step `_tool_executor(step.tool_name, resolved_args)` (which is `call_mcp_tool`).
 
-So the "code" that runs the entire pipeline is **ExecutionBroker._execute_plan_sync**; individual steps are run by **call_mcp_tool** (main_with_mcp).
+So the "code" that runs the entire pipeline is **ExecutionBroker._execute_plan_sync**; individual steps are run by **call_mcp_tool** (main).
 
 ## Where step directories and artifacts live
 
@@ -39,7 +39,7 @@ So in `sessions/{session_id}.json` you get:
 
 | Question | Answer |
 |----------|--------|
-| Code that executes the entire pipeline | `backend.execution_broker.ExecutionBroker._execute_plan_sync` (invoked from `POST /execute` in main_with_mcp when the command looks like a workflow). |
+| Code that executes the entire pipeline | `backend.execution_broker.ExecutionBroker._execute_plan_sync` (invoked from `POST /execute` in main when the command looks like a workflow). |
 | Directory of step 1, 2, …, N | No dedicated step dirs yet; `pipeline_execution.steps[].step_dir` is reserved (null). Session-level dir: `session_dir` from `pipeline_execution.storage`. |
 | Inputs of each step | `pipeline_execution.steps[].inputs` (summary of arguments; no `previous_plan_steps` blob). Full trimmed args in `result.steps[].arguments`. |
 | Outputs of each step | `pipeline_execution.steps[].outputs` (short summary); full trimmed result in `result.steps[].result`. |

@@ -19,7 +19,7 @@ sys.path.insert(0, str(project_root))
 
 def analyze_dispatch_tool():
     """Analyze dispatch_tool to verify refactoring."""
-    dispatch_tool_path = project_root / "backend" / "main_with_mcp.py"
+    dispatch_tool_path = project_root / "backend" / "main.py"
     
     with open(dispatch_tool_path, 'r') as f:
         source = f.read()

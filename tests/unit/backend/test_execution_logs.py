@@ -3,7 +3,7 @@ Test that stdout/stderr logs from EC2 execution are properly captured and includ
 """
 
 import pytest
-from backend.main_with_mcp import _extract_execution_logs, build_standard_response
+from backend.main import _extract_execution_logs, build_standard_response
 
 
 def test_extract_logs_from_direct_ec2_result():

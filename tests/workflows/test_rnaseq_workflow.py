@@ -380,7 +380,7 @@ def main():
         print_success("Backend is running")
     except Exception as e:
         print_error(f"Backend is not accessible at {BACKEND_URL}: {e}")
-        print_info("Make sure the backend is running: cd backend && uvicorn main_with_mcp:app --reload")
+        print_info("Make sure the backend is running: cd backend && uvicorn main:app --reload")
         sys.exit(1)
     
     # Load FASTQ files

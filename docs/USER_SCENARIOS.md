@@ -157,7 +157,7 @@ Scenarios are grouped by **user intent** and **session pattern**:
 
 ## 6. Additional Scenarios (Existing Tools)
 
-These scenarios use **tools that already exist** in Helix but were not listed in sections 3–5. **To support them:** (1) ensure the command router and agent map the relevant natural-language triggers to the right tool, (2) add the tool to `_TOOL_INPUT_REQUIREMENTS` in `main_with_mcp.py` if you want a structured “needs_inputs” response when required inputs are missing, (3) for multi-step flows (F3→F4, I1, I2), ensure session state is passed so downstream tools receive prior outputs. Reproducibility (script/bundle) applies where a scriptable run is produced (e.g. bulk RNA-seq, single-cell); sequence/plasmid lookups may return artifacts without a full analysis.py.
+These scenarios use **tools that already exist** in Helix but were not listed in sections 3–5. **To support them:** (1) ensure the command router and agent map the relevant natural-language triggers to the right tool, (2) add the tool to `_TOOL_INPUT_REQUIREMENTS` in `main.py` if you want a structured “needs_inputs” response when required inputs are missing, (3) for multi-step flows (F3→F4, I1, I2), ensure session state is passed so downstream tools receive prior outputs. Reproducibility (script/bundle) applies where a scriptable run is produced (e.g. bulk RNA-seq, single-cell); sequence/plasmid lookups may return artifacts without a full analysis.py.
 
 ### F. Sequence, alignment & plasmid workflows
 

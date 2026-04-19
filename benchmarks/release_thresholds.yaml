@@ -1,0 +1,48 @@
+unit_tests:
+  min_pass_rate: 1.0
+
+integration_tests:
+  min_pass_rate: 0.98
+
+backend_tests:
+  min_pass_rate: 0.98
+
+frontend_regression:
+  min_pass_rate: 0.98
+
+workflow_tests:
+  min_pass_rate: 0.95
+
+evals:
+  min_pass_rate: 0.90
+
+iterative_workflow_cases:
+  min_pass_rate: 0.95
+
+file_integration_cases:
+  min_pass_rate: 0.95
+
+bug_recovery_cases:
+  min_pass_rate: 0.90
+
+latency:
+  workflow_median_seconds_max: 45
+  workflow_p95_seconds_max: 120
+
+cost:
+  per_run_usd_max: 20.0
+  per_session_usd_max: 80.0
+
+performance_regression_policy:
+  require_capability_family_latency_targets: true
+  require_budget_guardrails: true
+  require_capacity_assumptions: true
+  policy_source: benchmarks/performance_cost_policy.yaml
+
+regressions:
+  critical_regressions_allowed: 0
+
+release_requirements:
+  require_fresh_frontend_build: true
+  require_fresh_benchmark_run: true
+  require_release_readiness_artifact: true

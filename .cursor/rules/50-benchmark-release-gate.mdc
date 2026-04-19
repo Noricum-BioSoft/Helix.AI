@@ -1,0 +1,48 @@
+---
+description: Benchmark and release readiness rules for Helix.AI
+alwaysApply: true
+---
+
+# Release gate
+Helix.AI is not release-ready unless fresh benchmark and test results satisfy all thresholds in:
+- `benchmarks/release_thresholds.yaml`
+
+# Mandatory release checks
+At minimum, validate:
+- backend unit pass rate,
+- integration pass rate,
+- workflow/e2e pass rate,
+- frontend regression pass rate,
+- eval/benchmark task pass rate,
+- no critical regressions versus baseline,
+- acceptable latency and stability for representative tasks.
+
+# Benchmark execution rules
+- Use fixed benchmark cases where possible.
+- Record benchmark metadata, command used, and timestamps.
+- Compare results to baseline or prior known-good output when available.
+
+# Decision rule
+If any threshold fails:
+- do not declare release readiness,
+- record the blocker in `artifacts/release_readiness.json`,
+- prioritize remediation by release impact.
+
+# Output contract
+Write machine-readable status to:
+- `artifacts/release_readiness.json`
+
+Include:
+- timestamp,
+- commit or working-tree identifier if available,
+- suites executed,
+- pass/fail counts,
+- benchmark metrics,
+- threshold comparison,
+- blocker summary,
+- final readiness value.
+
+# Anti-patterns
+- Do not declare success based only on a subset of tests.
+- Do not treat exploratory manual checks as equivalent to release benchmarks.
+- Do not skip evals when planner, routing, workflow, or frontend behavior changed materially.

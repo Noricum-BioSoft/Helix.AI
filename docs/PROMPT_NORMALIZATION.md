@@ -42,4 +42,4 @@ This would live in a small “prompt normalization” or “prompt engineering�
 ## Where it lives
 
 - **Splitting behavior:** `backend/command_router.py` → `_split_workflow_command()`. Only explicit delimiters (`then`, `and then`, `;`, `->`, `→`) are used; newlines are not step separators.
-- **Future rewrite/normalization:** Could be a function in `command_router` or a separate module called from `main_with_mcp` before `route_command` / `route_plan`.
+- **Future rewrite/normalization:** Could be a function in `command_router` or a separate module called from `main` before `route_command` / `route_plan`.

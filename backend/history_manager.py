@@ -17,8 +17,101 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# S3 Configuration
+# S3 Configuration (session marker uploads; disabled when HELIX_LOCAL_SESSIONS_ONLY is set)
 S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME", "helix-ai-frontend-794270057041-us-west-1")
+
+
+def _env_local_sessions_only() -> bool:
+    """When true, sessions persist only under local disk (no S3 session paths or marker uploads)."""
+    v = os.getenv("HELIX_LOCAL_SESSIONS_ONLY", "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def _default_sessions_storage_dir() -> str:
+    """Directory for session JSON and per-session folders (default: ./sessions)."""
+    for key in ("HELIX_SESSIONS_DIR", "HELIX_STORAGE_DIR"):
+        val = os.getenv(key)
+        if val and str(val).strip():
+            return str(val).strip()
+    return "sessions"
+
+
+def _max_stored_command_chars() -> int:
+    """Maximum command length persisted in session JSON/history."""
+    raw = os.getenv("HELIX_MAX_STORED_COMMAND_CHARS", "12000").strip()
+    try:
+        value = int(raw)
+    except Exception:
+        value = 12000
+    return max(1000, value)
+
+
+def _is_probably_binary_text(text: str) -> bool:
+    """Heuristic check for binary-like payload accidentally inlined in prompts."""
+    if not text:
+        return False
+    sample = text[:5000]
+    if "\x00" in sample:
+        return True
+    non_printable = 0
+    for ch in sample:
+        if ch in ("\n", "\r", "\t"):
+            continue
+        code = ord(ch)
+        if code < 32 or code == 127:
+            non_printable += 1
+    ratio = non_printable / max(1, len(sample))
+    return ratio > 0.03
+
+
+def sanitize_command_for_storage(command: Any) -> Dict[str, Any]:
+    """
+    Keep session history compact by truncating oversized/binary-like commands.
+
+    Returns:
+      {
+        "command": <sanitized string>,
+        "meta": {
+          "original_chars": int,
+          "stored_chars": int,
+          "truncated": bool,
+          "probable_binary": bool
+        }
+      }
+    """
+    text = command if isinstance(command, str) else str(command or "")
+    max_chars = _max_stored_command_chars()
+    original_chars = len(text)
+    probable_binary = _is_probably_binary_text(text)
+    needs_truncate = original_chars > max_chars or probable_binary
+
+    if not needs_truncate:
+        return {
+            "command": text,
+            "meta": {
+                "original_chars": original_chars,
+                "stored_chars": original_chars,
+                "truncated": False,
+                "probable_binary": probable_binary,
+            },
+        }
+
+    kept = text[:max_chars]
+    note = (
+        "\n\n[helix-storage-note] command payload truncated for session persistence "
+        f"(original_chars={original_chars}, stored_chars={len(kept)}, "
+        f"probable_binary={str(probable_binary).lower()})."
+    )
+    sanitized = kept + note
+    return {
+        "command": sanitized,
+        "meta": {
+            "original_chars": original_chars,
+            "stored_chars": len(sanitized),
+            "truncated": True,
+            "probable_binary": probable_binary,
+        },
+    }
 
 def serialize_langchain_messages(result: Any) -> Any:
     """Convert LangChain message objects to serializable format."""
@@ -105,8 +198,13 @@ class HistoryManager:
     
     def __init__(self, storage_dir: str = "sessions"):
         self.storage_dir = Path(storage_dir)
-        self.storage_dir.mkdir(exist_ok=True)
+        self.storage_dir.mkdir(parents=True, exist_ok=True)
         self.sessions: Dict[str, Dict[str, Any]] = {}
+        if _env_local_sessions_only():
+            logger.info(
+                "HELIX_LOCAL_SESSIONS_ONLY: using local session storage only (%s); S3 session paths disabled",
+                self.storage_dir.resolve(),
+            )
         self.s3_bucket_name = S3_BUCKET_NAME
         self._s3_client = None
         self._sessions_loaded = False  # Lazy loading flag
@@ -148,6 +246,28 @@ class HistoryManager:
 
     def _new_artifact_id(self) -> str:
         return f"art_{uuid.uuid4().hex[:12]}"
+
+    def _ensure_upload_directories(self, session_dir: Path) -> Dict[str, str]:
+        """Ensure standard upload directories exist for a session."""
+        raw_dir = session_dir / "uploads" / "raw"
+        processed_dir = session_dir / "uploads" / "processed"
+        meta_dir = session_dir / "uploads" / "meta"
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        processed_dir.mkdir(parents=True, exist_ok=True)
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        return {
+            "raw": str(raw_dir),
+            "processed": str(processed_dir),
+            "meta": str(meta_dir),
+        }
+
+    def ensure_session_upload_directories(self, session_id: str) -> Dict[str, str]:
+        """Ensure upload directories exist and return absolute paths."""
+        self.ensure_session_exists(session_id)
+        session_lock = self._get_session_lock(session_id)
+        with session_lock:
+            session_dir = self.storage_dir / session_id
+            return self._ensure_upload_directories(session_dir)
 
     def register_artifact(
         self,
@@ -348,6 +468,7 @@ class HistoryManager:
 
             run_id = run_id or self._new_run_id()
             iteration_index = len(session.get("runs", []) or []) + 1
+            command_storage = sanitize_command_for_storage(command)
 
             # Register produced artifacts (if any) into the session-level registry.
             # We accept a loose dict shape and normalize to:
@@ -410,7 +531,7 @@ class HistoryManager:
                 "run_id": run_id,
                 "iteration_index": iteration_index,
                 "timestamp": self._now_iso(),
-                "command": command,
+                "command": command_storage["command"],
                 "tool": tool,
                 "tool_args": tool_args or {},
                 "inputs": inputs or [],
@@ -418,7 +539,10 @@ class HistoryManager:
                 "produced_artifacts": enriched_artifacts,
                 "parent_run_id": parent_run_id,
                 "result_key": None,  # filled by add_history_entry for legacy results map
-                "metadata": metadata or {},
+                "metadata": {
+                    **(metadata or {}),
+                    "command_storage": command_storage["meta"],
+                },
             }
 
             session["runs"].append(run)
@@ -429,6 +553,8 @@ class HistoryManager:
     def _get_s3_client(self):
         """Get or create S3 client. Returns None if boto3 is not available or AWS credentials are missing."""
         if os.getenv("HELIX_MOCK_MODE") == "1":
+            return None
+        if _env_local_sessions_only():
             return None
         if self._s3_client is not None:
             return self._s3_client
@@ -554,6 +680,7 @@ class HistoryManager:
             # Create local directory for the session
             session_dir = self.storage_dir / session_id
             session_dir.mkdir(exist_ok=True)
+            upload_paths = self._ensure_upload_directories(session_dir)
             logger.info(f"Created session directory: {session_dir}")
             
             # Create S3 path for the session
@@ -571,7 +698,9 @@ class HistoryManager:
                 "metadata": {
                     "s3_path": s3_path,
                     "s3_bucket": self.s3_bucket_name if s3_path else None,
-                    "local_path": str(session_dir)
+                    "local_path": str(session_dir),
+                    "upload_paths": upload_paths,
+                    "uploaded_files": []
                 }
             }
             self.sessions[session_id] = session_data
@@ -645,15 +774,20 @@ class HistoryManager:
             if not session_dir.exists():
                 session_dir.mkdir(parents=True, exist_ok=True)
                 logger.info(f"Created missing session directory: {session_dir}")
+            upload_paths = self._ensure_upload_directories(session_dir)
             
             # Update metadata if needed
             if session_data:
                 metadata = session_data.setdefault("metadata", {})
                 if not metadata.get("local_path"):
                     metadata["local_path"] = str(session_dir)
-                    # Save updated session data
-                    self.sessions[session_id] = session_data
-                    self._save_session(session_id)
+                metadata["upload_paths"] = upload_paths
+                metadata.setdefault("uploaded_files", [])
+                # Keep root-level mirror for backward compatibility with older code paths.
+                session_data["uploaded_files"] = metadata.get("uploaded_files", [])
+                # Save updated session data
+                self.sessions[session_id] = session_data
+                self._save_session(session_id)
     
     def add_history_entry(self, session_id: str, command: str, tool: str, 
                          result: Dict[str, Any], metadata: Optional[Dict[str, Any]] = None):
@@ -674,6 +808,7 @@ class HistoryManager:
                 # Create local directory for the session
                 session_dir = self.storage_dir / session_id
                 session_dir.mkdir(exist_ok=True)
+                upload_paths = self._ensure_upload_directories(session_dir)
                 logger.info(f"Auto-created session directory: {session_dir}")
                 
                 # Also create S3 path for auto-created sessions
@@ -690,9 +825,12 @@ class HistoryManager:
                     "metadata": {
                         "s3_path": s3_path,
                         "s3_bucket": self.s3_bucket_name if s3_path else None,
-                        "local_path": str(session_dir)
+                        "local_path": str(session_dir),
+                        "upload_paths": upload_paths,
+                        "uploaded_files": []
                     }
                 }
+                self.sessions[session_id]["uploaded_files"] = self.sessions[session_id]["metadata"]["uploaded_files"]
                 self._save_session(session_id)
 
             # Ensure run-ledger structures exist (back-compat for older session files)
@@ -700,6 +838,8 @@ class HistoryManager:
             
             # Serialize the result to handle LangChain message objects
             serialized_result = serialize_langchain_messages(result)
+            command_storage = sanitize_command_for_storage(command)
+            stored_command = command_storage["command"]
 
             # Build run record (iteration-aware).
             tool_args = None
@@ -720,10 +860,11 @@ class HistoryManager:
                 run_metadata = {k: v for k, v in metadata.items() if k not in {
                     "tool_args", "inputs", "outputs", "produced_artifacts", "artifacts", "parent_run_id", "run_id"
                 }}
+            run_metadata["command_storage"] = command_storage["meta"]
 
             run_record = self.add_run(
                 session_id,
-                command=command,
+                command=stored_command,
                 tool=tool,
                 result=serialized_result if isinstance(serialized_result, dict) else {"value": serialized_result},
                 run_id=self._safe_str(pre_run_id) if pre_run_id else None,
@@ -802,10 +943,10 @@ class HistoryManager:
             
             entry = {
                 "timestamp": datetime.now().isoformat(),
-                "command": command,
+                "command": stored_command,
                 "tool": tool,
                 "result": serialized_result,
-                "metadata": metadata or {},
+                "metadata": {**(metadata or {}), "command_storage": command_storage["meta"]},
                 "run_id": run_record.get("run_id"),
                 "iteration_index": run_record.get("iteration_index"),
             }
@@ -900,6 +1041,7 @@ class HistoryManager:
                 # Auto-create session if missing
                 session_dir = self.storage_dir / session_id
                 session_dir.mkdir(exist_ok=True)
+                upload_paths = self._ensure_upload_directories(session_dir)
                 logger.info(f"Auto-created session directory: {session_dir}")
                 
                 # Also create S3 path for auto-created sessions
@@ -914,9 +1056,12 @@ class HistoryManager:
                     "metadata": {
                         "s3_path": s3_path,
                         "s3_bucket": self.s3_bucket_name if s3_path else None,
-                        "local_path": str(session_dir)
+                        "local_path": str(session_dir),
+                        "upload_paths": upload_paths,
+                        "uploaded_files": []
                     }
                 }
+                self.sessions[session_id]["uploaded_files"] = self.sessions[session_id]["metadata"]["uploaded_files"]
                 self._save_session(session_id)
     
     def _save_session(self, session_id: str):
@@ -1040,6 +1185,43 @@ class HistoryManager:
             self._save_session(session_id)
             logger.info(f"Added dataset reference to session {session_id}: {dataset_ref.get('s3_key')}")
             return True
+
+    def add_uploaded_file(self, session_id: str, file_info: Dict[str, Any]) -> bool:
+        """Add uploaded local file metadata to a session."""
+        self._ensure_sessions_loaded()
+        session_lock = self._get_session_lock(session_id)
+        with session_lock:
+            if session_id not in self.sessions:
+                logger.warning(f"Session {session_id} not found, cannot add uploaded file")
+                return False
+
+            session = self.sessions[session_id]
+            metadata = session.setdefault("metadata", {})
+            uploaded_files = metadata.setdefault("uploaded_files", [])
+            session["uploaded_files"] = uploaded_files
+
+            file_id = str(file_info.get("file_id") or "").strip()
+            local_path = str(file_info.get("local_path") or "").strip()
+            if not file_id or not local_path:
+                logger.warning("Uploaded file metadata missing file_id or local_path")
+                return False
+
+            duplicate = next(
+                (
+                    f
+                    for f in uploaded_files
+                    if f.get("file_id") == file_id or f.get("local_path") == local_path
+                ),
+                None,
+            )
+            if duplicate:
+                duplicate.update(file_info)
+            else:
+                uploaded_files.append(file_info)
+
+            session["updated_at"] = datetime.now().isoformat()
+            self._save_session(session_id)
+            return True
     
     def get_dataset_references(self, session_id: str) -> List[Dict[str, Any]]:
         """Get all dataset references for a session."""
@@ -1070,10 +1252,14 @@ class HistoryManager:
         for file_info in metadata.get("uploaded_files", []):
             files.append({
                 "type": "uploaded",
+                "name": file_info.get("name", file_info.get("filename", "")),
                 "s3_bucket": file_info.get("s3_bucket", self.s3_bucket_name),
                 "s3_key": file_info.get("s3_key", ""),
                 "filename": file_info.get("filename", ""),
-                "size": file_info.get("size", 0)
+                "size": file_info.get("size", 0),
+                "file_id": file_info.get("file_id", ""),
+                "local_path": file_info.get("local_path", ""),
+                "uploaded_at": file_info.get("uploaded_at", ""),
             })
         
         # Add large dataset references
@@ -1125,5 +1311,5 @@ class HistoryManager:
         self.save_checkpoint(session_id, WorkflowCheckpoint.idle())
 
 
-# Global history manager instance
-history_manager = HistoryManager() 
+# Global history manager instance (local disk under HELIX_SESSIONS_DIR or ./sessions)
+history_manager = HistoryManager(_default_sessions_storage_dir()) 

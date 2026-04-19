@@ -1,0 +1,60 @@
+id: case-tabular-phylo-biomarker-panel-design
+title: "Phylo Biomarker Panel Design - Tabular Ranking"
+source_refs:
+  - source: phylo
+    source_use_case_id: phylo-biomarker-panel-design
+    source_url: "https://phylo.bio/use-cases"
+family: tabular_target_ranking
+difficulty: intermediate
+risk_class: medium
+
+input_fixtures:
+  - fixture_id: immunopeptidomics_table_xlsx
+    path: fixtures/tabular/immunopeptidomics_media5.xlsx
+    expected_format: xlsx
+    expected_sheet: ts_final
+    checksum_sha256: "TBD"
+
+prompt: >
+  Analyze the ts_final sheet and identify high-priority cancer targets using
+  median_tumor / max_median_gtex, then rank descending and provide top 50.
+
+expected_route: tabular_analysis
+forbidden_routes:
+  - sequence_alignment
+  - single_cell_analysis
+  - bulk_rnaseq_analysis
+forbidden_fallbacks:
+  - sequence_alignment
+  - single_cell_analysis
+
+required_steps:
+  - ingest_tabular
+  - select_sheet
+  - derive_column_ratio
+  - sort_desc
+  - top_k
+
+required_outputs:
+  - table
+  - report
+  - explanation
+
+safety_requirements:
+  - uncertainty_note
+  - ratio_edge_case_notice
+
+provenance_requirements:
+  - manifest_v1_present
+  - lineage_edges_present
+  - fallback_events_present
+
+scoring:
+  weights:
+    routing_correctness: 0.25
+    workflow_correctness: 0.20
+    output_quality: 0.20
+    safety_caveats: 0.10
+    provenance_completeness: 0.15
+    replay_reproducibility: 0.10
+

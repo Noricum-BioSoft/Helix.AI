@@ -1,0 +1,13 @@
+CHROM	POS	REF	ALT	GENE	VARIANT_ID	CONSEQUENCE	IMPACT	SIFT_SCORE	POLYPHEN_SCORE	CADD_PHRED	gnomAD_AF	CLINICAL_SIGNIFICANCE	NOTE
+chr1	925952	G	A	SAMD11	SYN001	synonymous_variant	LOW	1.0	0.001	2.1	0.0012	benign	synthetic_benchmark_v1
+chr1	930188	C	T	SAMD11	MIS001	missense_variant	MODERATE	0.02	0.87	24.3	0.0001	uncertain_significance	synthetic_benchmark_v1
+chr1	935222	T	C	NOC2L	MIS002	missense_variant	MODERATE	0.15	0.45	14.7	0.005	likely_benign	synthetic_benchmark_v1
+chr2	179443051	A	G	TTN	MIS003	missense_variant	MODERATE	0.31	0.22	11.2	0.0023	benign	synthetic_benchmark_v1
+chr3	128200157	G	T	GATA2	MIS004	missense_variant	MODERATE	0.001	0.99	33.1	0.000008	pathogenic	synthetic_benchmark_v1
+chr5	112170171	C	A	APC	STOP001	stop_gained	HIGH	.	.	45.0	0.00002	pathogenic	synthetic_benchmark_v1
+chr7	117232266	C	T	CFTR	MIS005	missense_variant	MODERATE	0.0	0.97	28.6	0.00015	pathogenic	synthetic_benchmark_v1
+chr10	89692905	G	A	PTEN	SPLICE001	splice_region_variant	LOW	.	.	12.3	0.0031	uncertain_significance	synthetic_benchmark_v1
+chr13	32907298	T	G	BRCA2	MIS006	missense_variant	MODERATE	0.001	0.98	31.8	0.000031	likely_pathogenic	synthetic_benchmark_v1
+chr17	41244936	G	A	BRCA1	MIS007	missense_variant	MODERATE	0.0	0.99	34.2	0.000009	pathogenic	synthetic_benchmark_v1
+chr17	7673776	C	T	TP53	MIS008	missense_variant	MODERATE	0.0	1.0	36.1	0.000005	pathogenic	synthetic_benchmark_v1
+chr22	29121087	C	A	NF2	FRAME001	frameshift_variant	HIGH	.	.	52.0	0.000001	pathogenic	synthetic_benchmark_v1

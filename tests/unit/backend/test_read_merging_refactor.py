@@ -16,7 +16,7 @@ from pathlib import Path
 project_root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from backend.main_with_mcp import dispatch_tool
+from backend.main import dispatch_tool
 from backend.agent_tools import read_merging
 from backend.execution_broker import ExecutionBroker, ExecutionRequest
 

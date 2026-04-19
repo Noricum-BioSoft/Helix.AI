@@ -11,7 +11,7 @@ from __future__ import annotations
 #
 # Order matters: more specific patterns must come before broader fallbacks.
 # Each entry maps a list of keyword fragments to a tool name that has a real
-# handler in dispatch_tool (main_with_mcp.py).
+# handler in dispatch_tool (main.py).
 INLINE_PIPELINE_TOOL_MAP = [
     # ── NGS QC / preprocessing ───────────────────────────────────────────────
     (["quality report", "qc report", "quality summary", "pipeline qc"], "quality_report"),

@@ -24,7 +24,7 @@ cd "$HELIX_ROOT"
 
 echo "[bootstrap] HELIX_ROOT=$HELIX_ROOT"
 
-if [[ ! -f "$HELIX_ROOT/backend/main_with_mcp.py" ]]; then
+if [[ ! -f "$HELIX_ROOT/backend/main.py" ]]; then
   echo "Run this from the Helix.AI repository root." >&2
   exit 1
 fi
@@ -35,6 +35,33 @@ install_packages() {
       dnf install -y python3 python3-pip nginx git
       echo "Install Node.js 18+ manually if npm is missing: https://github.com/nodesource/distributions" >&2
     }
+  elif [[ -f /etc/os-release ]] && grep -q 'Amazon Linux 2' /etc/os-release && command -v yum >/dev/null 2>&1; then
+    # Amazon Linux 2: glibc 2.26 — NodeSource Node 18+ RPMs need glibc 2.28+.
+    # Install nginx from Extras; build Node 18 LTS from source into /usr/local.
+    # gcc10: Node 18+ sources need C++17 (charconv); AL2 default gcc 7 is too old.
+    yum install -y python3 python3-pip git curl gcc gcc-c++ make python3-devel xz gcc10 gcc10-c++
+    if ! command -v nginx >/dev/null 2>&1; then
+      amazon-linux-extras install nginx1 -y
+    fi
+    if ! command -v node >/dev/null 2>&1 || ! node -v 2>/dev/null | grep -qE '^v1[89]\.'; then
+      NODE_VER="${HELIX_NODE_AL2_VER:-18.20.5}"
+      echo "[bootstrap] Amazon Linux 2: building Node ${NODE_VER} from source (often 1–3+ hours on small EC2; use SSM --timeout-seconds 28800 or higher)."
+      cd /tmp
+      rm -rf "node-v${NODE_VER}"
+      curl -fsSL "https://nodejs.org/dist/v${NODE_VER}/node-v${NODE_VER}.tar.xz" -o "node-v${NODE_VER}.tar.xz"
+      tar -xJf "node-v${NODE_VER}.tar.xz"
+      cd "node-v${NODE_VER}"
+      export CC=/usr/bin/gcc10-gcc
+      export CXX=/usr/bin/gcc10-g++
+      ./configure --prefix=/usr/local
+      make -j"$(nproc 2>/dev/null || echo 2)"
+      make install
+      hash -r
+      /usr/local/bin/node -v
+      for x in node npm npx corepack; do
+        [[ -x /usr/local/bin/$x ]] && ln -sf "/usr/local/bin/$x" "/usr/bin/$x"
+      done
+    fi
   elif command -v apt-get >/dev/null 2>&1; then
     apt-get update -y
     apt-get install -y python3.11 python3.11-venv python3-pip nginx git curl

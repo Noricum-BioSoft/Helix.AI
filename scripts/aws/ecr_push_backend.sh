@@ -34,24 +34,16 @@ aws ecr describe-repositories --repository-names "${REPO_NAME}" --region "$REGIO
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-echo "Building backend image for linux/amd64..."
-# Change to project root to ensure Docker build context is correct
+echo "Building and pushing backend image for linux/amd64 (matches ECS Fargate)..."
 cd "${PROJECT_ROOT}"
 
-# ECS Fargate in this stack runs linux/amd64 tasks. Build and load the image
-# explicitly for that platform to avoid manifest mismatch pull errors.
+# Single-step buildx push avoids cross-platform --load issues on Docker Desktop.
 docker buildx build \
   --platform linux/amd64 \
   -f backend/Dockerfile \
-  -t "${REPO_NAME}:${IMAGE_TAG}" \
-  --load \
+  -t "${ECR_URI}/${REPO_NAME}:${IMAGE_TAG}" \
+  --push \
   .
-
-echo "Tagging image..."
-docker tag "${REPO_NAME}:${IMAGE_TAG}" "${ECR_URI}/${REPO_NAME}:${IMAGE_TAG}"
-
-echo "Pushing to ECR..."
-docker push "${ECR_URI}/${REPO_NAME}:${IMAGE_TAG}"
 
 echo "Done. Image: ${ECR_URI}/${REPO_NAME}:${IMAGE_TAG}"
 

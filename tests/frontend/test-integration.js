@@ -41,7 +41,7 @@ async function runTests() {
 
   // Test 2: List Tools
   console.log('\n2. Testing tools listing...');
-  const toolsResult = await testEndpoint('/mcp/tools');
+  const toolsResult = await testEndpoint('/tools/list');
   if (toolsResult.success) {
     console.log('✅ Tools listing successful');
     console.log(`   Found ${toolsResult.data.tools.length} tools`);
@@ -54,7 +54,7 @@ async function runTests() {
 
   // Test 3: Sequence Alignment
   console.log('\n3. Testing sequence alignment...');
-  const alignmentResult = await testEndpoint('/mcp/sequence-alignment', 'POST', {
+  const alignmentResult = await testEndpoint('/tools/sequence-alignment', 'POST', {
     sequences: '>seq1\nACTGTTGAC\n>seq2\nACTGCATCC',
     algorithm: 'clustal'
   });
@@ -67,7 +67,7 @@ async function runTests() {
 
   // Test 4: Sequence Mutation
   console.log('\n4. Testing sequence mutation...');
-  const mutationResult = await testEndpoint('/mcp/mutate-sequence', 'POST', {
+  const mutationResult = await testEndpoint('/tools/mutate-sequence', 'POST', {
     sequence: 'ACTGTTGAC',
     num_variants: 5,
     mutation_rate: 0.1

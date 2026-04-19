@@ -143,4 +143,4 @@ RUN echo "=== Verifying tool installations ===" && \
 WORKDIR /app
 
 # Default command
-CMD ["python", "-m", "backend.main_with_mcp"]
+CMD ["python", "-m", "backend.main"]

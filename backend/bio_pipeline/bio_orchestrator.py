@@ -48,7 +48,7 @@ class BioOrchestrator:
     ----------
     tool_executor:
         Async callable ``(tool_name: str, params: dict) -> dict``.
-        Typically ``dispatch_tool`` from main_with_mcp.
+        Typically ``dispatch_tool`` from main.
     history_manager:
         Optional HistoryManager instance.  When supplied, the run is
         registered via ``add_history_entry`` so it appears in the session ledger.

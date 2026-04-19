@@ -67,6 +67,6 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
 # Enable access logs and application logs
 # --log-level info: Show INFO level logs (includes access logs and application logs)
 # --access-log: Enable access log (HTTP requests)
-CMD ["uvicorn", "backend.main_with_mcp:app", "--host", "0.0.0.0", "--port", "8001", "--log-level", "info", "--access-log"]
+CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8001", "--log-level", "info", "--access-log"]
 
 

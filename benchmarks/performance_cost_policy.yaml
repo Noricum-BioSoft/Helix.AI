@@ -1,0 +1,78 @@
+schema_version: 1.0.0
+updated_at_utc: "2026-04-17T00:00:00Z"
+description: >
+  Performance and cost policy for release-gate readiness.
+  Defines latency targets, budget guardrails, capacity assumptions, and
+  regression checks for representative capability families.
+
+latency_targets_seconds:
+  by_capability_family:
+    tabular_target_ranking:
+      sync:
+        p50_max: 12
+        p95_max: 30
+      async:
+        p50_max: 25
+        p95_max: 60
+    bulk_rnaseq_de:
+      sync:
+        p50_max: 30
+        p95_max: 90
+      async:
+        p50_max: 60
+        p95_max: 180
+    scrna_annotation:
+      sync:
+        p50_max: 45
+        p95_max: 120
+      async:
+        p50_max: 90
+        p95_max: 300
+    variant_annotation:
+      sync:
+        p50_max: 20
+        p95_max: 60
+      async:
+        p50_max: 45
+        p95_max: 150
+    epigenomics_peak_analysis:
+      sync:
+        p50_max: 35
+        p95_max: 100
+      async:
+        p50_max: 75
+        p95_max: 240
+
+budget_guardrails_usd:
+  per_run_max:
+    Local: 0.0
+    EC2: 5.0
+    Batch: 8.0
+    EMR: 20.0
+    Lambda: 2.0
+  per_session_max:
+    Local: 0.0
+    EC2: 20.0
+    Batch: 30.0
+    EMR: 80.0
+    Lambda: 10.0
+
+capacity_assumptions:
+  sandbox_tier:
+    max_concurrent_jobs: 4
+    queue_backlog_warning_threshold: 20
+    queue_backlog_block_threshold: 60
+    expected_cpu_per_job: 2
+    expected_memory_gb_per_job: 4
+  async_tier:
+    max_concurrent_jobs: 12
+    queue_backlog_warning_threshold: 50
+    queue_backlog_block_threshold: 150
+    target_job_start_p95_seconds: 90
+    target_completion_p95_minutes: 30
+
+performance_regression_checks:
+  enforce_no_threshold_widening_without_approval: true
+  require_release_thresholds_alignment: true
+  fail_release_on_latency_regression: true
+  fail_release_on_budget_regression: true

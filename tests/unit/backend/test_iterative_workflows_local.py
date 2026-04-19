@@ -30,7 +30,7 @@ def test_local_iteration_run_ledger_and_editable_plot(tmp_path, monkeypatch):
     # Mark sessions loaded to prevent scanning other session dirs
     history_manager._sessions_loaded = True
 
-    from backend.main_with_mcp import app
+    from backend.main import app
 
     client = TestClient(app)
 
