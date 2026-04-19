@@ -6210,5 +6210,15 @@ async def startup_event():
 
 if __name__ == "__main__":
     import uvicorn
-    # Run as package module (start.sh uses `python -m backend.main`)
-    uvicorn.run("backend.main:app", host="0.0.0.0", port=8001, reload=True)
+    # Run as package module (start.sh uses `python -m backend.main`).
+    # reload_includes restricts watchfiles to *.py only, so runtime writes to
+    # sessions/, artifacts/, or logs/ do not trigger spurious reloads that would
+    # drop in-flight requests (manifests as CORS / 500 errors in the browser).
+    uvicorn.run(
+        "backend.main:app",
+        host="0.0.0.0",
+        port=8001,
+        reload=True,
+        reload_includes=["*.py"],
+        reload_excludes=["sessions/*", "artifacts/*", "logs/*", "*.json", "*.log"],
+    )
