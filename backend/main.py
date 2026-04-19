@@ -2094,13 +2094,19 @@ async def get_session_info(session_id: str):
         session = history_manager.get_session(session_id)
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
-        
+
         summary = history_manager.get_session_summary(session_id)
-        return {
+        # Sanitize NaN/Inf that may be present in legacy session files written
+        # before the serialize_for_json fix.  Without this, json.dumps raises
+        # ValueError which propagates past the CORS middleware (no CORS headers).
+        from backend.file_intelligence.tabular import _sanitize_json
+        return _sanitize_json({
             "success": True,
             "session": session,
-            "summary": summary
-        }
+            "summary": summary,
+        })
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

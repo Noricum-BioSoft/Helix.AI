@@ -178,10 +178,16 @@ def serialize_for_json(obj: Any, _seen: Optional[frozenset] = None) -> Any:
     elif isinstance(obj, np.integer):
         return int(obj)
     elif isinstance(obj, np.floating):
-        return float(obj)
+        # NaN / Inf are not valid JSON — map them to None (JSON null).
+        v = float(obj)
+        return None if (v != v or v == float("inf") or v == float("-inf")) else v
     elif isinstance(obj, np.ndarray):
         return obj.tolist()
-    elif isinstance(obj, (int, float, str, bool)) or obj is None:
+    elif isinstance(obj, float):
+        # Also handle Python-native float NaN / Inf that may arrive from
+        # pandas operations (e.g. empty-cell sample rows in Excel uploads).
+        return None if (obj != obj or obj == float("inf") or obj == float("-inf")) else obj
+    elif isinstance(obj, (int, str, bool)) or obj is None:
         return obj
     else:
         # Unknown non-serializable type — convert to string rather than letting
