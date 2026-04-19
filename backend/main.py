@@ -2008,7 +2008,7 @@ async def _persist_upload_to_session(
         "size": size,
         "content_type": upload.content_type or "application/octet-stream",
         "local_path": str(dest_path.resolve()),
-        "relative_path": str(dest_path.relative_to(history_manager.storage_dir.resolve())),
+        "relative_path": str(dest_path.resolve().relative_to(history_manager.storage_dir.resolve())),
         "uploaded_at": datetime.now(timezone.utc).isoformat(),
         "s3_bucket": None,
         "s3_key": "",
