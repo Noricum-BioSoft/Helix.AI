@@ -5,6 +5,7 @@ import { MSAView } from 'react-msaview';
 import Plot from 'react-plotly.js';
 import { API_BASE_URL, helixApi } from './services/helixApi';
 import type { UploadedFileResponse } from './services/helixApi';
+import { SchemaPreviewPanel } from './components/SchemaPreviewPanel';
 import { CommandParser, ParsedCommand } from './utils/commandParser';
 import { PlasmidDataVisualizer, PlasmidRepresentativesVisualizer } from './components/PlasmidVisualizer';
 import { PhylogeneticTree } from './components/PhylogeneticTree';
@@ -295,6 +296,7 @@ function App() {
     status: 'uploaded',
     local_path: file.local_path,
     uploaded_at: file.uploaded_at,
+    schema_preview: file.schema_preview,
   });
 
   const ensureSessionId = async (): Promise<string> => {
@@ -2960,7 +2962,7 @@ function App() {
             <div className="alert alert-info mb-3">
               <div className="d-flex justify-content-between align-items-center mb-2">
                 <strong>📁 Uploaded Files ({uploadedFiles.length})</strong>
-                <button 
+                <button
                   className="btn btn-sm btn-outline-secondary"
                   onClick={() => setUploadedFiles([])}
                 >
@@ -2968,22 +2970,32 @@ function App() {
                 </button>
               </div>
               {uploadedFiles.map((file, index) => (
-                <div key={index} className="d-flex justify-content-between align-items-center mb-2 pb-2 border-bottom">
-                  <div>
-                    <strong>{file.name}</strong>
-                    <br />
-                    <small className="text-muted">
-                      {(file.size / (1024 * 1024)).toFixed(2)} MB
-                      {file.status ? ` • ${file.status}` : ''}
-                      {file.error ? ` • ${file.error}` : ''}
-                    </small>
+                <div key={index} className="mb-2 pb-2 border-bottom">
+                  <div className="d-flex justify-content-between align-items-center">
+                    <div>
+                      <strong>{file.name}</strong>
+                      <br />
+                      <small className="text-muted">
+                        {(file.size / (1024 * 1024)).toFixed(2)} MB
+                        {file.status === 'uploading' && ' • uploading…'}
+                        {file.status === 'uploaded' && ' • ready'}
+                        {file.status === 'failed' && ` • ${file.error ?? 'failed'}`}
+                      </small>
+                    </div>
+                    <button
+                      className="btn btn-sm btn-outline-secondary"
+                      onClick={() => handleFileRemove(index)}
+                    >
+                      ✕
+                    </button>
                   </div>
-                  <button 
-                    className="btn btn-sm btn-outline-secondary"
-                    onClick={() => handleFileRemove(index)}
-                  >
-                    ✕ Remove
-                  </button>
+                  {file.schema_preview && file.status === 'uploaded' && (
+                    <SchemaPreviewPanel
+                      filename={file.name}
+                      preview={file.schema_preview}
+                      onSuggest={(q) => setCommand(q)}
+                    />
+                  )}
                 </div>
               ))}
             </div>

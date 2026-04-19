@@ -14,6 +14,36 @@ export const API_BASE_URL =
   normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL as string | undefined) ??
   (import.meta.env.PROD ? '' : 'http://localhost:8001');
 
+export interface ColumnStat {
+  name: string;
+  dtype: string;
+  n_missing?: number;
+  pct_missing?: number;
+  n_unique?: number;
+  min?: number;
+  max?: number;
+  mean?: number;
+  top_values?: Record<string, number>;
+}
+
+export interface SchemaPreview {
+  format?: string;
+  family?: string;
+  n_records?: number | null;
+  summary?: Record<string, unknown>;
+  schema?: {
+    columns?: ColumnStat[];
+    obs_columns?: string[];
+    var_columns?: string[];
+    fields?: string[];
+    cell_attributes?: string[];
+    gene_attributes?: string[];
+  };
+  sample?: Record<string, unknown>[];
+  available_sheets?: string[] | null;
+  profiler_error?: string | null;
+}
+
 export interface UploadedFileResponse {
   file_id: string;
   filename: string;
@@ -22,6 +52,7 @@ export interface UploadedFileResponse {
   content_type?: string;
   local_path?: string;
   uploaded_at?: string;
+  schema_preview?: SchemaPreview;
 }
 
 export const helixApi = {

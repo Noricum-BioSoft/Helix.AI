@@ -1,4 +1,7 @@
 import React from 'react';
+import type { SchemaPreview } from '../../services/helixApi';
+
+export type { SchemaPreview };
 
 export interface QuickExample {
   title: string;
@@ -14,6 +17,7 @@ export interface UploadedSessionFile {
   error?: string;
   local_path?: string;
   uploaded_at?: string;
+  schema_preview?: SchemaPreview;
 }
 
 export interface PromptDesignProps {
