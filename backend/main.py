@@ -49,7 +49,7 @@ from backend.orchestration.action_planner import (
 from backend.orchestration.approval_policy import (
     READ_ONLY_ROUTER_TOOLS,
     has_explicit_execute_intent as approval_has_explicit_execute_intent,
-    is_approval_command as approval_is_approval_command,
+    is_approval_command as _legacy_is_approval_command,  # kept for non-execute callers
     requires_approval_semantics as approval_requires_approval_semantics,
     should_stage_for_approval as approval_should_stage_for_approval,
 )
@@ -193,8 +193,17 @@ async def _run_agent_with_retry(coro_factory, timeout_s: int, retries: int = 1, 
 _READ_ONLY_ROUTER_TOOLS = READ_ONLY_ROUTER_TOOLS
 
 
-def _is_approval_command(command: str) -> bool:
-    return approval_is_approval_command(command)
+def _is_approval_command(command: str, *, has_pending_plan: bool = False) -> bool:
+    """Classify whether *command* is an approval of a pending plan.
+
+    Delegates to the LLM-based ApprovalClassifier with keyword fast-path and
+    graceful fallback to the legacy keyword set when the LLM is unavailable.
+    The ``has_pending_plan`` hint biases the classifier when a plan is actually
+    waiting — any short affirmative ("ok", "sure", "looks good") is then treated
+    as an approval rather than an ambiguous command.
+    """
+    from backend.orchestration.approval_classifier import is_approval_command as _llm_classifier
+    return _llm_classifier(command, has_pending_plan=has_pending_plan)
 
 
 def _has_explicit_execute_intent(command: str) -> bool:
@@ -2675,7 +2684,11 @@ async def execute(req: CommandRequest, request: Request):
         )
 
         pending_policy_uploads = _get_policy_pending_uploads(req.session_id)
-        if _is_approval_command(req.command) and pending_policy_uploads:
+        _has_pending_plan = (
+            _checkpoint.state.value == "waiting_for_approval"
+            or bool(_get_pending_plan(req.session_id))
+        )
+        if _is_approval_command(req.command, has_pending_plan=_has_pending_plan) and pending_policy_uploads:
             approved_count = _approve_policy_pending_uploads(
                 req.session_id, "approved_via_execute_approval_command"
             )
@@ -2710,7 +2723,7 @@ async def execute(req: CommandRequest, request: Request):
 
         # ── Route by checkpoint state ─────────────────────────────────────────
         # Case D: user is approving a pending plan
-        if _is_approval_command(req.command):
+        if _is_approval_command(req.command, has_pending_plan=_has_pending_plan):
             # Prefer checkpoint-stored plan; fall back to legacy pending_plan for backward compat
             _cp_plan = (
                 _checkpoint.pending_plan
@@ -2900,7 +2913,7 @@ async def execute(req: CommandRequest, request: Request):
         # When the user has uploaded tabular files and issues a multi-step
         # analytical request, generate a structured plan for approval before
         # executing any code — this is the core Plan→Approve→Execute UX.
-        if not req.execute_plan and not _is_approval_command(req.command):
+        if not req.execute_plan and not _is_approval_command(req.command, has_pending_plan=_has_pending_plan):
             try:
                 from backend.tabular_qa.analysis_planner import (
                     is_analytical_request,
@@ -2949,7 +2962,7 @@ async def execute(req: CommandRequest, request: Request):
 
         # Universal approval gate (action-based):
         # return a pending plan preview unless user explicitly asked to execute.
-        if not req.execute_plan and not _is_approval_command(req.command):
+        if not req.execute_plan and not _is_approval_command(req.command, has_pending_plan=_has_pending_plan):
             try:
                 from backend.command_router import CommandRouter as _ApprovalRouter
 

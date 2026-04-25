@@ -142,7 +142,9 @@ def _upload_file(session_id: str, file_path: Path) -> Dict[str, Any]:
     return r.json()
 
 
-_APPROVAL_COMMAND = "proceed"
+# A natural approval phrase that previously required the hard-coded keyword set.
+# The LLM-based approval classifier handles any natural affirmative phrasing.
+_APPROVAL_COMMAND = "yes, execute the plan"
 _EXECUTE_TIMEOUT_SECS = 240  # analysis_executor calls LLM + runs code
 
 
