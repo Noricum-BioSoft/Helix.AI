@@ -1,0 +1,57 @@
+id: case-tabular-clinical-trial-group-comparison
+title: "Tabular MVP – Clinical Trial Survival Group Comparison"
+source_refs:
+  - source: internal_p0
+    source_use_case_id: tabular-group-comparison
+family: tabular_analysis
+difficulty: intermediate
+risk_class: medium
+
+input_fixtures:
+  - fixture_id: clinical_trial_expression_csv
+    path: fixtures/tabular/clinical_trial_expression.csv
+    expected_format: csv
+    checksum_sha256: "ae1b9455e305d4cd5564562d6ee40e85a4079c125fb018f7eedc21a0df24b04c"
+
+prompt: >
+  Compare overall survival (os_months) and progression-free survival (pfs_months)
+  across cancer stages and treatment groups. Show box plots and report which
+  groups have significantly different outcomes.
+
+expected_route: tabular_analysis
+forbidden_routes:
+  - sequence_alignment
+  - single_cell_analysis
+  - bulk_rnaseq_analysis
+forbidden_fallbacks:
+  - sequence_alignment
+  - generic_rephrase_and_retry
+
+required_steps:
+  - ingest_tabular
+  - group_statistics
+  - generate_plot
+
+required_outputs:
+  - plot
+  - explanation
+
+safety_requirements:
+  - uncertainty_note
+  - explicit_assumptions
+
+provenance_requirements:
+  - manifest_v1_present
+  - lineage_edges_present
+
+scoring:
+  weights:
+    routing_correctness: 0.30
+    workflow_correctness: 0.25
+    output_quality: 0.25
+    safety_caveats: 0.10
+    provenance_completeness: 0.10
+
+release_gate:
+  severity: critical
+  must_pass: true

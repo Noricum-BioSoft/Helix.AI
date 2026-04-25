@@ -1,0 +1,56 @@
+id: case-tabular-patient-cohort-correlation
+title: "Tabular MVP – Patient Cohort Correlation Analysis"
+source_refs:
+  - source: internal_p0
+    source_use_case_id: tabular-correlation-analysis
+family: tabular_analysis
+difficulty: basic
+risk_class: low
+
+input_fixtures:
+  - fixture_id: patient_cohort_xlsx
+    path: fixtures/tabular/patient_cohort.xlsx
+    expected_format: xlsx
+    checksum_sha256: "f1962ea159835c9c9cd0c12bf8b2021cc3a7402e3dd1f476d266b0b825abc67a"
+
+prompt: >
+  Analyze the correlation between age, BMI, and toxicity_grade for patients in
+  this cohort. Generate a correlation heatmap and report which pairs are most
+  strongly associated.
+
+expected_route: tabular_analysis
+forbidden_routes:
+  - sequence_alignment
+  - single_cell_analysis
+  - bulk_rnaseq_analysis
+forbidden_fallbacks:
+  - sequence_alignment
+  - generic_rephrase_and_retry
+
+required_steps:
+  - ingest_tabular
+  - compute_correlation
+  - generate_heatmap
+
+required_outputs:
+  - plot
+  - explanation
+
+safety_requirements:
+  - uncertainty_note
+
+provenance_requirements:
+  - manifest_v1_present
+  - lineage_edges_present
+
+scoring:
+  weights:
+    routing_correctness: 0.30
+    workflow_correctness: 0.25
+    output_quality: 0.25
+    safety_caveats: 0.10
+    provenance_completeness: 0.10
+
+release_gate:
+  severity: critical
+  must_pass: true
