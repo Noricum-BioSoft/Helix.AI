@@ -56,7 +56,7 @@ def profile_tabular(path: str | Path, *, sheet: Optional[str] = None) -> Dict[st
             cp["top_values"] = series.value_counts().head(10).to_dict()
         col_profiles.append(cp)
 
-    return {
+    result = {
         "format": meta["source_format"],
         "family": "tabular",
         "n_records": meta["n_rows"],
@@ -72,16 +72,46 @@ def profile_tabular(path: str | Path, *, sheet: Optional[str] = None) -> Dict[st
         "raw_metadata": {},
         "profiler_error": None,
     }
+    return _sanitize_json(result)
 
 
 def _safe_scalar(val: Any) -> Any:
-    """Convert numpy scalar to Python native type for JSON serialisation."""
+    """Convert a scalar to a JSON-safe Python type.
+
+    Handles numpy integers/floats, Python float NaN/Inf, and passes through
+    everything else unchanged.  NaN and Inf are mapped to None (JSON null).
+    """
+    import math
+
+    if val is None:
+        return None
+    # Handle Python-native float NaN / Inf (e.g. from pandas operations on
+    # all-null columns where the result is float('nan') not np.nan).
+    if isinstance(val, float):
+        return None if (math.isnan(val) or math.isinf(val)) else val
     try:
         import numpy as np
-        if isinstance(val, (np.integer,)):
+        if isinstance(val, np.integer):
             return int(val)
-        if isinstance(val, (np.floating,)):
-            return None if np.isnan(val) else float(val)
+        if isinstance(val, np.floating):
+            return None if (np.isnan(val) or np.isinf(val)) else float(val)
+        if isinstance(val, np.bool_):
+            return bool(val)
     except Exception:
         pass
     return val
+
+
+def _sanitize_json(obj: Any) -> Any:
+    """Recursively replace NaN/Inf scalars in any nested dict/list/tuple.
+
+    This is the last-mile guard applied to the entire profiler output before
+    it is handed to FastAPI's JSON serialiser.  Python's json.dumps raises a
+    ValueError for float('nan'), which propagates *past* the CORS middleware
+    and causes the browser to receive a 500 with no CORS headers.
+    """
+    if isinstance(obj, dict):
+        return {_sanitize_json(k): _sanitize_json(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize_json(v) for v in obj]
+    return _safe_scalar(obj) if isinstance(obj, (float, int)) else obj

@@ -101,7 +101,9 @@ Write **only** Python/pandas code (no markdown fences, no explanation) that answ
 "{question}"
 
 Rules:
-- Use only `df`, `pd`, `np` — no other imports.
+- Pre-bound names (use directly, NO import statements):
+    df, pd, np, plt, sns, stats (scipy.stats), scipy
+- Do NOT write any import/from statements — they raise ImportError in the sandbox.
 - Store the final answer in a variable called `result`.
 - `result` must be a DataFrame, Series, scalar, or dict.
 - Keep code concise and correct.

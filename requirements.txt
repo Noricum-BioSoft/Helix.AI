@@ -17,10 +17,16 @@ celery==5.3.4
 # File storage
 minio==7.2.0
 
+# Data analysis stack (required for tabular Code Interpreter + file profiling)
+pandas>=2.0.0
+numpy>=1.24.0
+matplotlib>=3.7.0
+scipy>=1.11.0
+seaborn>=0.13.0
+openpyxl>=3.1.0
+
 # Bioinformatics (optional - for production)
 # biopython==1.81
-# numpy==1.24.3
-# pandas==2.0.3
 
 # Development and testing
 pytest==7.4.3

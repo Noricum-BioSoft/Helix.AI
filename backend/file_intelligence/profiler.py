@@ -117,37 +117,36 @@ def profile_file(path: str | Path, *, sheet: Optional[str] = None) -> Dict[str, 
 
     if family == "tabular":
         from backend.file_intelligence.tabular import profile_tabular
-        return profile_tabular(path, sheet=sheet)
-
-    if family == "sequence":
+        profile = profile_tabular(path, sheet=sheet)
+    elif family == "sequence":
         from backend.file_intelligence.sequence import profile_sequence
-        return profile_sequence(path)
-
-    if family == "variant":
+        profile = profile_sequence(path)
+    elif family == "variant":
         from backend.file_intelligence.vcf import profile_vcf
-        return profile_vcf(path)
-
-    if family == "genomic_interval":
+        profile = profile_vcf(path)
+    elif family == "genomic_interval":
         from backend.file_intelligence.bed import profile_bed
-        return profile_bed(path)
-
-    if family == "single_cell":
+        profile = profile_bed(path)
+    elif family == "single_cell":
         from backend.file_intelligence.singlecell import profile_singlecell
-        return profile_singlecell(path)
-
-    if family == "alignment":
+        profile = profile_singlecell(path)
+    elif family == "alignment":
         from backend.file_intelligence.alignment import profile_alignment
-        return profile_alignment(path)
+        profile = profile_alignment(path)
+    else:
+        profile = {
+            "format": suffix.lstrip(".") or "unknown",
+            "family": family,
+            "n_records": None,
+            "summary": {},
+            "schema": {},
+            "sample": [],
+            "available_sheets": None,
+            "raw_metadata": {},
+            "profiler_error": f"No profiler registered for extension '{suffix}'.",
+        }
 
-    # Fallback for unknown / compressed-only
-    return {
-        "format": suffix.lstrip(".") or "unknown",
-        "family": family,
-        "n_records": None,
-        "summary": {},
-        "schema": {},
-        "sample": [],
-        "available_sheets": None,
-        "raw_metadata": {},
-        "profiler_error": f"No profiler registered for extension '{suffix}'.",
-    }
+    # Final safety pass: replace any NaN / Inf values that would cause
+    # json.dumps to raise ValueError, bypassing the CORS middleware.
+    from backend.file_intelligence.tabular import _sanitize_json
+    return _sanitize_json(profile)

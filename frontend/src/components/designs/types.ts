@@ -1,4 +1,7 @@
 import React from 'react';
+import type { SchemaPreview } from '../../services/helixApi';
+
+export type { SchemaPreview };
 
 export interface QuickExample {
   title: string;
@@ -14,12 +17,15 @@ export interface UploadedSessionFile {
   error?: string;
   local_path?: string;
   uploaded_at?: string;
+  schema_preview?: SchemaPreview;
 }
 
 export interface PromptDesignProps {
   command: string;
   onCommandChange: (value: string) => void;
   onSubmit: () => void;
+  /** Fills the command and immediately submits it (used by suggestion chips). */
+  onSuggestSubmit?: (question: string) => void;
   onAgentSubmit: () => void;
   loading: boolean;
   agentLoading: boolean;
