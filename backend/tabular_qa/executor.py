@@ -130,12 +130,31 @@ def execute_code(
     # creating a race condition under concurrent execution.
     call_builtins = {**_SAFE_BUILTINS, "print": _safe_print}
 
+    # Pre-load scientific libraries so LLM-generated code can use them
+    # without needing import statements (which the sandbox blocks).
+    try:
+        import scipy.stats as _scipy_stats
+        import scipy.cluster.hierarchy as _scipy_hierarchy
+        import scipy.spatial.distance as _scipy_distance
+        import scipy as _scipy
+        _scipy.stats = _scipy_stats
+    except ImportError:
+        _scipy_stats = None
+        _scipy = None
+
+    try:
+        import seaborn as _sns
+    except ImportError:
+        _sns = None
+
     namespace: Dict[str, Any] = {
         "__builtins__": call_builtins,
         "df": df.copy(),
         "pd": pd,
         "np": np,
         "plt": plt,
+        **({"scipy": _scipy, "stats": _scipy_stats} if _scipy_stats else {}),
+        **({"sns": _sns} if _sns else {}),
     }
 
     result_holder: Dict[str, Any] = {}

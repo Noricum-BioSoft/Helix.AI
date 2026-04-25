@@ -5,11 +5,13 @@ import Nav from 'react-bootstrap/Nav';
 import Tab from 'react-bootstrap/Tab';
 import { PromptDesignProps } from './types';
 import { PromptInput } from './PromptInput';
+import { SchemaPreviewPanel } from '../SchemaPreviewPanel';
 
 export const DesignOptionThree: React.FC<PromptDesignProps> = ({
   command,
   onCommandChange,
   onSubmit,
+  onSuggestSubmit,
   loading,
   agentLoading,
   placeholder,
@@ -190,18 +192,29 @@ export const DesignOptionThree: React.FC<PromptDesignProps> = ({
                         </Button>
                       </div>
                       {uploadedFiles.map((file, index) => (
-                        <div key={index} className="d-flex justify-content-between align-items-center mb-2 pb-2 border-bottom">
-                          <div>
-                            <div className="fw-semibold small">{file.name}</div>
-                            <div className="text-muted small">
-                              {(file.size / (1024 * 1024)).toFixed(2)} MB
-                              {file.status ? ` • ${file.status}` : ''}
-                              {file.error ? ` • ${file.error}` : ''}
+                        <div key={index} className="mb-2 pb-2 border-bottom">
+                          <div className="d-flex justify-content-between align-items-center">
+                            <div>
+                              <div className="fw-semibold small">{file.name}</div>
+                              <div className="text-muted small">
+                                {(file.size / (1024 * 1024)).toFixed(2)} MB
+                                {file.status === 'uploading' && ' • uploading…'}
+                                {file.status === 'uploaded' && ' • ready'}
+                                {file.status === 'failed' && ` • ${file.error ?? 'failed'}`}
+                              </div>
                             </div>
+                            <Button variant="outline-secondary" size="sm" onClick={() => onFileRemove(index)}>
+                              Remove
+                            </Button>
                           </div>
-                          <Button variant="outline-secondary" size="sm" onClick={() => onFileRemove(index)}>
-                            Remove
-                          </Button>
+                          {file.schema_preview && file.status === 'uploaded' && (
+                            <SchemaPreviewPanel
+                              filename={file.name}
+                              preview={file.schema_preview}
+                              onSuggest={onCommandChange}
+                              onSuggestSubmit={onSuggestSubmit}
+                            />
+                          )}
                         </div>
                       ))}
                     </Card.Body>

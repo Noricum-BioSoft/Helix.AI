@@ -24,6 +24,8 @@ export interface PromptDesignProps {
   command: string;
   onCommandChange: (value: string) => void;
   onSubmit: () => void;
+  /** Fills the command and immediately submits it (used by suggestion chips). */
+  onSuggestSubmit?: (question: string) => void;
   onAgentSubmit: () => void;
   loading: boolean;
   agentLoading: boolean;

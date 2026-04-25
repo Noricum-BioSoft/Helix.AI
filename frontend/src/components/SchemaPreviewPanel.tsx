@@ -21,8 +21,13 @@ import type { SchemaPreview, ColumnStat } from '../services/helixApi';
 interface SchemaPreviewPanelProps {
   filename: string;
   preview: SchemaPreview;
-  /** Called when the user clicks a suggested question chip. */
+  /** Called when the user clicks a suggested question chip (pre-fills textarea). */
   onSuggest?: (question: string) => void;
+  /**
+   * When provided, clicking a chip fills the command AND immediately submits it.
+   * Takes priority over onSuggest.
+   */
+  onSuggestSubmit?: (question: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -283,6 +288,7 @@ export function SchemaPreviewPanel({
   filename,
   preview,
   onSuggest,
+  onSuggestSubmit,
 }: SchemaPreviewPanelProps) {
   const [open, setOpen] = useState(true);
   const family = preview.family ?? 'unknown';
@@ -343,7 +349,7 @@ export function SchemaPreviewPanel({
           )}
 
           {/* Suggested questions */}
-          {onSuggest && suggestions.length > 0 && (
+          {(onSuggestSubmit || onSuggest) && suggestions.length > 0 && (
             <div className="mt-2">
               <div className="text-muted mb-1" style={{ fontSize: '0.75rem' }}>
                 Ask about this file:
@@ -354,7 +360,7 @@ export function SchemaPreviewPanel({
                     key={q}
                     className="btn btn-outline-primary btn-sm"
                     style={{ fontSize: '0.72rem', padding: '1px 7px', borderRadius: 12 }}
-                    onClick={() => onSuggest(q)}
+                    onClick={() => onSuggestSubmit ? onSuggestSubmit(q) : onSuggest?.(q)}
                   >
                     {q}
                   </button>

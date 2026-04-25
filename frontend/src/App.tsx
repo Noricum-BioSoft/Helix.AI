@@ -6,6 +6,7 @@ import Plot from 'react-plotly.js';
 import { API_BASE_URL, helixApi } from './services/helixApi';
 import type { UploadedFileResponse } from './services/helixApi';
 import { SchemaPreviewPanel } from './components/SchemaPreviewPanel';
+import { AnalysisPlanCard } from './components/AnalysisPlanCard';
 import { CommandParser, ParsedCommand } from './utils/commandParser';
 import { PlasmidDataVisualizer, PlasmidRepresentativesVisualizer } from './components/PlasmidVisualizer';
 import { PhylogeneticTree } from './components/PhylogeneticTree';
@@ -578,6 +579,7 @@ function App() {
       
       setPendingScenarioId(undefined);
       setHistory(prev => [historyItem, ...prev]);
+      setTimeout(() => historyTopRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
       updateActivity(activityId, 'completed');
       
     } catch (error) {
@@ -595,6 +597,7 @@ function App() {
       };
       
       setHistory(prev => [historyItem, ...prev]);
+      setTimeout(() => historyTopRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
     } finally {
       if (clearInputsAfter) {
         setCommand('');
@@ -1953,6 +1956,124 @@ function App() {
       console.log('🔍 [Question Detection] hasSpecialVisualizations:', hasSpecialVisualizations);
     }
 
+    // ── Tabular analysis execution result ────────────────────────────────────
+    // Must be checked BEFORE the generic finalText block so the rich renderer
+    // (title + stat tiles + plot + interpretation) isn't short-circuited.
+    const taResult =
+      agentOutput?.raw_result ?? agentOutput?.result?.raw_result ?? agentOutput;
+    const isTaResult =
+      (agentOutput?.tool === 'tabular_analysis' || agentOutput?.result?.tool === 'tabular_analysis') &&
+      taResult?.status === 'success';
+
+    if (isTaResult) {
+      const interpretation: string = taResult?.text ?? '';
+      const plotB64: string | undefined = taResult?.plot_base64;
+      const planTitle: string | undefined = taResult?.plan_title;
+      const resultData = taResult?.result_data;
+
+      // Flatten result_data dict into displayable key-value stat tiles,
+      // skipping internal keys like plot_path
+      const SKIP_KEYS = new Set(['plot_path', 'plot_tmp']);
+
+      /** Convert any result value to a concise human-readable string for a stat tile. */
+      const formatStatValue = (v: unknown): string => {
+        if (v === null || v === undefined) return '—';
+        if (typeof v === 'boolean') return v ? 'true' : 'false';
+        if (typeof v === 'string') return v.length > 60 ? v.slice(0, 57) + '…' : v;
+        if (typeof v === 'number') {
+          return Math.abs(v) < 0.001 || Math.abs(v) >= 1e6
+            ? v.toExponential(3)
+            : v.toPrecision(4);
+        }
+        if (Array.isArray(v)) {
+          if (v.length === 0) return '(empty)';
+          // If it's a flat array of numbers/strings, show first few values
+          const allScalar = v.every((x) => typeof x !== 'object' || x === null);
+          if (allScalar && v.length <= 5) return v.join(', ');
+          if (allScalar) return `${v.slice(0, 3).join(', ')} … (${v.length} items)`;
+          return `${v.length} items`;
+        }
+        if (typeof v === 'object') {
+          const keys = Object.keys(v as object);
+          if (keys.length === 0) return '{}';
+          // Show key: value pairs for small flat dicts (like missing-value counts)
+          const entries = Object.entries(v as Record<string, unknown>);
+          const allNumeric = entries.every(([, val]) => typeof val === 'number');
+          if (allNumeric && keys.length <= 4) {
+            return entries.map(([k, val]) => `${k}: ${val}`).join(', ');
+          }
+          if (allNumeric) {
+            return entries.slice(0, 3).map(([k, val]) => `${k}: ${val}`).join(', ') + ` … (${keys.length} cols)`;
+          }
+          return `${keys.length} entries`;
+        }
+        return String(v);
+      };
+
+      const resultEntries: Array<[string, string]> = (() => {
+        if (!resultData) return [];
+        const raw: Record<string, unknown> =
+          resultData.type === 'dict' ? (resultData.value as Record<string, unknown>) ?? {} : {};
+        return Object.entries(raw)
+          .filter(([k]) => !SKIP_KEYS.has(k))
+          .map(([k, v]) => {
+            const label = k.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+            return [label, formatStatValue(v)] as [string, string];
+          });
+      })();
+
+      return (
+        <div>
+          {planTitle && (
+            <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#1e293b', marginBottom: 10 }}>
+              🧬 {planTitle}
+            </div>
+          )}
+
+          {/* Computed numeric values (e.g. Pearson r, p-value) */}
+          {resultEntries.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 14 }}>
+              {resultEntries.map(([label, value]) => (
+                <div
+                  key={label}
+                  style={{
+                    background: '#f0fdf4',
+                    border: '1px solid #bbf7d0',
+                    borderRadius: 7,
+                    padding: '6px 12px',
+                    minWidth: 110,
+                  }}
+                >
+                  <div style={{ fontSize: '0.68rem', color: '#166534', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    {label}
+                  </div>
+                  <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#14532d', fontFamily: 'monospace' }}>
+                    {value}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {plotB64 && (
+            <div style={{ marginBottom: 14, textAlign: 'center' }}>
+              <img
+                src={plotB64}
+                alt="Analysis plot"
+                style={{ maxWidth: '100%', borderRadius: 6, border: '1px solid #e2e8f0' }}
+              />
+            </div>
+          )}
+          {interpretation && (
+            <div style={{ lineHeight: 1.7, color: '#334155', fontSize: '0.88rem' }}>
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{interpretation}</ReactMarkdown>
+            </div>
+          )}
+          {downloadLinksSection}
+        </div>
+      );
+    }
+
     if (finalText) {
       // If it's a question and has no special visualizations, render only the markdown
       if (isQuestion && !hasSpecialVisualizations) {
@@ -2346,6 +2467,36 @@ function App() {
 
     const renderedResponse = renderAgentResponse(output);
 
+    // ── Tabular analysis plan — rendered as AnalysisPlanCard ─────────────────
+    // Detect the structured plan object produced by analysis_planner.py
+    const analysisPlan =
+      output?.result?.analysis_plan ??
+      output?.analysis_plan ??
+      output?.raw_result?.analysis_plan ??
+      output?.data?.analysis_plan;
+
+    if (analysisPlan && isWorkflowPlan && !scenarioForcesNeedsInputs) {
+      const alreadyApproved = executedPipelineCommands.has(item.input);
+      const introText: string =
+        output?.result?.text ?? output?.text ?? output?.raw_result?.text ?? '';
+      return (
+        <div>
+          {introText && (
+            <p style={{ color: '#475569', fontSize: '0.88rem', marginBottom: 12 }}>
+              {introText}
+            </p>
+          )}
+          <AnalysisPlanCard
+            plan={analysisPlan}
+            onApprove={() => executeCommand('Approve.', item.scenarioId, false)}
+            onCancel={() => {/* no-op — user can scroll away */}}
+            loading={loading}
+            approved={alreadyApproved}
+          />
+        </div>
+      );
+    }
+
     // Workflow plan: show plan + Execute Pipeline; if scenario has example data, also show Load & run.
     if (isWorkflowPlan && !scenarioForcesNeedsInputs) {
       const alreadyExecuted = executedPipelineCommands.has(item.input);
@@ -2668,6 +2819,7 @@ function App() {
     command,
     onCommandChange: setCommand,
     onSubmit: handleSubmit,
+    onSuggestSubmit: (q: string) => void executeCommand(q),
     loading,
     agentLoading,
     onAgentSubmit: handleAgentSubmit,
