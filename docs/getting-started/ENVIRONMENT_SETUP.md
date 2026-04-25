@@ -9,10 +9,10 @@ To run Helix.AI, you need to set up the following environment variables:
 Create a `.env` file in the project root directory with the following content:
 
 ```bash
-# OpenAI API Key (required for fallback and some features)
+# At least one LLM API key is required.
 OPENAI_API_KEY=your_openai_api_key_here
 
-# DeepSeek API Key (optional - if not provided, will fallback to OpenAI)
+# Optional: use DeepSeek as the primary LLM instead of OpenAI.
 DEEPSEEK_API_KEY=your_deepseek_api_key_here
 ```
 
@@ -31,11 +31,15 @@ DEEPSEEK_API_KEY=your_deepseek_api_key_here
 4. Create a new API key
 5. Copy the key and add it to your `.env` file
 
-### 3. Environment Variable Priority
+### 3. LLM selection
 
-- If `DEEPSEEK_API_KEY` is set: Uses DeepSeek as the primary LLM
-- If `DEEPSEEK_API_KEY` is not set: Falls back to OpenAI
-- If neither is set: The application will show an error
+- `DEEPSEEK_API_KEY` set → uses DeepSeek as the primary LLM
+- Only `OPENAI_API_KEY` set → uses OpenAI
+- Neither set → application raises a clear error at startup
+
+**Note:** Helix requires at least one LLM to be available for all classification
+decisions (intent, routing, approval, staging). There are no keyword-matching
+fallbacks — if the LLM is unavailable the classifier raises explicitly.
 
 ### 4. Security Notes
 
@@ -52,6 +56,15 @@ export OPENAI_API_KEY="your_openai_api_key_here"
 export DEEPSEEK_API_KEY="your_deepseek_api_key_here"
 ```
 
+## Development / test variables
+
+| Variable | Purpose |
+|----------|---------|
+| `HELIX_MOCK_MODE` | Set `1` to disable all LLM calls. Used by the unit-test suite (`pytest.ini` sets this automatically). Classifiers raise `*ClassificationError` rather than silently returning defaults. |
+| `HELIX_LLM_ROUTER_FIRST` | Default `1`. Set `0` to enable keyword-based routing branches for local debugging of specific routing paths. Not for production use. |
+| `HELIX_AGENT_DISABLED` | Set `1` to skip the BioAgent path entirely (forces fallback router). |
+| `HELIX_SANDBOX_HOST_FALLBACK` | Set `1` to skip Docker availability checks and run sandboxed scripts on the host. For local dev only. |
+
 ## Session storage (local vs S3)
 
 | Variable | Purpose |
@@ -62,13 +75,14 @@ export DEEPSEEK_API_KEY="your_deepseek_api_key_here"
 
 ## Troubleshooting
 
-### Error: "DEEPSEEK_API_KEY must be set"
-This means the DeepSeek API key is not configured. Either:
-1. Add `DEEPSEEK_API_KEY` to your `.env` file, or
-2. The application will automatically fallback to OpenAI if you have `OPENAI_API_KEY` set
-
-### Error: "No API keys found"
-Make sure you have at least one of the following set:
+### Error: "No LLM API key configured"
+Make sure you have at least one of the following set in your `.env` file:
 - `OPENAI_API_KEY` (recommended)
-- `DEEPSEEK_API_KEY` (optional)
+- `DEEPSEEK_API_KEY`
+
+### Error: classifier raises in tests
+The unit-test suite runs with `HELIX_MOCK_MODE=1` (set in `pytest.ini`). If a test
+triggers a live LLM call, it will raise rather than silently return a default. Use the
+autouse fixtures in `tests/unit/backend/conftest.py` or add a `@patch` decorator to
+mock the specific classifier your test exercises.
 

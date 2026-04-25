@@ -16,7 +16,7 @@ from typing import Any, Dict, List
 logger = logging.getLogger(__name__)
 
 _PLANNER_MODEL_ENV = "HELIX_ANALYSIS_PLANNER_MODEL"
-_DEFAULT_MODEL = "openai:gpt-4o"
+_DEFAULT_MODEL = "openai:gpt-5.5"
 
 PLANNER_SYSTEM_PROMPT = """\
 You are an expert bioinformatics analyst for Helix.AI, an autonomous data analysis platform.

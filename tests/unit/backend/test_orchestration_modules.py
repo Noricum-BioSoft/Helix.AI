@@ -1,3 +1,7 @@
+from unittest.mock import MagicMock, patch
+
+import pytest
+
 from backend.orchestration.approval_policy import (
     is_approval_command,
     requires_approval_semantics,
@@ -12,9 +16,13 @@ from backend.action_plan import infer_action_type, map_action_to_tool
 
 
 def test_approval_policy_is_action_based():
+    """Approval detection uses LLM classifier; high-impact action_type check needs no LLM."""
     prompt = "Actually sample S08 is mislabeled. It should be control, not treated."
+    # "Approve." hits the keyword fast-path in approval_classifier — no LLM call needed.
     assert is_approval_command("Approve.")
+    # action_type="correct_metadata" is in HIGH_IMPACT_ACTION_TYPES — no LLM call needed.
     assert requires_approval_semantics(prompt, action_type="correct_metadata")
+    # should_stage_for_approval with HIGH_IMPACT_ACTION_TYPE short-circuits before LLM.
     assert should_stage_for_approval("handle_natural_command", prompt, {}, action_type="correct_metadata")
 
 
@@ -41,7 +49,22 @@ def test_semantic_resolver_selectors():
     assert resolve_semantic_reference(session, "prior filtered dataset")["target"]["artifact_id"] == "f1"
 
 
-def test_approval_policy_does_not_stage_execute_viz_iterations():
+@patch("backend.orchestration.approval_policy.is_approval_command", return_value=False)
+@patch("backend.orchestration.approval_policy._classify_staging_intent")
+def test_approval_policy_does_not_stage_execute_viz_iterations(mock_staging, mock_approval):
+    """Explicit execution / visualization iterations should not be staged for approval.
+
+    Mocks both the approval check and the staging classifier so this test
+    focuses purely on the staging policy logic.
+    """
+    from backend.orchestration.approval_policy import StagingDecision
+    mock_staging.return_value = StagingDecision(
+        requires_approval=False,
+        has_execute_intent=True,
+        is_planning_request=False,
+        method="llm",
+        reason="llm_classified",
+    )
     turn4 = "The PCA suggests 2 outlier samples. Exclude them and rerun."
     turn11 = "Actually make that top 50 genes, clustered by sample, and split by condition."
     assert should_stage_for_approval("bio_rerun", turn4, {}, action_type="subset_data") is False
@@ -176,7 +199,9 @@ def test_state_selection_resolves_run_id_from_artifact_selector():
     assert run_b == "run_v1"
 
 
-def test_go_enrichment_routes_to_enrichment_tool_class():
+@patch("backend.command_router.CommandRouter._route_with_llm")
+def test_go_enrichment_routes_to_enrichment_tool_class(mock_route_with_llm):
+    mock_route_with_llm.return_value = ("go_enrichment_analysis", {"session_id": "sid-1"})
     router = CommandRouter()
     tool, params = router.route_command(
         "Take the significantly upregulated genes and run GO enrichment.",
@@ -201,7 +226,12 @@ def test_execution_router_normalizes_enrichment_intent_to_enrichment_tool():
     assert norm.arguments.get("source_selector") == "current DEG results"
 
 
-def test_command_router_routes_historical_recreation_to_diff_runs():
+@patch("backend.command_router.CommandRouter._route_with_llm")
+def test_command_router_routes_historical_recreation_to_diff_runs(mock_route_with_llm):
+    mock_route_with_llm.return_value = (
+        "bio_diff_runs",
+        {"session_id": "sid-1", "run_id_a": "latest", "run_id_b": "prior"},
+    )
     router = CommandRouter()
     tool, params = router.route_command(
         "Recreate the figure set corresponding to the corrected metadata version before the fold-change bug fix.",
@@ -212,7 +242,12 @@ def test_command_router_routes_historical_recreation_to_diff_runs():
     assert params.get("run_id_b") == "prior"
 
 
-def test_command_router_routes_workflow_design_intent_to_planner():
+@patch("backend.command_router.CommandRouter._route_with_llm")
+def test_command_router_routes_workflow_design_intent_to_planner(mock_route_with_llm):
+    mock_route_with_llm.return_value = (
+        "handle_natural_command",
+        {"session_id": "sid-1", "command": "Design the workflow before execution."},
+    )
     router = CommandRouter()
     tool, params = router.route_command(
         (
@@ -223,4 +258,15 @@ def test_command_router_routes_workflow_design_intent_to_planner():
     )
     assert tool == "handle_natural_command"
     assert params.get("session_id") == "sid-1"
+
+
+def test_command_router_raises_routing_error_when_llm_unavailable(monkeypatch):
+    """Without LLM and without keyword fallback, routing must raise RoutingError."""
+    from backend.command_router import RoutingError
+    # Force LLM-first routing regardless of what other tests set.
+    monkeypatch.setenv("HELIX_LLM_ROUTER_FIRST", "1")
+    with patch("backend.command_router.CommandRouter._route_with_llm", return_value=None):
+        router = CommandRouter()
+        with pytest.raises(RoutingError):
+            router.route_command("align these sequences", {"session_id": "sid-1"})
 

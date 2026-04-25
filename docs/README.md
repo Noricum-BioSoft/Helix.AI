@@ -14,7 +14,7 @@ This directory contains the documentation needed for **release** and ongoing dev
 | [**AWS_USAGE.md**](AWS_USAGE.md) | **How the cloud (AWS) is used**: hosting (ECS, S3, CloudFront, ALB, ECR), data (S3 inputs/outputs, size estimation), compute (Local vs EC2 vs EMR, 3-factor model, sync vs async). |
 | [**architecture/ARCHITECTURE_EXPLANATION.md**](architecture/ARCHITECTURE_EXPLANATION.md) | Frontend vs backend deployment (local vs production, S3/CloudFront, ECS), how frontend connects to backend. |
 | [**architecture/BACKEND_DATAFLOW.md**](architecture/BACKEND_DATAFLOW.md) | End-to-end backend flow: request reception, preflight, intent, tool selection, infrastructure decision, execution routing, result return. |
-| [**architecture/ROUTING_FLOW.md**](architecture/ROUTING_FLOW.md) | Current and target `/execute` routing order, deterministic fast paths, and fallback behavior. |
+| [**architecture/ROUTING_FLOW.md**](architecture/ROUTING_FLOW.md) | `/execute` routing: LLM-first path order, approval classifier detail, `WorkflowCheckpoint` state machine, acceptance checks. |
 | [**ORCHESTRATION_DUALITY.md**](ORCHESTRATION_DUALITY.md) | Explains the two orchestration systems (primary in `agent.py` vs experimental in `orchestrator.py`) and which is used in production. |
 | [**architecture/TARGET_ARCHITECTURE_CHECKLIST.md**](architecture/TARGET_ARCHITECTURE_CHECKLIST.md) | Rollout checklist for execution broker, sync/async routing, job management, EMR. |
 

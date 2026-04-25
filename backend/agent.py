@@ -391,7 +391,7 @@ def _get_llm():
 
     if openai_enabled:
         from langchain.chat_models import init_chat_model
-        return init_chat_model("openai:gpt-4o", temperature=0)
+        return init_chat_model(os.getenv("HELIX_AGENT_OPENAI_MODEL", "openai:gpt-5.5"), temperature=0)
 
     if deepseek_enabled:
         from langchain_deepseek import ChatDeepSeek

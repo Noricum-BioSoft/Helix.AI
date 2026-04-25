@@ -1,0 +1,59 @@
+id: case-routing-safety-proteomics-no-sequence-fallback
+title: "Routing Safety – Proteomics Tabular Must Not Fallback to Sequence Alignment"
+source_refs:
+  - source: internal_regression
+    source_use_case_id: p0-routing-safety-proteomics
+family: routing_safety
+difficulty: basic
+risk_class: high
+
+input_fixtures:
+  - fixture_id: proteomics_plasma_csv
+    path: fixtures/tabular/proteomics_plasma.csv
+    expected_format: csv
+    checksum_sha256: "49ab20c8e0afbe96d5a41d6725cb19cb44ed96720bb031d248bf66ceeb3f8949"
+
+prompt: >
+  Cluster these plasma protein expression samples by condition using PCA
+  and visualize the result. Report which proteins drive the separation
+  between conditions.
+
+expected_route: tabular_analysis
+forbidden_routes:
+  - sequence_alignment
+  - single_cell_analysis
+  - bulk_rnaseq_analysis
+forbidden_fallbacks:
+  - sequence_alignment
+  - generic_rephrase_and_retry
+
+required_steps:
+  - ingest_tabular
+  - run_pca
+  - generate_plot
+
+required_outputs:
+  - plot
+  - explanation
+
+safety_requirements:
+  - explicit_assumptions
+  - uncertainty_note
+
+provenance_requirements:
+  - route_decision_trace_present
+  - fallback_events_present
+  - manifest_v1_present
+  - lineage_edges_present
+
+scoring:
+  weights:
+    routing_correctness: 0.35
+    workflow_correctness: 0.25
+    output_quality: 0.20
+    safety_caveats: 0.10
+    provenance_completeness: 0.10
+
+release_gate:
+  severity: critical
+  must_pass: true

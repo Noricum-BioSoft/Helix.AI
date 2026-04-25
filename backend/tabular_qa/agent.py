@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 2
 _QA_MODEL_ENV = "HELIX_TABULAR_QA_MODEL"
-_DEFAULT_MODEL = "openai:gpt-4o"
+_DEFAULT_MODEL = "openai:gpt-5.5"
 
 # ---------------------------------------------------------------------------
 # Prompt helpers

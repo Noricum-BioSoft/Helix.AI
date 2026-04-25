@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from backend.artifact_resolver import resolve_semantic_reference
 from backend.main import (
     _historical_recreation_ready_for_execution,
@@ -12,16 +14,39 @@ from backend.main import (
 
 
 def test_turn_03_approve_command_is_recognized():
+    # "Approve." hits the keyword fast-path in approval_classifier — no LLM needed.
     assert _is_approval_command("Approve.")
 
 
-def test_turn_05_metadata_correction_stages_for_approval():
+@patch("backend.orchestration.approval_policy.is_approval_command", return_value=False)
+@patch("backend.orchestration.approval_policy._classify_staging_intent")
+def test_turn_05_metadata_correction_stages_for_approval(mock_staging, mock_approval):
+    """Metadata correction request should stage for approval (LLM-based decision)."""
+    from backend.orchestration.approval_policy import StagingDecision
+    mock_staging.return_value = StagingDecision(
+        requires_approval=True,
+        has_execute_intent=False,
+        is_planning_request=False,
+        method="llm",
+        reason="llm_classified",
+    )
     prompt = "Actually sample S08 is mislabeled. It should be control, not treated."
     assert _requires_approval_semantics(prompt)
     assert _should_stage_for_approval("handle_natural_command", prompt, {}) is True
 
 
-def test_turn_20_subset_request_stages_for_approval():
+@patch("backend.orchestration.approval_policy.is_approval_command", return_value=False)
+@patch("backend.orchestration.approval_policy._classify_staging_intent")
+def test_turn_20_subset_request_stages_for_approval(mock_staging, mock_approval):
+    """Subset/focus request should stage for approval (LLM-based decision)."""
+    from backend.orchestration.approval_policy import StagingDecision
+    mock_staging.return_value = StagingDecision(
+        requires_approval=True,
+        has_execute_intent=False,
+        is_planning_request=False,
+        method="llm",
+        reason="llm_classified",
+    )
     prompt = "For the same dataset, now focus only on female samples and rerun the treated vs control analysis."
     assert _requires_approval_semantics(prompt)
     assert _should_stage_for_approval("handle_natural_command", prompt, {}) is True
