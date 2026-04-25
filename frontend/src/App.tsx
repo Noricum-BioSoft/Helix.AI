@@ -7,6 +7,9 @@ import { API_BASE_URL, helixApi } from './services/helixApi';
 import type { UploadedFileResponse } from './services/helixApi';
 import { SchemaPreviewPanel } from './components/SchemaPreviewPanel';
 import { AnalysisPlanCard } from './components/AnalysisPlanCard';
+import { CapabilityGrid } from './components/CapabilityGrid';
+import { FollowUpChips } from './components/FollowUpChips';
+import { getContextualPlaceholder } from './utils/followUpSuggestions';
 import { CommandParser, ParsedCommand } from './utils/commandParser';
 import { PlasmidDataVisualizer, PlasmidRepresentativesVisualizer } from './components/PlasmidVisualizer';
 import { PhylogeneticTree } from './components/PhylogeneticTree';
@@ -2681,7 +2684,7 @@ function App() {
       return (
         <section className="mt-4">
           <h2 className="h5 mb-3">Conversation</h2>
-          <div className="text-muted">Run a command to see your prompts and responses here.</div>
+          <CapabilityGrid onSelectPrompt={(prompt) => { setCommand(prompt); }} />
         </section>
       );
     }
@@ -2736,6 +2739,16 @@ function App() {
                         )}
                       </div>
                     )}
+                    {/* Contextual follow-up chips — only on the most recent item */}
+                    {index === 0 && (
+                      <FollowUpChips
+                        tool={item.type}
+                        onSelect={(prompt) => {
+                          setCommand(prompt);
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
+                      />
+                    )}
                   </Card.Body>
                 </Card>
               </div>
@@ -2780,7 +2793,7 @@ function App() {
     loading,
     agentLoading,
     onAgentSubmit: handleAgentSubmit,
-    placeholder: 'Ask anything or upload a FASTA file...',
+    placeholder: getContextualPlaceholder(history[0]?.type),
     dragActive,
     uploadedFiles,
     onFileRemove: handleFileRemove,
@@ -3139,7 +3152,7 @@ function App() {
               handleSubmit();
             }
           }}
-          placeholder="Ask anything or upload a FASTA file..."
+          placeholder={getContextualPlaceholder(history[0]?.type)}
         />
         <div className="text-center">
           <button 
