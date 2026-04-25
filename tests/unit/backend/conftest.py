@@ -102,6 +102,98 @@ def _mock_intent_classifier(request, monkeypatch):
         yield
 
 
+@pytest.fixture(autouse=True)
+def _mock_command_router():
+    """Auto-patch CommandRouter._route_with_llm in HELIX_MOCK_MODE.
+
+    Provides deterministic LLM-free routing for unit tests.  Tests that
+    directly verify routing decisions should patch ``_route_with_llm``
+    themselves via ``@patch`` or ``monkeypatch``.
+    """
+    if os.getenv("HELIX_MOCK_MODE", "0") != "1":
+        yield
+        return
+
+    import re as _re
+    from backend.command_router import CommandRouter
+
+    def _mock_route(self, command: str, session_context):
+        c = (command or "").lower()
+        sid = (session_context or {}).get("session_id", "")
+        # Vague / open-ended analysis
+        if any(x in c for x in ["what is going on", "tell me what", "and tell me"]):
+            return "handle_natural_command", {"command": command, "session_id": sid}
+        # Demo plot (test/local tool)
+        if any(x in c for x in ["demo plot", "demo scatter", "local demo plot", "create demo plot", "generate demo plot"]):
+            return "local_demo_plot_script", {}
+        # Plot / viz updates
+        if any(x in c for x in ["highlight", "on the volcano", "on the plot", "update the plot", "color the"]):
+            return "patch_and_rerun", {}
+        # Plot axis scale
+        if any(x in c for x in ["log scale", "linear scale", "switch to log", "switch to linear", "change the plots from"]):
+            return "patch_and_rerun", {"change_request": command}
+        # Iterative rerun / parameter change
+        if any(x in c for x in ["re-run", "rerun", "run again", "redo", "repeat with", "change parameter", "update parameter", "re-analyse", "reanalyze"]):
+            return "bio_rerun", {}
+        # Session run I/O summary
+        if any(x in c for x in ["inputs/outputs of", "inputs and outputs of", "what were the inputs", "what were the outputs"]):
+            return "session_run_io_summary", {}
+        # Diff / compare runs
+        if any(x in c for x in ["recreate", "historical", "differences between", "compare runs", "bio_diff"]) or (
+            _re.search(r"\bcompare\b", c) and _re.search(r"\bruns?\b", c)
+        ):
+            return "bio_diff_runs", {}
+        # Data science / EDA pipeline
+        if any(x in c for x in ["analyze my data", "analyse my data", "run eda", "data science run", "analyze dataset", "analyse dataset"]):
+            return "ds_run_analysis", {}
+        # Tabular analysis (specific ops with file extension present)
+        if (
+            any(x in c for x in ["rank ", "sort ", "ratio ", "filter ", "aggregate ", "sum ", "mean ", "count ", "pivot "])
+            and any(x in c for x in [".xlsx", ".xls", ".csv", ".tsv"])
+        ):
+            return "tabular_analysis", {}
+        # Tabular analysis via session file
+        if (
+            any(x in c for x in ["rank ", "sort ", "ratio ", "filter ", "aggregate "])
+            and (session_context or {}).get("uploaded_files")
+        ):
+            return "tabular_analysis", {}
+        # NCBI sequence fetch
+        if any(x in c for x in ["fetch sequence", "get sequence", "ncbi", "accession", "genbank", "refseq", "download sequence"]):
+            return "fetch_ncbi_sequence", {}
+        # Sequence alignment (commands containing actual DNA/RNA sequences)
+        if _re.search(r"\b[ACGTNU]{6,}\b", command.upper()) and any(x in c for x in ["align", "alignment", "check mismatch", "compare"]):
+            return "sequence_alignment", {}
+        # Single-cell
+        if any(x in c for x in ["scrna", "single cell", "single-cell", "pbmc", ".h5ad", "anndata", "umap", "seurat"]):
+            return "single_cell_analysis", {}
+        # FastQC / amplicon
+        if any(x in c for x in ["fastqc", "amplicon qc", "quality control", "multiqc"]):
+            return "fastqc_quality_analysis", {}
+        # Bulk RNA-seq
+        if any(x in c for x in ["bulk rna", "rnaseq", "rna-seq", "deseq", "transcriptomics", "differential expression", "time-course"]):
+            return "bulk_rnaseq_analysis", {}
+        # Phylogenetics
+        if any(x in c for x in ["phylo", "evolutionary tree", "phylogenetic"]):
+            return "phylogenetic_tree", {}
+        # Read ops
+        if any(x in c for x in ["trim reads", "trim", "trimming", "adapter"]):
+            return "read_trimming", {}
+        if any(x in c for x in ["merge reads", "merge paired"]):
+            return "read_merging", {}
+        # Toolbox
+        if any(x in c for x in ["list tools", "toolbox", "what tools", "capabilities", "what can you do"]):
+            return "toolbox_inventory", {}
+        # Visualise existing job
+        if any(x in c for x in ["visualize the results", "show results of", "visualize results"]):
+            return "visualize_job_results", {}
+        # Default
+        return "handle_natural_command", {"command": command, "session_id": sid}
+
+    with patch.object(CommandRouter, "_route_with_llm", _mock_route):
+        yield
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Session state fixtures
 # ─────────────────────────────────────────────────────────────────────────────

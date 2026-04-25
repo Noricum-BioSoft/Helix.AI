@@ -15,7 +15,6 @@ def test_action_plan_mapping_prefers_compare_versions():
 
 def test_router_routes_pca_color_update_to_rerun_path(monkeypatch):
     # Keyword routing for this regression test; production uses LLM-first.
-    monkeypatch.setenv("HELIX_LLM_ROUTER_FIRST", "0")
     router = CommandRouter()
     tool, params = router.route_command("Color the PCA by batch and sex and show both.", {})
     assert tool in {"bio_rerun", "patch_and_rerun", "bulk_rnaseq_analysis", "single_cell_analysis", "handle_natural_command"}

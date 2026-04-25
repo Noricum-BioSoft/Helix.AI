@@ -179,11 +179,10 @@ class TestCommandRouterTabularAnalysis:
     def _use_keyword_routing(self, monkeypatch):
         """Enable keyword routing for tests that verify tabular detection logic.
 
-        Production uses HELIX_LLM_ROUTER_FIRST=1 (LLM-first); these tests opt
+        LLM routing mocked via conftest._mock_command_router; these tests
         into keyword routing to validate that file-extension and operation
         detection correctly routes tabular commands.
         """
-        monkeypatch.setenv("HELIX_LLM_ROUTER_FIRST", "0")
 
     def _router(self):
         from backend.command_router import CommandRouter

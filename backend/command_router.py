@@ -31,6 +31,11 @@ ROUTER_TOOLS = [
     ("local_edit_visualization", "Edit plot title or axis labels"),
     ("local_update_scatter_x_scale", "Change plot axis scale (log/linear)"),
     ("visualize_job_results", "Visualize results for an existing job ID"),
+    ("tabular_analysis", "Run tabular operations (rank/sort/filter/aggregate) on CSV/Excel files"),
+    ("tabular_qa", "Answer conversational questions about an uploaded tabular file"),
+    ("ds_run_analysis", "Run data science / EDA pipeline on an uploaded file"),
+    ("session_run_io_summary", "Summarize inputs and outputs of a specific session run"),
+    ("local_demo_plot_script", "Generate a quick local scatter/demo plot (development/testing)"),
     ("handle_natural_command", "No specific tool; use general assistant/tool generator"),
 ]
 
@@ -45,133 +50,21 @@ ROUTER_LLM_RESPONSE_SCHEMA = {
 
 
 class RoutingError(RuntimeError):
-    """Raised when routing cannot be determined (LLM unavailable and no keyword fallback)."""
+    """Raised when routing cannot be determined (LLM unavailable)."""
 
 
 class CommandRouter:
-    """LLM-first router: all command routing goes through the LLM.
+    """LLM-only router: all command routing goes through ``_route_with_llm``.
 
-    Keyword branches are preserved but disabled by default (HELIX_LLM_ROUTER_FIRST=1).
-    To re-enable keyword routing for debugging, set HELIX_LLM_ROUTER_FIRST=0.
-    If the LLM is unavailable and keyword routing is disabled, RoutingError is raised.
+    There are no keyword fallbacks.  If the LLM is unavailable, ``route_command``
+    raises ``RoutingError``.  In tests, mock ``_route_with_llm`` directly (see
+    ``tests/integration/conftest.py`` for an example).
 
-    Prefer extending ROUTER_TOOLS / prompts over adding keyword branches.
+    Extend ``ROUTER_TOOLS`` and the LLM prompt to add new tool coverage.
     """
     
     def __init__(self):
-        self.tool_mappings = {
-            'sequence_alignment': {
-                'keywords': ['align', 'alignment', 'compare sequences', 'multiple sequence alignment'],
-                'description': 'Align DNA/RNA sequences'
-            },
-            'mutate_sequence': {
-                'keywords': ['mutate', 'mutation', 'variant', 'create variants', 'generate variants'],
-                'description': 'Create sequence variants'
-            },
-            'sequence_selection': {
-                'keywords': ['pick', 'select', 'choose', 'from the', 'randomly pick', 'select from', 'choose from'],
-                'description': 'Select sequences from alignment'
-            },
-            'phylogenetic_tree': {
-                'keywords': ['phylogenetic', 'tree', 'evolutionary tree', 'phylogeny'],
-                'description': 'Create phylogenetic tree'
-            },
-            'dna_vendor_research': {
-                'keywords': ['order', 'vendor', 'synthesis', 'test', 'assay', 'function', 'binding'],
-                'description': 'Research DNA vendors and testing'
-            },
-            'synthesis_submission': {
-                'keywords': ['submit', 'synthesis', 'order sequences'],
-                'description': 'Submit sequences for synthesis'
-            },
-            'plasmid_visualization': {
-                'keywords': ['plasmid', 'vector', 'cloning'],
-                'description': 'Visualize plasmid constructs'
-            },
-            'plasmid_for_representatives': {
-                'keywords': ['insert representatives', 'express representatives', 'clone representatives', 'vector representatives', 'plasmid representatives'],
-                'description': 'Create plasmid visualizations for representative sequences from clustering'
-            },
-            'directed_evolution': {
-                'keywords': ['directed evolution', 'evolution', 'protein engineering', 'dbtl', 'design build test learn'],
-                'description': 'Directed evolution for protein engineering'
-            },
-            'single_cell_analysis': {
-                'keywords': ['single cell', 'scRNA-seq', 'scRNAseq', 'single-cell', 'cell type', 'marker genes', 'differential expression', 'pathway analysis', 'batch correction', 'seurat', 'scpipeline'],
-                'description': 'Single-cell RNA-seq analysis using scPipeline'
-            },
-            'fetch_ncbi_sequence': {
-                'keywords': ['fetch sequence', 'get sequence', 'ncbi', 'accession', 'genbank', 'refseq', 'download sequence'],
-                'description': 'Fetch sequences from NCBI by accession'
-            },
-            'query_uniprot': {
-                'keywords': ['uniprot', 'protein database', 'query protein', 'get protein'],
-                'description': 'Query UniProt for protein sequences'
-            },
-            'lookup_go_term': {
-                'keywords': ['go term', 'gene ontology', 'lookup go', 'go:'],
-                'description': 'Lookup Gene Ontology terms'
-            },
-            'go_enrichment_analysis': {
-                'keywords': ['go enrichment', 'pathway enrichment', 'run enrichment', 'gene set enrichment'],
-                'description': 'Run GO/pathway enrichment from DEG gene lists'
-            },
-            'bulk_rnaseq_analysis': {
-                'keywords': ['bulk rna-seq', 'deseq2', 'differential expression', 'rna-seq analysis', 'transcriptomics'],
-                'description': 'Run bulk RNA-seq differential expression analysis'
-            }
-        }
-        
-        # Initialize directed evolution handler
         self.de_handler = DirectedEvolutionHandler()
-
-    @staticmethod
-    def _scrub_for_keyword_matching(command: str) -> str:
-        """Scrub URIs and absolute paths to reduce keyword false positives."""
-        scrubbed = (command or "").lower()
-        scrubbed = re.sub(r"s3://[^\s]+", " ", scrubbed)
-        scrubbed = re.sub(r"(?:^|\s)(/[^\s]+)", " ", scrubbed)
-        scrubbed = re.sub(r"\s+", " ", scrubbed).strip()
-        return scrubbed
-
-    @staticmethod
-    def _is_workflow_design_intent(command_lower: str) -> bool:
-        """
-        Detect requests asking Helix to design/propose a workflow (planning mode),
-        distinct from direct execute/run intent.
-        """
-        text = command_lower or ""
-        planning_markers = (
-            "design the workflow",
-            "design a workflow",
-            "propose a workflow",
-            "propose the workflow",
-            "workflow before execution",
-            "before execution",
-            "before running",
-            "before run",
-            "do not run yet",
-            "don't run yet",
-            "without running",
-            "plan first",
-            "analysis plan",
-            "deliverable format",
-        )
-        deliverable_markers = (
-            "what should be calculated",
-            "expected calculations",
-            "which outputs",
-            "output artifacts",
-            "recommended plots",
-            "plots/figures",
-            "tables and plots",
-            "checkpoints",
-            "failure modes",
-            "rationale",
-        )
-        has_planning = any(p in text for p in planning_markers)
-        has_deliverables = any(p in text for p in deliverable_markers)
-        return has_planning and (has_deliverables or "workflow" in text)
 
     def _route_with_llm(
         self, command: str, session_context: Dict[str, Any]
@@ -240,11 +133,13 @@ class CommandRouter:
     def route_command_with_shadow(
         self, command: str, session_context: Dict[str, Any]
     ) -> Tuple[str, Dict[str, Any]]:
-        """
-        Route command and optionally append shadow-routing diagnostics.
+        """Route command and optionally append shadow-routing diagnostics.
 
         Shadow mode is observability-only and does not override the selected route.
         Set HELIX_ROUTER_SHADOW_MODE=1 to enable.
+
+        In LLM-only mode, shadow routing makes a second independent call to
+        ``_route_with_llm`` and records whether the two LLM calls agreed.
         """
         tool_name, params = self.route_command(command, session_context)
         if os.getenv("HELIX_ROUTER_SHADOW_MODE", "0").lower() not in ("1", "true", "yes"):
@@ -259,12 +154,6 @@ class CommandRouter:
             "skipped_reason": None,
         }
 
-        # If LLM-first mode is enabled (the default), shadow routing is redundant.
-        if os.getenv("HELIX_LLM_ROUTER_FIRST", "1").lower() in ("1", "true", "yes"):
-            shadow_payload["skipped_reason"] = "llm_router_first_enabled"
-            safe_params["router_shadow"] = shadow_payload
-            return tool_name, safe_params
-
         llm_shadow = self._route_with_llm(command, session_context)
         if llm_shadow is None:
             shadow_payload["skipped_reason"] = "llm_router_unavailable"
@@ -278,268 +167,12 @@ class CommandRouter:
         return tool_name, safe_params
     
     def route_command(self, command: str, session_context: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+        """Route a command to the appropriate tool using LLM classification.
+
+        Returns (tool_name, parameters).  Raises RoutingError when the LLM is
+        unavailable.  In tests, mock ``_route_with_llm`` to return deterministic
+        results without a live API.
         """
-        Route a command to the appropriate tool based on keywords.
-        Returns (tool_name, parameters)
-        """
-        command_lower = self._scrub_for_keyword_matching(command)
-
-        # Planning-intent override: route workflow-design requests to the general
-        # planner path before domain/tool-specific execution routing.
-        if self._is_workflow_design_intent(command_lower):
-            print("🔧 Command router: Matched 'workflow design intent' -> handle_natural_command")
-            return "handle_natural_command", {
-                "command": command,
-                "session_id": session_context.get("session_id", ""),
-                "planning_intent": "workflow_design",
-            }
-
-        # LLM routing is the default (HELIX_LLM_ROUTER_FIRST defaults to "1").
-        # Set HELIX_LLM_ROUTER_FIRST=0 only for local debugging of keyword branches.
-        if os.getenv("HELIX_LLM_ROUTER_FIRST", "1").lower() in ("1", "true", "yes"):
-            llm_result = self._route_with_llm(command, session_context)
-            if llm_result is not None:
-                tool_name, base_params = llm_result
-                params = self._extract_parameters(command, tool_name, session_context)
-                for k, v in base_params.items():
-                    params.setdefault(k, v)
-                print(f"🔧 Command router: LLM routed -> {tool_name}")
-                return (tool_name, params)
-            raise RoutingError(
-                "LLM router returned no result and keyword fallback is disabled "
-                "(HELIX_LLM_ROUTER_FIRST=1). Check LLM availability or set "
-                "HELIX_LLM_ROUTER_FIRST=0 to enable keyword routing."
-            )
-        
-        # Tool inventory / "what tools do you have?" (HIGHEST PRIORITY)
-        if any(
-            phrase in command_lower
-            for phrase in [
-                "what tools do you have",
-                "what tools are available",
-                "list tools",
-                "show tools",
-                "your toolbox",
-                "toolbox",
-                "capabilities",
-                "what can you do",
-            ]
-        ):
-            print("🔧 Command router: Matched 'toolbox inventory' -> toolbox_inventory")
-            return "toolbox_inventory", {}
-
-        # ── LOCAL ITERATION DEMO ────────────────────────────────────────────────
-        # local_demo_plot_script uses only matplotlib — safe in all environments.
-        if any(p in command_lower for p in ["demo plot", "demo scatter", "local demo plot", "create demo plot", "generate demo plot"]):
-            print("🔧 Command router: Matched 'local demo plot' -> local_demo_plot_script")
-            x_scale = "log" if ("log" in command_lower and "linear" not in command_lower) else ("linear" if "linear" in command_lower else "log")
-            return "local_demo_plot_script", {"x_scale": x_scale}
-
-        # Script edit + rerun (was inside mock-mode guard; works in all modes)
-        if os.getenv("HELIX_MOCK_MODE") == "1":
-            # Script edit + rerun (explicit deterministic syntax for mock mode)
-            if "apply code patch" in command_lower or "apply patch" in command_lower:
-                # Prefer fenced diff block; else take everything after the marker.
-                m = re.search(r"```(?:diff)?\s*([\s\S]*?)\s*```", command, flags=re.IGNORECASE)
-                patch_text = None
-                if m and m.group(1).strip():
-                    patch_text = m.group(1).strip() + "\n"
-                else:
-                    m2 = re.search(r"apply (?:code )?patch\\s*:\\s*([\\s\\S]+)$", command, flags=re.IGNORECASE)
-                    if m2 and m2.group(1).strip():
-                        patch_text = m2.group(1).strip() + "\n"
-                if patch_text:
-                    print("🔧 Command router: Matched 'apply code patch' -> local_edit_and_rerun_script")
-                    return "local_edit_and_rerun_script", {"code_patch": patch_text, "target_run": "latest"}
-
-            if "replace script with" in command_lower or "replace the script with" in command_lower:
-                m = re.search(r"```(?:python)?\s*([\s\S]*?)\s*```", command, flags=re.IGNORECASE)
-                new_code = None
-                if m and m.group(1).strip():
-                    new_code = m.group(1).strip() + "\n"
-                else:
-                    m2 = re.search(r"replace (?:the )?script with\\s*:\\s*([\\s\\S]+)$", command, flags=re.IGNORECASE)
-                    if m2 and m2.group(1).strip():
-                        new_code = m2.group(1).strip() + "\n"
-                if new_code:
-                    print("🔧 Command router: Matched 'replace script' -> local_edit_and_rerun_script")
-                    return "local_edit_and_rerun_script", {"new_code": new_code, "target_run": "latest"}
-
-        # Update plot axis scale (log <-> linear)
-        # Matches: "update x-axis to linear", "change the plots from log to linear scale",
-        # "switch to log scale", "use linear scale", etc.
-        _has_scale_word  = any(w in command_lower for w in ["linear", "log scale", "logarithmic"])
-        # "to log" / "to linear" are unambiguous axis-scale references
-        _has_scale_to    = bool(re.search(r"\bto\s+(log|linear)\b", command_lower))
-        _has_axis_ref    = any(w in command_lower for w in ["x axis", "x-axis", "xaxis", "y axis", "y-axis", "yaxis"])
-        _has_plot_ref    = any(w in command_lower for w in ["plot", "plots", "chart", "charts", "graph", "graphs", "axis", "scale"])
-        _has_change_verb = any(w in command_lower for w in ["change", "switch", "update", "set", "use", "convert", "make"])
-        _explicit_axis_phrase = any(p in command_lower for p in [
-            "change x axis", "change x-axis", "set x axis", "set x-axis",
-            "update x axis", "update x-axis", "log scale", "linear scale",
-            "switch to log", "switch to linear",
-        ])
-        if _explicit_axis_phrase or _has_scale_to or (_has_scale_word and (_has_axis_ref or (_has_plot_ref and _has_change_verb))):
-            x_scale = "linear" if "linear" in command_lower else ("log" if "log" in command_lower else "linear")
-            print(f"🔧 Command router: Matched 'update axis scale' -> patch_and_rerun (x_scale={x_scale})")
-            return "patch_and_rerun", {"change_request": command, "target_run": "latest"}
-
-        # ── GENERIC RESULT CHANGE / PARAMETER UPDATE ────────────────────────────
-        # "change alpha to 0.01", "use resolution 0.8", "change color scheme",
-        # "add a heatmap", "show only significant genes", etc.
-        _change_phrases = [
-            "change the ", "change alpha", "change resolution", "change color",
-            "update alpha", "update the ", "set alpha", "set resolution",
-            "add a heatmap", "add heatmap", "show only", "filter to",
-            "increase alpha", "decrease alpha", "stricter threshold",
-            "less strict", "more clusters", "fewer clusters",
-        ]
-        if any(p in command_lower for p in _change_phrases):
-            print(f"🔧 Command router: Matched 'change result' -> patch_and_rerun")
-            return "patch_and_rerun", {"change_request": command, "target_run": "latest"}
-
-        # ── BIO ITERATIVE RE-RUN ────────────────────────────────────────────────
-        # Patterns: "re-run", "run again", "redo analysis", "repeat with alpha=0.01"
-        _rerun_phrases = [
-            "re-run", "rerun", "run again", "redo", "repeat with",
-            "run with", "try again", "re-analyse", "reanalyze",
-            "change parameter", "update parameter", "set resolution",
-        ]
-        if any(p in command_lower for p in _rerun_phrases):
-            # Extract parameter changes from the command
-            changes: Dict[str, Any] = {}
-            _alpha_m = re.search(r"\balpha\s*[=:]\s*([\d.]+)", command_lower)
-            if _alpha_m:
-                changes["alpha"] = float(_alpha_m.group(1))
-            _res_m = re.search(r"\bresolution\s*[=:]\s*([\d.]+)", command_lower)
-            if _res_m:
-                changes["resolution"] = float(_res_m.group(1))
-            _formula_m = re.search(r"design.formula\s*[=:]\s*(\S+)", command_lower)
-            if _formula_m:
-                changes["design_formula"] = _formula_m.group(1)
-            print(f"🔧 Command router: Matched bio re-run -> bio_rerun (changes={changes})")
-            return "bio_rerun", {"changes": changes, "target_run": "latest"}
-
-        # ── BIO DIFF RUNS ───────────────────────────────────────────────────────
-        # Patterns: "compare run X and Y", "diff runs", "what changed between runs"
-        _diff_phrases = [
-            "compare run", "diff run", "what changed", "compare results",
-            "show differences", "how did it change", "compare iterations",
-            "compare the runs", "what's different", "show the difference",
-        ]
-        if any(p in command_lower for p in _diff_phrases):
-            # Try to extract UUID run IDs from command
-            _uuid_pattern = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
-            _uuids = re.findall(_uuid_pattern, command_lower)
-            params: Dict[str, Any] = {}
-            if len(_uuids) >= 2:
-                params["run_id_a"] = _uuids[0]
-                params["run_id_b"] = _uuids[1]
-            else:
-                params["run_id_a"] = "latest"
-                params["run_id_b"] = "prior"
-            print(f"🔧 Command router: Matched bio diff -> bio_diff_runs ({params})")
-            return "bio_diff_runs", params
-
-        # "Use X from before Y" / "use cleaned/filtered/original dataset" → handle_natural_command
-        # These are artifact-switch requests that should reach the agent directly without
-        # approval staging. Routing to handle_natural_command bypasses the approval gate
-        # (see approval_policy: handle_natural_command without approval semantics → no staging).
-        _use_historical = (
-            re.search(r"\buse\b", command_lower)
-            and any(p in command_lower for p in ["before", "prior", "original", "first run", "earlier"])
-            and any(p in command_lower for p in ["dataset", "data", "version", "artifact", "result"])
-        )
-        if _use_historical:
-            params = {"command": command}
-            print(f"🔧 Command router: Matched use-historical → handle_natural_command ({params})")
-            return "handle_natural_command", params
-
-        # Historical figure/state recreation requests should execute a historical
-        # comparison path directly instead of being staged as generic plans.
-        _recreate_historical = (
-            any(p in command_lower for p in ["recreate", "reconstruct", "reproduce"])
-            and any(p in command_lower for p in ["figure", "state", "version", "before", "first", "original"])
-        )
-        if _recreate_historical:
-            params = {
-                "run_id_a": "latest",
-                "run_id_b": "prior",
-                "command": command,
-            }
-            print(f"🔧 Command router: Matched historical recreation -> bio_diff_runs ({params})")
-            return "bio_diff_runs", params
-
-        # Rename / retitle plot (example of generalized viz edit)
-        if any(p in command_lower for p in ["rename plot", "rename the plot", "retitle plot", "set plot title", "change plot title", "update plot title"]) or (
-            "rename" in command_lower and "plot" in command_lower
-        ):
-            # Prefer quoted title, else take substring after "to "
-            title = None
-            m = re.search(r"\"([^\"]+)\"", command)
-            if m and m.group(1).strip():
-                title = m.group(1).strip()
-            else:
-                m2 = re.search(r"\bto\s+(.+)$", command, flags=re.IGNORECASE)
-                if m2 and m2.group(1).strip():
-                    title = m2.group(1).strip()
-            if title:
-                print(f"🔧 Command router: Matched 'rename plot' -> local_edit_visualization (title={title})")
-                return "local_edit_visualization", {"patch": {"title": title}, "target_run": "latest"}
-
-        # Rename / set axis labels (example of generalized viz edit)
-        if any(p in command_lower for p in ["y axis label", "y-axis label", "label y axis", "label the y axis", "rename y axis", "rename the y axis", "set y axis", "set y-axis"]) and (
-            "label" in command_lower or "rename" in command_lower
-        ):
-            y_label = None
-            m = re.search(r"\"([^\"]+)\"", command)
-            if m and m.group(1).strip():
-                y_label = m.group(1).strip()
-            else:
-                m2 = re.search(r"\bto\s+(.+)$", command, flags=re.IGNORECASE)
-                if m2 and m2.group(1).strip():
-                    y_label = m2.group(1).strip()
-            if y_label:
-                print(f"🔧 Command router: Matched 'y axis label' -> local_edit_visualization (y_label={y_label})")
-                return "local_edit_visualization", {"patch": {"y_label": y_label}, "target_run": "latest"}
-
-        if any(p in command_lower for p in ["x axis label", "x-axis label", "label x axis", "label the x axis", "rename x axis", "rename the x axis", "set x axis", "set x-axis"]) and (
-            "label" in command_lower or "rename" in command_lower
-        ):
-            x_label = None
-            m = re.search(r"\"([^\"]+)\"", command)
-            if m and m.group(1).strip():
-                x_label = m.group(1).strip()
-            else:
-                m2 = re.search(r"\bto\s+(.+)$", command, flags=re.IGNORECASE)
-                if m2 and m2.group(1).strip():
-                    x_label = m2.group(1).strip()
-            if x_label:
-                print(f"🔧 Command router: Matched 'x axis label' -> local_edit_visualization (x_label={x_label})")
-                return "local_edit_visualization", {"patch": {"x_label": x_label}, "target_run": "latest"}
-
-        # Deterministic Q&A over run ledger (no LLM required in mock mode)
-        if any(p in command_lower for p in ["inputs/outputs of the first run", "inputs and outputs of the first run", "what were the inputs", "what were the outputs"]) and "run" in command_lower:
-            run_ref = "first"
-            m = re.search(r"(?:run|iteration)\s*#?\s*(\d+)", command_lower)
-            if m:
-                run_ref = m.group(1)
-            print(f"🔧 Command router: Matched 'run io summary' -> session_run_io_summary ({run_ref})")
-            return "session_run_io_summary", {"run_ref": run_ref}
-
-        # Iterative visualization updates in transcriptomics contexts:
-        # route to patch_and_rerun so we modify existing outputs instead of
-        # re-triggering full RNA-seq input resolution.
-        if any(p in command_lower for p in ["volcano plot", "heatmap", "pca"]) and any(
-            p in command_lower for p in ["highlight", "color", "top 30", "top 50", "clustered by", "show both", "make that"]
-        ):
-            if "pca" in command_lower and ("batch" in command_lower or "sex" in command_lower):
-                print("🔧 Command router: Matched 'pca recolor/replot' -> bio_rerun")
-                return "bio_rerun", {"changes": {"figure_variant": "pca_by_batch_and_sex"}, "target_run": "latest"}
-            print("🔧 Command router: Matched 'iterative transcriptomics viz edit' -> patch_and_rerun")
-            return "patch_and_rerun", {"change_request": command, "target_run": "latest"}
-
-        # ── HYBRID: LLM-based routing for everything not matched by high-confidence keywords above ──
         llm_result = self._route_with_llm(command, session_context)
         if llm_result is not None:
             tool_name, base_params = llm_result
@@ -547,298 +180,11 @@ class CommandRouter:
             for k, v in base_params.items():
                 params.setdefault(k, v)
             print(f"🔧 Command router: LLM routed -> {tool_name}")
-            return (tool_name, params)
-
-        # Fallback: keyword-based routing when LLM is off or failed
-        # Priority-based matching to avoid conflicts
-        # Check for specific phrases first, then general keywords
-
-        # ── CONSENSUS / COMPOSITE (before alignment so "align + consensus" -> handle_natural_command) ──
-        if any(phrase in command_lower for phrase in [
-            'consensus sequence', 'consensus of', 'calculate consensus', 'compute consensus',
-            'consensus from', 'consensus from the', 'consensus of the following'
-        ]):
-            print(f"🔧 Command router: Consensus/composite request -> handle_natural_command (tool generator)")
-            return "handle_natural_command", {"command": command, "session_id": session_context.get("session_id", "")}
-
-        # ── SINGLE-CELL RNA-SEQ (must precede bulk RNA-seq check) ────────────────
-        # Single-cell prompts contain bulk RNA-seq vocabulary (rna-seq, DE, PCA…)
-        # so single-cell routing must win before the bulk catch-all fires.
-        if self._is_single_cell_command(command_lower):
-            print(f"🔧 Command router: Matched 'single-cell RNA-seq' -> single_cell_analysis (early guard)")
-            return 'single_cell_analysis', self._extract_parameters(command, 'single_cell_analysis', session_context)
-
-        # ── BULK RNA-SEQ ──────────────────────────────────────────────────────────
-        if self._is_rnaseq_transcriptomics_command(command_lower):
-            print(f"🔧 Command router: Matched 'bulk RNA-seq transcriptomics' -> bulk_rnaseq_analysis")
-            return 'bulk_rnaseq_analysis', self._extract_parameters(command, 'bulk_rnaseq_analysis', session_context)
-
-        # Check for clustering analysis – ONLY when there are actual molecular-sequence
-        # cues (FASTA headers, file extensions, nucleotide strings, etc.).
-        # This prevents EDA/statistical "clustering" in RNA-seq prompts from being
-        # mis-routed here.
-        if (any(phrase in command_lower for phrase in
-                ['cluster', 'clustering', 'group sequences', 'cluster sequences', 'representative sequences'])
-                and self._has_sequence_cues(command)):
-            print(f"🔧 Command router: Matched 'clustering' -> clustering_analysis")
-            return 'clustering_analysis', self._extract_parameters(command, 'clustering_analysis', session_context)
-        
-        # Check for variant selection (HIGH PRIORITY - before phylogenetic tree)
-        # Check for "select X sequences" patterns (but not representative sequences from clustering)
-        if re.search(r'select\s+\d+\s+sequences?', command_lower) and 'representative sequences' not in command_lower:
-            print(f"🔧 Command router: Matched 'select sequences' -> variant_selection")
-            return 'variant_selection', self._extract_parameters(command, 'variant_selection', session_context)
-        if any(phrase in command_lower for phrase in ['select variants', 'top variants', 'representative variants', 'diverse variants', 'select top']):
-            print(f"🔧 Command router: Matched 'variant selection' -> variant_selection")
-            return 'variant_selection', self._extract_parameters(command, 'variant_selection', session_context)
-        
-        # Check for phylogenetic tree first (highest priority)
-        # Include "visualize" variations to ensure tree creation happens
-        if (any(phrase in command_lower for phrase in ['phylogenetic tree', 'evolutionary tree', 'phylogeny']) or
-            (re.search(r'visualize.*phylogenetic', command_lower) or re.search(r'visualize.*tree', command_lower))):
-            print(f"🔧 Command router: Matched 'phylogenetic tree' -> phylogenetic_tree")
-            return 'phylogenetic_tree', self._extract_parameters(command, 'phylogenetic_tree', session_context)
-        
-        # Check for mutation/variant generation
-        if any(phrase in command_lower for phrase in ['mutate', 'mutation', 'variant', 'create variants', 'generate variants']):
-            print(f"🔧 Command router: Matched 'mutation' -> mutate_sequence")
-            return 'mutate_sequence', self._extract_parameters(command, 'mutate_sequence', session_context)
-        
-        # Check for sequence alignment (more specific to avoid false matches)
-        if any(phrase in command_lower for phrase in ['align sequences', 'sequence alignment', 'compare sequences', 'multiple sequence alignment', 'perform alignment', 'perform multiple sequence alignment']):
-            print(f"🔧 Command router: Matched 'alignment' -> sequence_alignment")
-            return 'sequence_alignment', self._extract_parameters(command, 'sequence_alignment', session_context)
-        
-        
-        # Check for known unsupported tools (return clear message with alternatives)
-        if any(phrase in command_lower for phrase in ['multiqc', 'multi qc', 'run multiqc', 'perform multiqc']):
-            print(f"🔧 Command router: Matched 'MultiQC' -> unsupported_tool (not implemented)")
-            return 'unsupported_tool', {"requested_tool": "multiqc", "command": command}
-
-        # Check for FastQC analysis (HIGH PRIORITY - before vendor check to avoid false matches with "test" in paths)
-        if any(phrase in command_lower for phrase in ['fastqc', 'fastqc analysis', 'quality control analysis', 'perform fastqc', 'run fastqc']):
-            print(f"🔧 Command router: Matched 'FastQC' -> fastqc_quality_analysis")
-            return 'fastqc_quality_analysis', self._extract_parameters(command, 'fastqc_quality_analysis', session_context)
-        
-        # Check for vendor research (exclude "test" if it's in a file path)
-        # Check if "test" appears in an S3 path or file path context
-        is_test_in_path = bool(re.search(r's3://[^/]+/[^/]*test[^/]*/', command_lower) or 
-                               re.search(r'[/\\][^/\\]*test[^/\\]*[/\\]', command_lower))
-        
-        vendor_keywords = ['order', 'vendor', 'synthesis', 'assay', 'function', 'binding']
-        
-        if any(phrase in command_lower for phrase in vendor_keywords):
-            print(f"🔧 Command router: Matched 'vendor' -> dna_vendor_research")
-            return 'dna_vendor_research', self._extract_parameters(command, 'dna_vendor_research', session_context)
-        
-        # ── TABULAR QA — conversational data questions about an uploaded file ──
-        # Fires when the user asks an open-ended question (what, which, how many,
-        # show me, compare…) and a tabular file is present in the session.
-        # Must come BEFORE tabular_analysis so "what are the top genes?" routes
-        # to the Code Interpreter rather than the deterministic ops layer.
-        if self._is_tabular_qa_command(command_lower, session_context):
-            print("🔧 Command router: Matched 'tabular QA' -> tabular_qa")
-            return "tabular_qa", self._extract_tabular_qa_params(command, session_context)
-
-        # ── TABULAR ANALYSIS (early guard, before plasmid / vendor checks) ─────
-        # Wins over broad-keyword routes like plasmid ("express" in "expression")
-        # when a concrete table-operation verb + file reference is present.
-        if self._is_tabular_analysis_command(command_lower, session_context):
-            print("🔧 Command router: Matched 'tabular analysis' [early] -> tabular_analysis")
-            return "tabular_analysis", self._extract_tabular_params(command, session_context)
-
-        # Check for plasmid for representatives (HIGH PRIORITY - before general plasmid)
-        if any(phrase in command_lower for phrase in ['insert representatives', 'express representatives', 'clone representatives', 'vector representatives', 'plasmid representatives']):
-            print(f"🔧 Command router: Matched 'plasmid representatives' -> plasmid_for_representatives")
-            return 'plasmid_for_representatives', self._extract_parameters(command, 'plasmid_for_representatives', session_context)
-        
-        # Check for plasmid visualization (HIGH PRIORITY - before alignment fallback)
-        if any(phrase in command_lower for phrase in ['plasmid', 'vector', 'cloning', 'insert', 'express', 'into vector', 'into plasmid']):
-            print(f"🔧 Command router: Matched 'plasmid' -> plasmid_visualization")
-            return 'plasmid_visualization', self._extract_parameters(command, 'plasmid_visualization', session_context)
-        
-        # Check for synthesis submission
-        if any(phrase in command_lower for phrase in ['submit', 'synthesis', 'order sequences']):
-            print(f"🔧 Command router: Matched 'synthesis' -> synthesis_submission")
-            return 'synthesis_submission', self._extract_parameters(command, 'synthesis_submission', session_context)
-        
-        # Check for session creation
-        if any(phrase in command_lower for phrase in ['create session', 'new session', 'start session', 'initialize session']):
-            print(f"🔧 Command router: Matched 'session creation' -> session_creation")
-            return 'session_creation', {"command": command}
-        
-        # Check for single-cell analysis (HIGH PRIORITY - before other checks)
-        # NOTE: "differential expression" is intentionally removed here; bulk RNA-seq
-        # prompts that mention DE are caught earlier by _is_rnaseq_transcriptomics_command.
-        if (
-            "enrichment" in command_lower
-            and ("go" in command_lower or "gene ontology" in command_lower or "pathway" in command_lower)
-        ):
-            print(f"🔧 Command router: Matched 'GO/pathway enrichment' -> go_enrichment_analysis")
-            return "go_enrichment_analysis", self._extract_parameters(command, "go_enrichment_analysis", session_context)
-
-        if any(phrase in command_lower for phrase in ['single cell', 'scrna-seq', 'scrnaseq', 'single-cell', 'cell type', 'marker genes', 'pathway analysis', 'batch correction', 'seurat', 'scpipeline']):
-            print(f"🔧 Command router: Matched 'single-cell analysis' -> single_cell_analysis")
-            return 'single_cell_analysis', self._extract_parameters(command, 'single_cell_analysis', session_context)
-        
-        # Check for NCBI sequence fetch (HIGH PRIORITY)
-        if any(phrase in command_lower for phrase in ['fetch sequence', 'get sequence', 'ncbi', 'accession', 'genbank', 'refseq', 'download sequence']):
-            print(f"🔧 Command router: Matched 'NCBI sequence fetch' -> fetch_ncbi_sequence")
-            return 'fetch_ncbi_sequence', self._extract_parameters(command, 'fetch_ncbi_sequence', session_context)
-        
-        # Check for UniProt queries
-        if any(phrase in command_lower for phrase in ['uniprot', 'protein database', 'query protein', 'get protein']):
-            print(f"🔧 Command router: Matched 'UniProt query' -> query_uniprot")
-            return 'query_uniprot', self._extract_parameters(command, 'query_uniprot', session_context)
-        
-        # Check for GO term lookups
-        if any(phrase in command_lower for phrase in ['go term', 'gene ontology', 'go:', 'lookup go']):
-            print(f"🔧 Command router: Matched 'GO term lookup' -> lookup_go_term")
-            return 'lookup_go_term', self._extract_parameters(command, 'lookup_go_term', session_context)
-        
-        # Check for directed evolution
-        if any(phrase in command_lower for phrase in ['directed evolution', 'evolution', 'protein engineering', 'dbtl', 'design build test learn']):
-            print(f"🔧 Command router: Matched 'directed evolution' -> directed_evolution")
-            return 'directed_evolution', self._extract_parameters(command, 'directed_evolution', session_context)
-        
-        # Check for quality assessment (HIGH PRIORITY - before other checks)
-        if any(phrase in command_lower for phrase in ['quality report', 'quality assessment', 'generate quality', 'quality metrics', 'qc report', 'quality check', 'assess quality']):
-            print(f"🔧 Command router: Matched 'quality assessment' -> quality_assessment")
-            return 'quality_assessment', self._extract_parameters(command, 'quality_assessment', session_context)
-        
-        # Check for read merging (HIGH PRIORITY - before trimming to avoid conflicts)
-        if any(phrase in command_lower for phrase in ['merge', 'merging', 'merge reads', 'merge paired', 'merge paired-end', 'merge my paired']):
-            print(f"🔧 Command router: Matched 'read merging' -> read_merging")
-            return 'read_merging', self._extract_parameters(command, 'read_merging', session_context)
-        
-        # Check for read trimming (HIGH PRIORITY - before alignment fallback)
-        if any(phrase in command_lower for phrase in ['trim', 'trimming', 'trim reads', 'trim low-quality', 'quality trim', 'quality threshold', 'remove adapter', 'adapter removal']):
-            print(f"🔧 Command router: Matched 'read trimming' -> read_trimming")
-            return 'read_trimming', self._extract_parameters(command, 'read_trimming', session_context)
-        
-        # ── DATA SCIENCE PIPELINE ─────────────────────────────────────────────
-        # Route data analysis requests to the ds_pipeline orchestrator.
-        # Must come before alignment fallback to avoid sequence-related false matches.
-        if self._is_ds_run_command(command_lower):
-            print("🔧 Command router: Matched 'data science run' -> ds_run_analysis")
-            return "ds_run_analysis", self._extract_ds_run_params(command, session_context)
-
-        if any(p in command_lower for p in ["list runs", "show runs", "run history", "experiment log", "list experiments"]):
-            print("🔧 Command router: Matched 'list ds runs' -> ds_list_runs")
-            return "ds_list_runs", {"session_id": session_context.get("session_id", "")}
-
-        if any(p in command_lower for p in ["diff run", "compare run", "diff experiment"]):
-            print("🔧 Command router: Matched 'diff runs' -> ds_diff_runs")
-            return "ds_diff_runs", self._extract_ds_diff_params(command, session_context)
-
-        if any(p in command_lower for p in ["reproduce run", "rerun", "re-run"]):
-            print("🔧 Command router: Matched 'reproduce run' -> ds_reproduce_run")
-            m = re.search(r"run[_\s](\w+)", command_lower)
-            run_id = m.group(0).replace(" ", "_") if m else "latest"
-            return "ds_reproduce_run", {
-                "session_id": session_context.get("session_id", ""),
-                "run_id": run_id,
-            }
-
-        # Default fallback - only for sequence-like requests with concrete molecular cues.
-        if self._should_sequence_alignment_fallback(command, command_lower):
-            print(f"🔧 Command router: Defaulting to sequence_alignment for alignment command")
-            return "sequence_alignment", self._extract_parameters(command, 'sequence_alignment', session_context)
-        
-        # For other commands, try to use the natural command handler
-        print(f"🔧 Command router: No specific match, using natural command handler")
-        return "handle_natural_command", {"command": command, "session_id": session_context.get("session_id", "")}
-        
-    # ── Helper: is this a bulk RNA-seq / transcriptomics analysis request? ──────
-    # Covers both "execute with files" and "plan / code generation" prompts.
-    _RNASEQ_PHRASES = (
-        'rna-seq', 'rnaseq', 'rna seq', 'rna-sequencing',
-        'transcriptom',               # transcriptome, transcriptomics
-        'deseq2', 'deseq',
-        'edger', 'limma voom',
-        'differential expression',
-        'count matrix', 'count data', 'raw count',
-        'gene expression',
-        'bulk rna',
-        'sample metadata',
-        'factorial design', 'factorial experiment', 'two-factor', '2x2', '2 x 2',
-        'days post infection', ' dpi',  # leading space avoids partial matches
-        'infection status', 'time point',
-        'biological replicates',
-        'normalization', 'multiple testing correction', 'false discovery',
-        'pca', 'principal component',  # EDA in an RNA-seq context
-        'vst', 'voom', 'rpkm', 'fpkm', 'tpm',
-        'volcano plot', 'ma plot', 'heatmap of samples',
-        'sample distance',
-    )
-
-    # Strong single-cell signals — any of these present means the request is
-    # for single-cell analysis, not bulk RNA-seq.
-    _SCRNA_PHRASES = (
-        'single cell',
-        'single-cell',
-        'scrna-seq',
-        'scrnaseq',
-        'scRNA',
-        '10x genomics',
-        '10x chromium',
-        'leiden algorithm',
-        'umap',
-        'seurat',
-        'scanpy',
-        'anndata',
-        'pbmc',
-        'cell cluster',
-        'cell type annotation',
-        'cell-type',
-        'cell type composition',
-        'marker gene',
-        'leiden',
-        'louvain',
-    )
-
-    def _is_single_cell_command(self, command_lower: str) -> bool:
-        """Return True when the command clearly describes a single-cell RNA-seq
-        analysis.  Used to prevent single-cell prompts from being swallowed by
-        the bulk RNA-seq catch-all."""
-        return any(phrase in command_lower for phrase in self._SCRNA_PHRASES)
-
-    def _is_rnaseq_transcriptomics_command(self, command_lower: str) -> bool:
-        """Return True when the lowercased command clearly describes a bulk
-        RNA-seq / transcriptomics analysis (with or without file paths).
-        Returns False when single-cell signals are present."""
-        if self._is_single_cell_command(command_lower):
-            return False
-        return any(phrase in command_lower for phrase in self._RNASEQ_PHRASES)
-
-    # ── Helper: does the command contain molecular-sequence biology cues? ────────
-    def _has_sequence_cues(self, command: str) -> bool:
-        """Return True when the command has clear evidence of biological sequences:
-        FASTA headers, nucleotide file extensions, long DNA/RNA strings, or explicit
-        molecule-type words.  Used to avoid routing RNA-seq EDA "clustering" to the
-        phylogenetic sequence-clustering tool."""
-        # FASTA header
-        if re.search(r'>\s*\w', command):
-            return True
-        # Nucleotide file extensions
-        if re.search(r'\.(fasta|fa|fq|fastq|bam|sam)(\.gz)?\b', command, re.IGNORECASE):
-            return True
-        # Long nucleotide strings (≥8 chars, only ATCGNU)
-        if re.search(r'\b[ATCGNU]{8,}\b', command.upper()):
-            return True
-        # Explicit molecule-type terms unambiguously tied to sequence data
-        if re.search(r'\b(dna|rna sequence|nucleotide|amino acid|peptide)\b', command, re.IGNORECASE):
-            return True
-        return False
-
-    def _should_sequence_alignment_fallback(self, command: str, command_lower: str) -> bool:
-        """Conservative default fallback gate for sequence_alignment."""
-        has_alignment_language = any(
-            phrase in command_lower for phrase in ("align", "alignment", "sequences")
+            return tool_name, params
+        raise RoutingError(
+            "LLM router unavailable. Ensure LLM is configured (set OPENAI_API_KEY or "
+            "DEEPSEEK_API_KEY). For offline testing, mock CommandRouter._route_with_llm."
         )
-        if not has_alignment_language:
-            return False
-        return self._has_sequence_cues(command)
 
     def route_plan(self, command: str, session_context: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -1930,211 +1276,45 @@ class CommandRouter:
                 params["needs_inputs"] = False
 
             return params
-        
+
+        elif tool_name in {"tabular_analysis", "tabular_qa"}:
+            params: Dict[str, Any] = {"command": command}
+            _session_files = [
+                f for f in (session_context.get("uploaded_files") or [])
+                if isinstance(f, dict)
+            ]
+            if _session_files:
+                params["file_path"] = _session_files[-1].get("path") or _session_files[-1].get("filename", "")
+            else:
+                _file_m = re.search(r"(?:in|from|on|file)\s+([\w./\\-]+\.(?:csv|tsv|xlsx?|xls))\b", command, re.IGNORECASE)
+                if _file_m:
+                    params["file_path"] = _file_m.group(1)
+            _sheet_m = re.search(r"sheet\s+['\"]?(\w+)['\"]?", command, re.IGNORECASE)
+            if _sheet_m:
+                params["sheet"] = _sheet_m.group(1)
+            params["session_id"] = session_context.get("session_id", "")
+            return params
+
+        elif tool_name == "bio_rerun":
+            changes: Dict[str, Any] = {}
+            _alpha = re.search(r"\balpha\s*[=:]\s*([\d.]+)", command, re.IGNORECASE)
+            if _alpha:
+                changes["alpha"] = float(_alpha.group(1))
+            _res = re.search(r"\bresolution\s*[=:]\s*([\d.]+)", command, re.IGNORECASE)
+            if _res:
+                changes["resolution"] = float(_res.group(1))
+            _formula = re.search(r"design.formula\s*[=:]\s*(\S+)", command, re.IGNORECASE)
+            if _formula:
+                changes["design_formula"] = _formula.group(1)
+            return {"changes": changes, "target_run": "latest"}
+
+        elif tool_name == "bio_diff_runs":
+            _uuid_pattern = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+            _uuids = re.findall(_uuid_pattern, command.lower())
+            if len(_uuids) >= 2:
+                return {"run_id_a": _uuids[0], "run_id_b": _uuids[1]}
+            return {"run_id_a": "latest", "run_id_b": "prior"}
+
         else:
             return {"command": command}
 
-    # ── Data science routing helpers ──────────────────────────────────────────
-
-    _DS_PHRASES = (
-        "analyze my data", "analyse my data",
-        "run eda", "exploratory data analysis",
-        "run analysis", "analyze dataset", "analyse dataset",
-        "train model", "fit model", "baseline model",
-        "data analysis", "run pipeline", "run ds pipeline",
-        "analyze csv", "analyse csv",
-        "data science run", "start analysis",
-    )
-
-    def _is_ds_run_command(self, command_lower: str) -> bool:
-        return any(phrase in command_lower for phrase in self._DS_PHRASES)
-
-    # ── Tabular QA routing (conversational Code Interpreter) ─────────────────
-
-    _TABULAR_QA_QUESTION_PREFIXES = (
-        # Unambiguous question/command openers — safe to match only at the START
-        # of the command.  We intentionally exclude very short or common words
-        # (e.g. "do", "find", "list", "count") to prevent mid-sentence keyword
-        # collisions that hijack unrelated routes (e.g. vendor research, NCBI
-        # fetch) when a tabular file happens to be in the session.
-        "what ", "what's ", "whats ", "what is ", "what are ",
-        "which ", "how many ", "how much ",
-        "show me ", "give me ", "tell me ",
-        "describe ", "summarize ", "summarise ",
-        "compare ", "is there ", "are there ",
-        "does ", "plot ", "visualize ", "visualise ",
-        "distribution of ", "histogram of ", "scatter ",
-        "correlation ", "explain ", "why ",
-    )
-
-    def _is_tabular_qa_command(
-        self, command_lower: str, session_context: dict
-    ) -> bool:
-        """
-        True when the command is an open-ended question about an uploaded tabular
-        file.  Requires a tabular file to be present in the session — without one
-        there is nothing to query against.
-
-        Matching strategy: only startswith() — never substring — to prevent
-        short prefixes like "do" or "find" from hijacking commands that merely
-        contain those words mid-sentence (e.g. "vendor" contains "do",
-        "window" contains "do", "playlist" contains "list").
-        """
-        if not self._has_tabular_file_in_session(session_context):
-            return False
-        return any(command_lower.startswith(p) for p in self._TABULAR_QA_QUESTION_PREFIXES)
-
-    def _extract_tabular_qa_params(
-        self, command: str, session_context: dict
-    ) -> dict:
-        session_id = session_context.get("session_id", "")
-        # Pick first tabular upload with its profile
-        file_path = ""
-        profile: dict = {}
-        sheet = None
-        for up in (session_context.get("uploaded_files") or []):
-            name = (up.get("filename") or up.get("name") or "").lower()
-            if any(name.endswith(ext) for ext in self._TABULAR_UPLOAD_EXTENSIONS):
-                file_path = up.get("local_path") or up.get("path") or ""
-                profile = up.get("schema_preview") or {}
-                break
-        # Sheet from command
-        sheet_match = re.search(
-            r"sheet[:\s]+['\"]?([A-Za-z0-9_ ]+)['\"]?", command, re.IGNORECASE
-        )
-        if sheet_match:
-            sheet = sheet_match.group(1).strip() or None
-        return {
-            "session_id": session_id,
-            "question": command,
-            "file_path": file_path,
-            "profile": profile,
-            "sheet": sheet,
-        }
-
-    # ── Tabular analysis routing ──────────────────────────────────────────────
-
-    _TABULAR_OPERATION_PHRASES = (
-        "rank", "ranking", "sort", "sort by", "order by",
-        "ratio", "derive column", "derived column", "calculate ratio",
-        "compute ratio", "filter rows", "filter table", "select rows",
-        "pivot", "group by", "aggregate", "normalize column",
-        "top k", "top n", "highest", "lowest", "compare columns",
-        "median ratio", "expression ratio", "tumor vs", "tumor/normal",
-    )
-    _TABULAR_FILE_PATTERN = re.compile(
-        r'[\w./\\-]+\.(csv|tsv|xlsx|xls|txt)\b', re.IGNORECASE
-    )
-    _TABULAR_UPLOAD_EXTENSIONS = {".csv", ".tsv", ".xlsx", ".xls"}
-
-    def _has_tabular_file_in_session(self, session_context: Dict[str, Any]) -> bool:
-        """Return True if any uploaded file in the session is a tabular format."""
-        uploads = session_context.get("uploaded_files") or []
-        for up in uploads:
-            name = (up.get("filename") or up.get("name") or "").lower()
-            if any(name.endswith(ext) for ext in self._TABULAR_UPLOAD_EXTENSIONS):
-                return True
-        return False
-
-    def _is_tabular_analysis_command(
-        self, command_lower: str, session_context: Dict[str, Any]
-    ) -> bool:
-        """
-        True when the command expresses an explicit table-operation intent.
-
-        Requires BOTH:
-        - a table-operation verb (rank, sort, ratio, derive column, …), AND
-        - a tabular file reference in the command OR a tabular file in the session.
-        """
-        has_table_op = any(p in command_lower for p in self._TABULAR_OPERATION_PHRASES)
-        if not has_table_op:
-            return False
-        has_file_ref = bool(self._TABULAR_FILE_PATTERN.search(command_lower))
-        has_session_file = self._has_tabular_file_in_session(session_context)
-        return has_file_ref or has_session_file
-
-    def _extract_tabular_params(
-        self, command: str, session_context: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Extract tabular-analysis parameters from the command + session context."""
-        session_id = session_context.get("session_id", "")
-
-        # File path — prefer explicit reference, fall back to session uploads
-        data_path = ""
-        m = self._TABULAR_FILE_PATTERN.search(command)
-        if m:
-            data_path = m.group(0)
-        if not data_path:
-            for up in (session_context.get("uploaded_files") or []):
-                name = (up.get("filename") or up.get("name") or "").lower()
-                if any(name.endswith(ext) for ext in self._TABULAR_UPLOAD_EXTENSIONS):
-                    data_path = up.get("path") or up.get("filename") or name
-                    break
-
-        # Sheet name — look for quoted sheet references or "sheet <name>"
-        sheet = None
-        sheet_match = re.search(
-            r"sheet[:\s]+['\"]?([A-Za-z0-9_ ]+)['\"]?|['\"]([A-Za-z0-9_ ]+)['\"]?\s+sheet",
-            command, re.IGNORECASE,
-        )
-        if sheet_match:
-            sheet = (sheet_match.group(1) or sheet_match.group(2) or "").strip() or None
-
-        # Operations — collect any explicit operation keywords present
-        command_lower = command.lower()
-        operations = [p for p in self._TABULAR_OPERATION_PHRASES if p in command_lower]
-
-        # Column references — simple heuristic: quoted names or CamelCase tokens
-        columns = re.findall(r"['\"]([^'\"]+)['\"]", command)
-
-        return {
-            "session_id": session_id,
-            "data_path": data_path,
-            "sheet": sheet,
-            "operations": operations,
-            "column_refs": columns,
-            "objective": command,
-        }
-
-    def _extract_ds_run_params(self, command: str, session_context: Dict[str, Any]) -> Dict[str, Any]:
-        command_lower = command.lower()
-        session_id = session_context.get("session_id", "")
-
-        # Data file path — match CSV, TSV, and Excel
-        data_path = ""
-        path_match = re.search(r'[\w./\\-]+\.(csv|tsv|xlsx|xls)\b', command, re.IGNORECASE)
-        if path_match:
-            data_path = path_match.group(0)
-
-        # Target column
-        target_col = ""
-        target_match = re.search(r'target[:\s]+["\']?(\w+)["\']?', command, re.IGNORECASE)
-        if target_match:
-            target_col = target_match.group(1)
-        elif re.search(r'predict[:\s]+["\']?(\w+)["\']?', command, re.IGNORECASE):
-            m2 = re.search(r'predict[:\s]+["\']?(\w+)["\']?', command, re.IGNORECASE)
-            if m2:
-                target_col = m2.group(1)
-
-        # Objective
-        objective = "Analyze dataset"
-        obj_match = re.search(r'objective[:\s]+"?([^".\n]+)"?', command, re.IGNORECASE)
-        if obj_match:
-            objective = obj_match.group(1).strip()
-
-        return {
-            "session_id": session_id,
-            "data_path": data_path,
-            "target_col": target_col,
-            "task_type": "auto",
-            "objective": objective,
-        }
-
-    def _extract_ds_diff_params(self, command: str, session_context: Dict[str, Any]) -> Dict[str, Any]:
-        session_id = session_context.get("session_id", "")
-        run_ids = re.findall(r"run_\w+", command)
-        return {
-            "session_id": session_id,
-            "run_id_a": run_ids[0] if len(run_ids) > 0 else "",
-            "run_id_b": run_ids[1] if len(run_ids) > 1 else "",
-        }

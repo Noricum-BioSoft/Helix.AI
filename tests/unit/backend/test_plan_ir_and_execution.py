@@ -3,8 +3,7 @@ import pytest
 
 def test_command_router_route_plan_emits_plan_ir(monkeypatch):
     # Enable keyword routing so route_plan can decompose the multi-step command.
-    # Production uses HELIX_LLM_ROUTER_FIRST=1; this test opts into keyword mode.
-    monkeypatch.setenv("HELIX_LLM_ROUTER_FIRST", "0")
+    # LLM routing mocked via conftest._mock_command_router.
     from backend.command_router import CommandRouter
 
     router = CommandRouter()
