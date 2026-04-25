@@ -27,24 +27,12 @@ import { getDemoScenarioById, getDemoScenarioByTool, getDemoScenarioByCommandAnd
 import { ThinkingIndicator, ActivityIndicator } from './components/ThinkingIndicator';
 
 const SESSION_STORAGE_KEY = 'helix_session_id';
-const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
-const MAX_UPLOAD_MB = 20;
-const ALLOWED_UPLOAD_EXTENSIONS = [
-  // Sequence / FASTA / FASTQ
-  '.fasta',
-  '.fa',
-  '.fas',
-  '.fastq',
-  '.fq',
-  '.gz',
-  // Tabular / structured data
-  '.csv',
-  '.tsv',
-  '.xlsx',
-  '.xls',
-  // Generic text
-  '.txt',
-];
+import {
+  MAX_UPLOAD_BYTES,
+  MAX_UPLOAD_MB,
+  ALLOWED_UPLOAD_EXTENSIONS,
+  validateSelectedFiles,
+} from './utils/uploadValidation';
 
 interface HistoryItem {
   input: string;
@@ -310,37 +298,6 @@ function App() {
       // ignore storage errors
     }
     return res.session_id;
-  };
-
-  const validateSelectedFiles = (files: File[]): { accepted: File[]; rejected: UploadedSessionFile[] } => {
-    const accepted: File[] = [];
-    const rejected: UploadedSessionFile[] = [];
-    files.forEach((file) => {
-      const lowerName = file.name.toLowerCase();
-      const hasValidExt = ALLOWED_UPLOAD_EXTENSIONS.some((ext) => lowerName.endsWith(ext))
-        || lowerName.endsWith('.fastq.gz')
-        || lowerName.endsWith('.fq.gz');
-      if (!hasValidExt) {
-        rejected.push({
-          name: file.name,
-          size: file.size,
-          status: 'failed',
-          error: 'Unsupported type — accepted: FASTA/FASTQ (.fa .fas .fasta .fastq .fq .gz), tabular (.csv .tsv .xlsx .xls), or .txt',
-        });
-        return;
-      }
-      if (file.size > MAX_UPLOAD_BYTES) {
-        rejected.push({
-          name: file.name,
-          size: file.size,
-          status: 'failed',
-          error: `Exceeds ${MAX_UPLOAD_MB}MB`,
-        });
-        return;
-      }
-      accepted.push(file);
-    });
-    return { accepted, rejected };
   };
 
   const handleUploadFiles = async (files: File[]) => {
