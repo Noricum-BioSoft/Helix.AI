@@ -264,7 +264,6 @@ def test_command_router_raises_routing_error_when_llm_unavailable(monkeypatch):
     """Without LLM and without keyword fallback, routing must raise RoutingError."""
     from backend.command_router import RoutingError
     # Force LLM-first routing regardless of what other tests set.
-    monkeypatch.setenv("HELIX_LLM_ROUTER_FIRST", "1")
     with patch("backend.command_router.CommandRouter._route_with_llm", return_value=None):
         router = CommandRouter()
         with pytest.raises(RoutingError):

@@ -12,7 +12,6 @@ def _isolate(tmp_path, monkeypatch):
     monkeypatch.setenv("HELIX_DEMO_MODE", "0")
     monkeypatch.setenv("HELIX_SANDBOX_HOST_FALLBACK", "1")
     # Keyword routing for tests that stub the router; production uses LLM-first.
-    monkeypatch.setenv("HELIX_LLM_ROUTER_FIRST", "0")
 
     from backend.history_manager import history_manager
 
@@ -99,7 +98,7 @@ def test_non_allowlisted_router_result_uses_agent_path(monkeypatch):
 def test_mock_mode_falls_back_to_router(monkeypatch):
     """In HELIX_MOCK_MODE=1 (agent disabled), the fallback router path runs.
 
-    Keyword routing is enabled (HELIX_LLM_ROUTER_FIRST=0) so the mocked router
+    LLM routing mocked via conftest._mock_command_router; the mocked router
     can return a result without a live LLM.  Production uses LLM-first routing.
     """
     monkeypatch.setenv("HELIX_MOCK_MODE", "1")

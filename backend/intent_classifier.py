@@ -181,8 +181,8 @@ def _classify_intent_with_llm(text: str) -> IntentDecision:
         return IntentDecision(intent=intent, reason=reason)
         
     except Exception as e:
-        logger.warning(f"LLM intent classification failed: {e}, falling back to heuristics")
-        raise  # Re-raise to trigger fallback
+        logger.warning(f"LLM intent classification failed: {e}")
+        raise
 
 
 

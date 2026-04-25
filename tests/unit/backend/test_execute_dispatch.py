@@ -37,7 +37,7 @@ def _isolate(tmp_path, monkeypatch):
     """
     Baseline isolation for every test:
     - mock mode (no LLM)
-    - keyword routing enabled (HELIX_LLM_ROUTER_FIRST=0) so tests can route
+    - LLM routing mocked via conftest._mock_command_router so tests can route
       without a live LLM; production always uses LLM-first routing
     - isolated session storage
     - reset rate-limit counters
@@ -46,8 +46,7 @@ def _isolate(tmp_path, monkeypatch):
     monkeypatch.setenv("HELIX_DEMO_MODE", "0")
     monkeypatch.setenv("HELIX_SANDBOX_HOST_FALLBACK", "1")
     # Enable keyword routing for unit tests that run without a live LLM.
-    # Production default is HELIX_LLM_ROUTER_FIRST=1 (LLM-first).
-    monkeypatch.setenv("HELIX_LLM_ROUTER_FIRST", "0")
+    # LLM routing is always on; _mock_command_router in conftest provides deterministic routing.
 
     from backend.history_manager import history_manager
 
@@ -59,6 +58,11 @@ def _isolate(tmp_path, monkeypatch):
     import backend.main as _mwm
 
     _mwm._daily_prompt_counters.clear()
+    # Reset the execution broker singleton so each test creates a fresh broker
+    # that captures the currently-active dispatch_tool (important for tests that
+    # patch dispatch_tool with monkeypatch — the broker must be created AFTER the
+    # patch or it will hold a stale reference to the original function).
+    _mwm._execution_broker = None
 
 
 def _client() -> TestClient:
