@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const normalizeBaseUrl = (value?: string) => {
+export const normalizeBaseUrl = (value?: string): string | undefined => {
   const trimmed = value?.trim();
   if (!trimmed) return undefined;
   return trimmed.replace(/\/+$/, '');

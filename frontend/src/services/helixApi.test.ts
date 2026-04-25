@@ -9,11 +9,33 @@ vi.mock("axios", () => ({
   default: axiosMocks,
 }));
 
-import { API_BASE_URL, helixApi } from "./helixApi";
+import { API_BASE_URL, helixApi, normalizeBaseUrl } from "./helixApi";
 
 describe("helixApi regression", () => {
-  it("uses local backend base URL by default in tests", () => {
-    expect(API_BASE_URL).toBe("http://localhost:8001");
+  describe("normalizeBaseUrl", () => {
+    it("strips trailing slashes", () => {
+      expect(normalizeBaseUrl("http://localhost:8001/")).toBe("http://localhost:8001");
+      expect(normalizeBaseUrl("http://localhost:8001///")).toBe("http://localhost:8001");
+    });
+
+    it("returns undefined for empty / whitespace-only input", () => {
+      expect(normalizeBaseUrl("")).toBeUndefined();
+      expect(normalizeBaseUrl("   ")).toBeUndefined();
+      expect(normalizeBaseUrl(undefined)).toBeUndefined();
+    });
+
+    it("preserves a clean URL unchanged", () => {
+      expect(normalizeBaseUrl("http://localhost:8001")).toBe("http://localhost:8001");
+      expect(normalizeBaseUrl("https://api.example.com")).toBe("https://api.example.com");
+    });
+  });
+
+  it("API_BASE_URL is a non-empty string", () => {
+    // API_BASE_URL is environment-dependent (localhost in dev, AWS in deployed
+    // environments).  We only assert it is a non-empty string so the module
+    // loaded correctly; normalizeBaseUrl unit tests above cover the logic.
+    expect(typeof API_BASE_URL).toBe("string");
+    expect(API_BASE_URL.length).toBeGreaterThan(0);
   });
 
   it("executePipelinePlan sends execute_plan payload", async () => {
