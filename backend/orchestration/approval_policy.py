@@ -1,23 +1,25 @@
+"""Approval-staging policy.
+
+Determines whether a command should be staged for user approval before
+execution.  All intent classification is LLM-based — there are no keyword
+or regex fallbacks.  If the LLM is unavailable, ``should_stage_for_approval``
+raises ``StagingClassificationError`` rather than silently guessing.
+"""
+
 from __future__ import annotations
 
-import re
+import json
+import logging
+import os
+from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
+logger = logging.getLogger(__name__)
 
-APPROVAL_COMMANDS = {
-    "approve",
-    "approve.",
-    "approved",
-    "approved.",
-    "yes, approve",
-    "yes approve",
-    "yes, run it",
-    "yes run it",
-    "proceed",
-    "proceed.",
-    "run it",
-    "run it.",
-}
+
+# ---------------------------------------------------------------------------
+# Configuration (policy-level constants, NOT keyword matchers)
+# ---------------------------------------------------------------------------
 
 READ_ONLY_ROUTER_TOOLS = {
     "toolbox_inventory",
@@ -35,64 +37,132 @@ HIGH_IMPACT_ACTION_TYPES = {
 }
 
 
-def is_approval_command(command: str) -> bool:
-    normalized = " ".join((command or "").strip().lower().split())
-    return normalized in APPROVAL_COMMANDS or normalized.startswith("approve ")
+# ---------------------------------------------------------------------------
+# LLM-based approval re-export (drop-in for legacy callers)
+# ---------------------------------------------------------------------------
+
+from backend.orchestration.approval_classifier import (  # noqa: E402
+    is_approval_command,
+)
 
 
-def has_explicit_execute_intent(command: str) -> bool:
-    c = (command or "").lower()
-    if any(tok in c for tok in (" and then ", " then ", "->", "→", ";")):
-        return True
-    return bool(
-        re.search(
-            r"\b(run|execute|rerun|re-run|regenerate|recreate|reconstruct|start|launch|fix|update|exclude|highlight|color|make|generate|plot|heatmap|show)\b",
-            c,
+# ---------------------------------------------------------------------------
+# LLM staging classifier
+# ---------------------------------------------------------------------------
+
+class StagingClassificationError(RuntimeError):
+    """Raised when the LLM is unavailable and staging cannot be determined."""
+
+
+@dataclass(frozen=True)
+class StagingDecision:
+    requires_approval: bool
+    has_execute_intent: bool
+    is_planning_request: bool
+    method: str
+    reason: str
+
+
+_STAGING_SYSTEM_PROMPT = """\
+You are a staging-intent classifier for a bioinformatics AI assistant.
+
+Given a user command, decide three things:
+
+1. "requires_approval": Is this a high-impact correction or metadata change that
+   should be reviewed before execution? Examples: relabeling samples, correcting
+   design formulas, changing key experimental parameters.
+
+2. "has_execute_intent": Does the user explicitly want to execute something
+   immediately? Examples: "run it", "execute the analysis", "rerun with these
+   parameters", "go ahead and run", "now do X".
+
+3. "is_planning_request": Is this a vague, open-ended analysis request where the
+   system should first propose a plan for the user to review? Examples:
+   "analyze this", "design the workflow", "what would you do with this data",
+   "propose a plan for this".
+
+Respond with ONLY a JSON object on a single line:
+{"requires_approval": bool, "has_execute_intent": bool, "is_planning_request": bool}
+
+No explanation. No markdown. Just the JSON object.
+"""
+
+
+def _get_llm():
+    """Lazy LLM initializer for staging classification."""
+    if os.getenv("HELIX_MOCK_MODE") == "1":
+        raise StagingClassificationError("LLM disabled in HELIX_MOCK_MODE")
+
+    openai_key = os.getenv("OPENAI_API_KEY", "").strip()
+    deepseek_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
+
+    openai_enabled = openai_key not in ("", "disabled", "your_openai_api_key_here", "none")
+    deepseek_enabled = deepseek_key not in ("", "disabled", "your_deepseek_api_key_here", "none")
+
+    if openai_enabled:
+        from langchain.chat_models import init_chat_model
+        model = os.getenv("HELIX_STAGING_OPENAI_MODEL", "openai:gpt-4.1-mini").strip()
+        if ":" not in model:
+            model = f"openai:{model}"
+        return init_chat_model(model, temperature=0, max_tokens=30)
+
+    if deepseek_enabled:
+        from langchain_deepseek import ChatDeepSeek
+        return ChatDeepSeek(
+            model="deepseek-chat", temperature=0, max_tokens=30, timeout=8.0, max_retries=1
         )
-    )
 
+    raise StagingClassificationError("No LLM API key configured for staging classification.")
+
+
+def _classify_staging_intent(command: str) -> StagingDecision:
+    """Ask the LLM for a staging decision on *command*.
+
+    Raises ``StagingClassificationError`` if the LLM is unavailable.
+    """
+    messages = [
+        {"role": "system", "content": _STAGING_SYSTEM_PROMPT},
+        {"role": "user", "content": f"User command: {command!r}"},
+    ]
+    try:
+        llm = _get_llm()
+        response = llm.invoke(messages)
+        raw = (response.content or "").strip()
+    except StagingClassificationError:
+        raise
+    except Exception as exc:
+        raise StagingClassificationError(
+            f"Staging LLM call failed: {exc}"
+        ) from exc
+
+    start = raw.find("{")
+    end = raw.rfind("}") + 1
+    if start >= 0 and end > start:
+        obj = json.loads(raw[start:end])
+        return StagingDecision(
+            requires_approval=bool(obj.get("requires_approval", False)),
+            has_execute_intent=bool(obj.get("has_execute_intent", False)),
+            is_planning_request=bool(obj.get("is_planning_request", False)),
+            method="llm",
+            reason="llm_classified",
+        )
+    raise StagingClassificationError(f"LLM returned unparseable response: {raw!r}")
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
 def requires_approval_semantics(command: str, action_type: Optional[str] = None) -> bool:
-    c = (command or "").lower()
+    """Return True if this command requires user approval before execution.
+
+    Checks the action_type label first (fast, free).  If action_type is not
+    available or is not a high-impact type, asks the LLM.
+    """
     if (action_type or "").lower() in HIGH_IMPACT_ACTION_TYPES:
         return True
-    triggers = (
-        "mislabeled",
-        "should be",
-        "looks wrong",
-        "reversed",
-        "focus only",
-        "only female",
-        "only male",
-        "adjusting for",
-        "design formula",
-        "correction",
-    )
-    return any(t in c for t in triggers)
-
-
-def _looks_like_planning_analysis_request(command: str, params: Optional[Dict[str, Any]] = None) -> bool:
-    """
-    Detect high-level analysis requests that should be staged as a plan before execution.
-    Keep this intentionally narrow so concrete/explicit tool commands still run directly.
-    """
-    c = (command or "").lower()
-    planning_cues = (
-        "analyze this",
-        "analyse this",
-        "what is going on",
-        "tell me what is going on",
-        "design the workflow",
-        "before execution",
-        "propose expected",
-    )
-    if not any(cue in c for cue in planning_cues):
-        return False
-    if has_explicit_execute_intent(command):
-        return False
-    # NOTE: keep this command-text driven. Router parameters may be auto-filled
-    # from demos/defaults, but planning-style user phrasing should still stage.
-    return True
+    decision = _classify_staging_intent(command)
+    return decision.requires_approval
 
 
 def should_stage_for_approval(
@@ -101,10 +171,14 @@ def should_stage_for_approval(
     params: Optional[Dict[str, Any]] = None,
     *,
     action_type: Optional[str] = None,
+    has_pending_plan: bool = False,
 ) -> bool:
-    """
-    Decide whether to stage a plan and request approval before execution.
-    Policy is action- and impact-based rather than workflow-name-based.
+    """Decide whether to stage a plan and request user approval before execution.
+
+    Returns True when the command should be reviewed before the system runs it.
+
+    Raises ``StagingClassificationError`` if the LLM is unavailable and the
+    decision cannot be made by structural checks alone.
     """
     if not tool_name or tool_name in READ_ONLY_ROUTER_TOOLS:
         return False
@@ -112,18 +186,32 @@ def should_stage_for_approval(
         return False
     if isinstance(params, dict) and params.get("session_resolution_error"):
         return False
-    if is_approval_command(command):
-        return False
-    # Concrete routed tools should execute directly. The approval gate is primarily
-    # for ambiguous natural-language execution requests (handle_natural_command)
-    # and explicit high-impact correction semantics.
-    if tool_name != "handle_natural_command" and not requires_approval_semantics(command, action_type):
-        return _looks_like_planning_analysis_request(command, params)
-    if tool_name == "handle_natural_command" and not requires_approval_semantics(command, action_type):
-        return False
-    if requires_approval_semantics(command, action_type):
-        return True
-    if has_explicit_execute_intent(command):
-        return False
-    return True
 
+    # High-impact action types always require approval (fast path, no LLM).
+    # This check runs BEFORE is_approval_command to avoid an unnecessary LLM
+    # call when action_type already tells us the answer.
+    if (action_type or "").lower() in HIGH_IMPACT_ACTION_TYPES:
+        return True
+
+    # If this IS an approval of a pending plan, don't re-stage.
+    if is_approval_command(command, has_pending_plan=has_pending_plan):
+        return False
+
+    # Concrete routed tools execute directly unless the LLM says otherwise.
+    decision = _classify_staging_intent(command)
+    logger.debug(
+        "staging_classifier: tool=%r → requires_approval=%s has_execute_intent=%s "
+        "is_planning_request=%s",
+        tool_name,
+        decision.requires_approval,
+        decision.has_execute_intent,
+        decision.is_planning_request,
+    )
+
+    if decision.has_execute_intent:
+        return False
+    if decision.requires_approval:
+        return True
+    if tool_name == "handle_natural_command" and decision.is_planning_request:
+        return True
+    return False

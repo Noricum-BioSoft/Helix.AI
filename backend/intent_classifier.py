@@ -40,43 +40,6 @@ except Exception as e:
 """
 
 
-# Heuristic classifier constants (used as fallback)
-_QUESTION_STARTERS = (
-    "what ",
-    "why ",
-    "how ",
-    "explain ",
-    "tell me ",
-    "describe ",
-    "compare ",
-    "difference ",
-    "help me understand ",
-    "can you explain",
-    "is it ",
-    "are there ",
-)
-
-_EXEC_VERBS = (
-    "run ",
-    "execute ",
-    "perform ",
-    "analyze ",
-    "analyse ",
-    "align ",
-    "mutate ",
-    "trim ",
-    "merge ",
-    "fetch ",
-    "download ",
-    "visualize ",
-    "create ",
-    "generate ",
-    "submit ",
-    "build ",
-    "calculate ",
-    "compute ",
-)
-
 
 def _get_llm():
     """
@@ -97,10 +60,10 @@ def _get_llm():
     if openai_enabled:
         # Local import to avoid loading heavy deps at module import time
         from langchain.chat_models import init_chat_model
-        # Load model name from .env, default to gpt-5.2
+        # Load model name from .env, default to gpt-5.5
         # LangChain init_chat_model expects provider-prefixed names like "openai:<model>"
-        openai_model = os.getenv("HELIX_INTENT_OPENAI_MODEL", "openai:gpt-5.2").strip()
-        # Be forgiving: allow HELIX_INTENT_OPENAI_MODEL="gpt-5.2" as well (add prefix if missing)
+        openai_model = os.getenv("HELIX_INTENT_OPENAI_MODEL", "openai:gpt-5.5").strip()
+        # Be forgiving: allow HELIX_INTENT_OPENAI_MODEL="gpt-5.5" as well (add prefix if missing)
         if ":" not in openai_model:
             openai_model = f"openai:{openai_model}"
         return init_chat_model(openai_model, temperature=0)
@@ -222,63 +185,6 @@ def _classify_intent_with_llm(text: str) -> IntentDecision:
         raise  # Re-raise to trigger fallback
 
 
-def _classify_intent_with_heuristics(text: str) -> IntentDecision:
-    """
-    Heuristic intent classifier (fallback when LLM is unavailable).
-    
-    Rules of thumb:
-    - If the user provides obvious inputs (S3 URIs / file paths / FASTA headers), assume execute.
-    - If the user asks a question without any execution cues, assume Q&A.
-    - Otherwise, default to execute (safer for command-style UI).
-    """
-    t = (text or "").strip()
-    if not t:
-        return IntentDecision(intent="qa", reason="heuristic_empty")
-
-    tl = t.lower()
-
-    # Strong execute cues: explicit "execute/run" / data references / common bio file extensions.
-    if "s3://" in tl:
-        return IntentDecision(intent="execute", reason="heuristic_s3_uri")
-    if re.search(r"(^|\s)(/[^\s]+)", t):
-        return IntentDecision(intent="execute", reason="heuristic_local_path")
-    if re.search(r"\.(fastq|fq|fasta|fa|bam|sam|vcf|csv|tsv|json)(\b|$)", tl):
-        return IntentDecision(intent="execute", reason="heuristic_file_extension")
-    if re.search(r"(^|\n)\s*>\S+", t):
-        return IntentDecision(intent="execute", reason="heuristic_fasta_header")
-
-    # Question cues.
-    if "?" in t:
-        # If this is an explanatory question ("what/why/how..."), treat as Q&A unless there are
-        # strong execute cues (paths/URIs/FASTA already handled above).
-        if tl.startswith(_QUESTION_STARTERS):
-            # Allow "Can you ...?" style questions to be treated as execute requests.
-            if any(v in tl for v in _EXEC_VERBS) and any(
-                p in tl for p in ("can you ", "could you ", "please ")
-            ):
-                return IntentDecision(intent="execute", reason="heuristic_question_starter_polite_exec_request")
-            return IntentDecision(intent="qa", reason="heuristic_question_mark_explanatory")
-
-        # Non-explanatory questions like "Align these?" are often commands phrased as a question.
-        if any(v in tl for v in _EXEC_VERBS):
-            return IntentDecision(intent="execute", reason="heuristic_question_with_exec_verbs")
-        return IntentDecision(intent="qa", reason="heuristic_question_mark")
-
-    if tl.startswith(_QUESTION_STARTERS):
-        # If they start with question words but also contain clear imperative verbs, treat as execute.
-        if any(v in tl for v in _EXEC_VERBS):
-            return IntentDecision(intent="execute", reason="heuristic_question_starter_with_exec_verbs")
-        return IntentDecision(intent="qa", reason="heuristic_question_starter")
-
-    # Imperative cues.
-    if any(v in tl for v in _EXEC_VERBS):
-        return IntentDecision(intent="execute", reason="heuristic_exec_verbs")
-
-    # Default: treat as Q&A if it's short and looks like plain conversation; otherwise execute.
-    if len(tl.split()) <= 5:
-        return IntentDecision(intent="qa", reason="heuristic_short_ambiguous")
-    return IntentDecision(intent="execute", reason="heuristic_default")
-
 
 def classify_intent(
     text: str,
@@ -286,15 +192,15 @@ def classify_intent(
     session_context: Optional[dict] = None,
     workflow_state: Optional[str] = None,
 ) -> IntentDecision:
-    """
-    Classify user intent into "execute" or "qa" using session-aware rules first,
-    then LLM, then heuristics.
+    """Classify user intent into "execute" or "qa".
 
-    Session-aware shortcuts (applied before any LLM call):
-    - WAITING_FOR_APPROVAL + short affirmative-looking text → "execute" (approval)
-    - WAITING_FOR_CLARIFICATION → "execute" (user is answering a question)
-    - WAITING_FOR_INPUTS → "execute" (user is supplying inputs)
-    - Prior runs in session + "again / rerun / redo" → "execute"
+    Applies session-aware state-machine shortcuts first (no LLM cost), then
+    calls the LLM.  If the LLM is unavailable the exception propagates — there
+    is no heuristic fallback.
+
+    Session-aware shortcuts:
+    - WAITING_FOR_APPROVAL / CLARIFICATION / INPUTS → "execute"
+    - Prior runs + rerun cue → "execute"
     """
     from typing import Optional  # noqa: PLC0415 – local to avoid circular at module level
 
@@ -316,11 +222,9 @@ def classify_intent(
             return IntentDecision(intent="execute", reason="session_rerun_cue")
 
     # ── LLM then heuristic fallback ───────────────────────────────────────────
-    try:
-        return _classify_intent_with_llm(text)
-    except Exception as e:
-        logger.debug(f"Falling back to heuristic classification: {e}")
-        return _classify_intent_with_heuristics(text)
+    # No heuristic fallback — if LLM is unavailable the exception propagates.
+    # A wrong silent answer is worse than a visible error.
+    return _classify_intent_with_llm(text)
 
 
 # Keep Optional importable at module level for type annotations

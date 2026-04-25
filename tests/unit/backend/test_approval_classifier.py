@@ -117,7 +117,7 @@ SHORT_NON_ANALYTICAL = [
 
 @pytest.mark.parametrize("phrase", SHORT_NON_ANALYTICAL)
 def test_short_affirmative_not_early_rejected(phrase: str) -> None:
-    """These should NOT be early-rejected — they need LLM or keyword fallback."""
+    """These should NOT be early-rejected — they reach the LLM for classification."""
     assert _is_clearly_not_approval(phrase) is False
 
 
@@ -142,8 +142,11 @@ def test_llm_path_approves(mock_get_llm: MagicMock) -> None:
 
 @patch("backend.orchestration.approval_classifier._get_llm")
 def test_llm_path_rejects(mock_get_llm: MagicMock) -> None:
+    # Use a short ambiguous phrase that is NOT early-rejected (no interrogative
+    # prefix, no analytical verb, no affirmative prefix) but which the LLM
+    # correctly classifies as non-approval.
     mock_get_llm.return_value = _mock_llm_response(False)
-    decision = classify_approval("what does step 3 do exactly?")
+    decision = classify_approval("Actually, never mind for now.")
     assert decision.is_approval is False
     assert decision.method == "llm"
 
@@ -161,27 +164,31 @@ def test_llm_path_passes_pending_plan_context(mock_get_llm: MagicMock) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Fallback when LLM unavailable
+# No keyword fallback — LLM failure raises, not silently falls back
 # ---------------------------------------------------------------------------
 
 @patch("backend.orchestration.approval_classifier._get_llm")
-def test_keyword_fallback_on_llm_error(mock_get_llm: MagicMock) -> None:
+def test_keyword_fast_path_bypasses_llm_entirely(mock_get_llm: MagicMock) -> None:
+    """Keyword fast-path phrases never reach the LLM, even if LLM is down."""
     mock_get_llm.side_effect = RuntimeError("LLM disabled in HELIX_MOCK_MODE")
-    # "proceed" is in the keyword set → fallback should still return True
     decision = classify_approval("proceed")
-    # It hits keyword_fast_path before even trying LLM
+    # Hits keyword_fast_path BEFORE LLM is called
     assert decision.is_approval is True
+    assert decision.method == "keyword_fast_path"
+    mock_get_llm.assert_not_called()
 
 
 @patch("backend.orchestration.approval_classifier._get_llm")
-def test_fallback_returns_false_for_unknown_phrase_when_llm_unavailable(
-    mock_get_llm: MagicMock,
-) -> None:
+def test_llm_failure_raises_for_ambiguous_phrase(mock_get_llm: MagicMock) -> None:
+    """When the LLM is unavailable and the phrase is ambiguous, an exception is raised.
+
+    There is no keyword fallback — a silent wrong answer is worse than a
+    visible error that can be handled by the caller.
+    """
     mock_get_llm.side_effect = RuntimeError("no API key")
-    # "that looks right" is not a keyword and not early-rejected
-    decision = classify_approval("that looks right")
-    assert decision.method == "keyword_fallback"
-    assert decision.is_approval is False  # not in keyword set
+    # "that looks right" is NOT a keyword and NOT clearly analytical
+    with pytest.raises(RuntimeError):
+        classify_approval("that looks right")
 
 
 # ---------------------------------------------------------------------------

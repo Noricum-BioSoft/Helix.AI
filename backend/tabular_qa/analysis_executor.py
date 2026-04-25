@@ -20,7 +20,7 @@ from typing import Any, Dict, Optional
 logger = logging.getLogger(__name__)
 
 _EXECUTOR_MODEL_ENV = "HELIX_ANALYSIS_EXECUTOR_MODEL"
-_DEFAULT_MODEL = "openai:gpt-4o"
+_DEFAULT_MODEL = "openai:gpt-5.5"
 
 # ---------------------------------------------------------------------------
 # Prompts

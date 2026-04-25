@@ -121,7 +121,7 @@ def _get_llm():
         # LangChain init_chat_model expects provider-prefixed names like "openai:<model>".
         # Default to a chat-capable model. Some code-focused models are *not* exposed via chat-completions
         # and will 404 when called through the Chat Completions endpoint.
-        openai_model = os.getenv("HELIX_TOOLGEN_OPENAI_MODEL", "openai:gpt-5.2").strip()
+        openai_model = os.getenv("HELIX_TOOLGEN_OPENAI_MODEL", "openai:gpt-5.5").strip()
         
         openai_enabled = openai_key and openai_key not in ["", "disabled", "your_openai_api_key_here", "none"]
         deepseek_enabled = deepseek_key and deepseek_key not in ["", "disabled", "your_deepseek_api_key_here", "none"]
@@ -129,7 +129,7 @@ def _get_llm():
         if openai_enabled:
             # Local import to avoid importing optional SSL/cert deps during test collection.
             from langchain.chat_models import init_chat_model
-            # Be forgiving: allow HELIX_TOOLGEN_OPENAI_MODEL="gpt-5.2" as well (add prefix if missing).
+            # Be forgiving: allow HELIX_TOOLGEN_OPENAI_MODEL="gpt-5.5" as well (add prefix if missing).
             if ":" not in openai_model:
                 openai_model = f"openai:{openai_model}"
             return init_chat_model(openai_model, temperature=0)

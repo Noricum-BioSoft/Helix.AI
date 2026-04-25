@@ -1,34 +1,28 @@
 """LLM-based approval intent classifier.
 
-Replaces the hard-coded ``APPROVAL_COMMANDS`` keyword set with an LLM call
-that understands any natural approval phrasing ("yes, looks good", "let's do
-it", "go ahead", "execute that", "sounds right — run it", etc.).
+Classifies whether a user message is an approval of a pending analysis plan,
+using a layered approach with no keyword fallback.
 
 Architecture
 ------------
-1. **Keyword fast-path** – If the command exactly matches the legacy keyword
-   set it is classified as an approval instantly, with no LLM call.  This
-   covers the most common, unambiguous cases at zero cost.
+1. **Keyword fast-path** – Common, unambiguous approval phrases are detected
+   instantly without an LLM call (e.g. "yes", "proceed", "go ahead").
 
-2. **Early-rejection fast-path** – Commands that are clearly analytical
-   (long sentences, bioinformatics terms, file references) are rejected
-   without an LLM call.
+2. **Early-rejection fast-path** – Clearly analytical commands (long sentences,
+   bioinformatics terms, file references) are rejected without an LLM call.
 
-3. **LLM path** – Short / ambiguous commands are sent to a fast, cheap
-   classification call (≤ 5 tokens of output expected).  The system prompt is
-   intentionally minimal.
-
-4. **Fallback** – If the LLM is unavailable (``HELIX_MOCK_MODE=1``, no API
-   key, timeout) the keyword set alone is used, preserving the prior behavior.
+3. **LLM path** – Short / ambiguous commands are sent to a lightweight
+   classification call.  If the LLM is unavailable the exception propagates —
+   there is intentionally no keyword fallback, because a silent wrong answer
+   is worse than a visible error.
 
 Public API
 ----------
 ``classify_approval(command, has_pending_plan=False) -> ApprovalDecision``
-``is_approval_command(command, has_pending_plan=False) -> bool``  ← drop-in
+``is_approval_command(command, has_pending_plan=False) -> bool``
 
 The optional ``has_pending_plan`` hint biases the classifier: when there IS a
-pending plan any short affirmative phrase ("sure", "ok", "yes") is much more
-likely to be an approval than an analytical command.
+pending plan any short affirmative phrase is much more likely to be an approval.
 """
 
 from __future__ import annotations
@@ -110,12 +104,18 @@ _ANALYTICAL_PATTERNS = re.compile(
     | \.(?:fastq|fq|fasta|fa|bam|sam|vcf      # bioinformatics file extensions
           |csv|tsv|xlsx?|h5ad?)\b
     | (?:^|\s)>                               # FASTA headers
-    | \b(?:analyze|analyse|compute|calculate  # analytical verbs — safe to reject because
-          |compare|align|normalize            # the affirmative-prefix guard runs first, so
-          |differential|heatmap|violin        # "yes, generate..." still gets through
-          |annotate|quantify|correlate        # but "Generate a volcano plot..." is rejected
-          |cluster|generate|visualize|pca
-          |plot|volcano|enrichment)\b
+    | \b(?:analyze|analyse|compute|calculate  # analytical / execution verbs
+          |compare|align|normalize            # Note: the affirmative-prefix guard runs first,
+          |differential|heatmap|violin        # so "yes, generate a plot" still reaches the LLM
+          |annotate|quantify|correlate        # but plain "Generate a volcano plot" is rejected.
+          |cluster|generate|visualize|pca     # Action-command verbs (not approval verbs):
+          |plots?|volcano|enrichment          # "trim these reads", "run FastQC", "fetch seq..."
+          |trim|merge|fetch|download          # Modification/iteration verbs:
+          |create|build|submit|perform        # "change the scale", "update the plot", etc.
+          |run|execute                        # These are all clearly NOT approvals.
+          |change|update|modify|adjust|fix
+          |switch|replace|rename|remove|delete
+          |scale|set|revert|rerun|patch)\b
     """,
     re.VERBOSE | re.IGNORECASE,
 )
@@ -131,6 +131,14 @@ _AFFIRMATIVE_PREFIXES = re.compile(
 
 _WORD_COUNT_THRESHOLD = 15  # commands longer than this are unlikely approvals
 
+# Interrogative words that open a question — questions are never approvals and
+# never need an LLM call to classify.
+_INTERROGATIVE_PREFIXES = re.compile(
+    r"^(?:what|how|why|where|when|who|which|whose|is|are|am|was|were|"
+    r"can|could|may|might|will|would|shall|should|do|does|did|has|have|had)\b",
+    re.IGNORECASE,
+)
+
 
 def _is_clearly_not_approval(command: str) -> bool:
     """Return True if the command is clearly an analytical request, not an approval.
@@ -138,10 +146,16 @@ def _is_clearly_not_approval(command: str) -> bool:
     Skips early rejection when the command starts with an affirmative prefix,
     so phrases like "yes, execute the plan" or "approved, run the analysis"
     still reach the LLM path instead of being rejected as analytical commands.
+
+    Questions (interrogative opener or trailing `?`) are ALWAYS rejected here
+    — they never require LLM confirmation.
     """
     text = (command or "").strip()
     if not text:
         return False
+    # Interrogative questions are never approvals.
+    if _INTERROGATIVE_PREFIXES.match(text) or text.endswith("?"):
+        return True
     # Don't early-reject short affirmative phrases even if they contain
     # action verbs — the user is consenting to an existing plan, not issuing a
     # new analytical command.
@@ -244,7 +258,7 @@ def _classify_with_llm(command: str, has_pending_plan: bool) -> bool:
 @dataclass(frozen=True)
 class ApprovalDecision:
     is_approval: bool
-    method: str        # "keyword_fast_path" | "early_rejection" | "llm" | "keyword_fallback"
+    method: str        # "keyword_fast_path" | "early_rejection" | "llm"
     reason: str
 
 
@@ -280,22 +294,12 @@ def classify_approval(
             reason="analytical_pattern_or_too_long",
         )
 
-    # 3. LLM classification
-    try:
-        result = _classify_with_llm(command, has_pending_plan)
-        return ApprovalDecision(
-            is_approval=result,
-            method="llm",
-            reason="llm_classified",
-        )
-    except Exception as exc:
-        logger.debug("Approval LLM classification failed (%s); falling back to keyword set.", exc)
-
-    # 4. Keyword-only fallback (same behavior as before this module existed)
+    # 3. LLM classification — raises on failure; no keyword fallback.
+    result = _classify_with_llm(command, has_pending_plan)
     return ApprovalDecision(
-        is_approval=_keyword_match(command),
-        method="keyword_fallback",
-        reason="llm_unavailable",
+        is_approval=result,
+        method="llm",
+        reason="llm_classified",
     )
 
 

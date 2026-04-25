@@ -44,13 +44,19 @@ ROUTER_LLM_RESPONSE_SCHEMA = {
 }
 
 
-class CommandRouter:
-    """Hybrid router: a few high-confidence keyword checks, then LLM-based tool selection.
+class RoutingError(RuntimeError):
+    """Raised when routing cannot be determined (LLM unavailable and no keyword fallback)."""
 
-    Keyword-based matching is intentionally minimal and used as a fallback when the LLM
-    is off or fails; it cannot cover the full range of how scientists phrase requests.
-    Prefer enabling HELIX_USE_LLM_ROUTER and extending ROUTER_TOOLS / prompts over
-    adding more hard-coded phrases. See docs/PROMPT_NORMALIZATION.md."""
+
+class CommandRouter:
+    """LLM-first router: all command routing goes through the LLM.
+
+    Keyword branches are preserved but disabled by default (HELIX_LLM_ROUTER_FIRST=1).
+    To re-enable keyword routing for debugging, set HELIX_LLM_ROUTER_FIRST=0.
+    If the LLM is unavailable and keyword routing is disabled, RoutingError is raised.
+
+    Prefer extending ROUTER_TOOLS / prompts over adding keyword branches.
+    """
     
     def __init__(self):
         self.tool_mappings = {
@@ -253,8 +259,8 @@ class CommandRouter:
             "skipped_reason": None,
         }
 
-        # If LLM-first mode is already enabled, shadow routing is not informative.
-        if os.getenv("HELIX_LLM_ROUTER_FIRST", "0").lower() in ("1", "true", "yes"):
+        # If LLM-first mode is enabled (the default), shadow routing is redundant.
+        if os.getenv("HELIX_LLM_ROUTER_FIRST", "1").lower() in ("1", "true", "yes"):
             shadow_payload["skipped_reason"] = "llm_router_first_enabled"
             safe_params["router_shadow"] = shadow_payload
             return tool_name, safe_params
@@ -288,15 +294,22 @@ class CommandRouter:
                 "planning_intent": "workflow_design",
             }
 
-        if os.getenv("HELIX_LLM_ROUTER_FIRST", "0").lower() in ("1", "true", "yes"):
+        # LLM routing is the default (HELIX_LLM_ROUTER_FIRST defaults to "1").
+        # Set HELIX_LLM_ROUTER_FIRST=0 only for local debugging of keyword branches.
+        if os.getenv("HELIX_LLM_ROUTER_FIRST", "1").lower() in ("1", "true", "yes"):
             llm_result = self._route_with_llm(command, session_context)
             if llm_result is not None:
                 tool_name, base_params = llm_result
                 params = self._extract_parameters(command, tool_name, session_context)
                 for k, v in base_params.items():
                     params.setdefault(k, v)
-                print(f"🔧 Command router: LLM-first routed -> {tool_name}")
+                print(f"🔧 Command router: LLM routed -> {tool_name}")
                 return (tool_name, params)
+            raise RoutingError(
+                "LLM router returned no result and keyword fallback is disabled "
+                "(HELIX_LLM_ROUTER_FIRST=1). Check LLM availability or set "
+                "HELIX_LLM_ROUTER_FIRST=0 to enable keyword routing."
+            )
         
         # Tool inventory / "what tools do you have?" (HIGHEST PRIORITY)
         if any(

@@ -9,7 +9,97 @@ coverage without repeating boilerplate setup.
 
 from __future__ import annotations
 
+import os
+from unittest.mock import patch
+
 import pytest
+
+
+# ---------------------------------------------------------------------------
+# LLM mock-mode compatibility layer
+#
+# Unit tests run with HELIX_MOCK_MODE=1 (no live LLM).  The LLM-based staging
+# and intent classifiers raise in mock mode, which would cause unrelated tests
+# to fail with "LLM disabled" errors.  These autouse fixtures provide safe
+# defaults so dispatch/routing tests focus on what they're actually testing.
+#
+# Tests that explicitly verify staging or intent classification behaviour
+# mock the relevant functions themselves (via @patch), which overrides these
+# defaults at the per-test level.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _mock_staging_classifier(request, monkeypatch):
+    """Auto-patch LLM-dependent classification in HELIX_MOCK_MODE.
+
+    Prevents "LLM disabled" errors in dispatch/routing tests that don't need
+    real LLM behaviour:
+
+    - ``_classify_staging_intent`` (in approval_policy) → "do not stage"
+    - ``approval_policy.is_approval_command`` → False (for staging checks)
+    - ``approval_classifier._get_llm`` → mock that returns ``{"approval": false}``
+      so ambiguous phrases that slip past early-rejection don't raise.
+
+    Per-test overrides:
+    - Tests that explicitly use ``@patch("...approval_classifier._get_llm", ...)``
+      will override the _get_llm mock (test @patch runs inside this fixture's
+      context and takes precedence).
+    - Tests that explicitly use ``@patch("...approval_policy._classify_staging_intent", ...)``
+      will likewise override the staging mock.
+    """
+    if os.getenv("HELIX_MOCK_MODE", "0") != "1":
+        yield
+        return
+
+    from unittest.mock import MagicMock
+    from backend.orchestration.approval_policy import StagingDecision
+
+    _default_staging = StagingDecision(
+        requires_approval=False,
+        has_execute_intent=True,
+        is_planning_request=False,
+        method="mock",
+        reason="helix_mock_mode",
+    )
+
+    # Mock LLM that always returns "not approval" for the approval classifier.
+    _false_approval_llm = MagicMock()
+    _false_approval_llm.invoke.return_value.content = '{"approval": false}'
+
+    with patch(
+        "backend.orchestration.approval_policy._classify_staging_intent",
+        return_value=_default_staging,
+    ), patch(
+        "backend.orchestration.approval_policy.is_approval_command",
+        return_value=False,
+    ), patch(
+        "backend.orchestration.approval_classifier._get_llm",
+        return_value=_false_approval_llm,
+    ):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _mock_intent_classifier(request, monkeypatch):
+    """Auto-patch classify_intent when running in HELIX_MOCK_MODE.
+
+    Returns "execute" intent by default.  Tests that need specific intent
+    behaviour must mock ``classify_intent`` themselves.
+    """
+    if os.getenv("HELIX_MOCK_MODE", "0") != "1":
+        yield
+        return
+
+    from backend.intent_classifier import IntentDecision
+
+    _default = IntentDecision(intent="execute", reason="helix_mock_mode")
+
+    with patch(
+        "backend.intent_classifier.classify_intent",
+        return_value=_default,
+    ):
+        yield
 
 
 # ─────────────────────────────────────────────────────────────────────────────

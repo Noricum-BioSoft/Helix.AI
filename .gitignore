@@ -502,6 +502,12 @@ benchmarks/runs/latest_iteration.json
 # AWS test run capture directories
 tests/integration/helix-aws-strict-rerun-*/
 
+# Sample / demo sequencing files (data, not source)
+*.fastq
+*.fq
+*.fastq.gz
+*.fq.gz
+
 # Large/auto-generated documentation assets (local)
 docs/tds-screenshots/
 docs/tds-screenshots-cloudfront/

@@ -48,8 +48,7 @@ from backend.orchestration.action_planner import (
 )
 from backend.orchestration.approval_policy import (
     READ_ONLY_ROUTER_TOOLS,
-    has_explicit_execute_intent as approval_has_explicit_execute_intent,
-    is_approval_command as _legacy_is_approval_command,  # kept for non-execute callers
+    is_approval_command as _legacy_is_approval_command,
     requires_approval_semantics as approval_requires_approval_semantics,
     should_stage_for_approval as approval_should_stage_for_approval,
 )
@@ -196,18 +195,12 @@ _READ_ONLY_ROUTER_TOOLS = READ_ONLY_ROUTER_TOOLS
 def _is_approval_command(command: str, *, has_pending_plan: bool = False) -> bool:
     """Classify whether *command* is an approval of a pending plan.
 
-    Delegates to the LLM-based ApprovalClassifier with keyword fast-path and
-    graceful fallback to the legacy keyword set when the LLM is unavailable.
-    The ``has_pending_plan`` hint biases the classifier when a plan is actually
-    waiting — any short affirmative ("ok", "sure", "looks good") is then treated
-    as an approval rather than an ambiguous command.
+    Delegates to the LLM-based ApprovalClassifier (keyword fast-path first,
+    then LLM for ambiguous input).  Raises if the LLM is unavailable — there
+    is no silent keyword fallback.
     """
     from backend.orchestration.approval_classifier import is_approval_command as _llm_classifier
     return _llm_classifier(command, has_pending_plan=has_pending_plan)
-
-
-def _has_explicit_execute_intent(command: str) -> bool:
-    return approval_has_explicit_execute_intent(command)
 
 
 def _requires_approval_semantics(command: str) -> bool:

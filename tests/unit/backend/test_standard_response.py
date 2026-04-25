@@ -7,6 +7,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 # Ensure mock mode to avoid network/tooling dependencies
 os.environ["HELIX_MOCK_MODE"] = "1"
+# Enable keyword routing for tests that run without a live LLM.
+# Production default is HELIX_LLM_ROUTER_FIRST=1 (LLM-first).
+os.environ["HELIX_LLM_ROUTER_FIRST"] = "0"
 
 # Ensure repo root is importable even when pytest is invoked from a subdir
 if str(PROJECT_ROOT) not in sys.path:

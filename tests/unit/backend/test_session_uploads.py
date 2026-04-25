@@ -9,6 +9,8 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("HELIX_MOCK_MODE", "1")
     monkeypatch.setenv("HELIX_LOCAL_SESSIONS_ONLY", "1")
     monkeypatch.setenv("HELIX_MAX_UPLOAD_MB", "20")
+    # Keyword routing for tests without a live LLM; production uses LLM-first.
+    monkeypatch.setenv("HELIX_LLM_ROUTER_FIRST", "0")
 
     from backend.history_manager import history_manager
 

@@ -84,7 +84,7 @@ def _get_llm():
 
     if openai_enabled:
         from langchain.chat_models import init_chat_model
-        openai_model = os.getenv("HELIX_INFRASTRUCTURE_OPENAI_MODEL", "openai:gpt-5.2").strip()
+        openai_model = os.getenv("HELIX_INFRASTRUCTURE_OPENAI_MODEL", "openai:gpt-5.5").strip()
         if ":" not in openai_model:
             openai_model = f"openai:{openai_model}"
         return init_chat_model(openai_model, temperature=0)

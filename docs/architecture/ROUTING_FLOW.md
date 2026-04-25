@@ -7,31 +7,54 @@ This page documents the request routing in `backend/main.py` and `backend/comman
 ```text
 User request
   -> /execute
-  -> S3 browse fast-path        (deterministic keyword match)
-  -> Approval command check      (_is_approval_command → executes pending checkpoint)
-  -> Universal approval gate     (CommandRouter + _should_stage_for_approval → WorkflowCheckpoint)
+  -> S3 browse fast-path        (deterministic path rule, not LLM)
+  -> Approval command check      (_is_approval_command → LLM classifier → executes pending checkpoint)
+  -> Universal approval gate     (LLM staging classifier → WorkflowCheckpoint)
   -> Agent path                  (CommandProcessor, LangGraph ReAct)
   -> Fallback router path        (CommandRouter, if agent fails/disabled)
 ```
 
-### Current Path Roles
+### Path Roles
 
-| Path | Purpose | When Used |
+| Path | Purpose | Classification |
 |---|---|---|
-| S3 browse fast-path | Read/list result artifacts quickly | S3 browse/list/display prompts |
-| Approval command check | Detect "Approve / I approve / Yes, proceed" and execute the staged `WorkflowCheckpoint` | User approves a previously staged plan |
-| Universal approval gate | Route to CommandRouter, check if response requires user approval, stage `WorkflowCheckpoint`, return `workflow_planned` | Any analytical command with clear intent (bulk RNA-seq, metadata correction, multi-step workflows) |
-| Agent path | General intent/tool orchestration via LangGraph ReAct | When not short-circuited by the above paths |
-| Fallback router path | Recovery when agent fails or is disabled | Agent errors / timeouts / `HELIX_AGENT_DISABLED=1` |
+| S3 browse fast-path | Read/list result artifacts quickly | Deterministic path rule |
+| Approval command check | Detect user approval ("yes, proceed", "looks good") and execute the staged `WorkflowCheckpoint` | LLM `ApprovalClassifier` (keyword fast-path + early-rejection + LLM) |
+| Universal approval gate | LLM staging classifier decides if the command needs a plan before execution | LLM `StagingClassifier` via `should_stage_for_approval` |
+| Agent path | General intent/tool orchestration via LangGraph ReAct | LLM-driven |
+| Fallback router path | Recovery when agent fails or is disabled | LLM `CommandRouter` (`HELIX_LLM_ROUTER_FIRST=1`) |
+
+---
+
+## LLM-only classification — no keyword fallbacks
+
+Every classification decision in the routing path is LLM-driven. There are **no silent keyword fallbacks**: if an LLM is unavailable, the relevant classifier raises an explicit exception (`RoutingError`, `ApprovalClassificationError`, `IntentClassificationError`, `StagingClassificationError`) rather than guessing.
+
+The only allowable non-LLM shortcuts are:
+- **Keyword fast-path** in `ApprovalClassifier`: exact approval phrases ("yes", "proceed", "go ahead") are matched directly without an LLM call as a performance optimisation — not a fallback.
+- **Early-rejection** in `ApprovalClassifier`: questions (`_INTERROGATIVE_PREFIXES`) and analytical commands (`_ANALYTICAL_PATTERNS`) are rejected without LLM as they can never be approvals.
+- **High-impact action type fast-path** in `should_stage_for_approval`: known high-risk action types always require staging regardless of LLM.
+
+---
+
+## Approval Classifier Detail
+
+`classify_approval(command, has_pending_plan)` in `backend/orchestration/approval_classifier.py`:
+
+```text
+1. Keyword fast-path      Is the command an exact approval phrase? → True (no LLM)
+2. Early rejection        Is it clearly not approval (question / analytical verb)? → False (no LLM)
+3. LLM classification     Ambiguous short phrase → LLM decides; raises on LLM failure
+```
 
 ---
 
 ## Approval Gate Detail
 
-The universal approval gate is the central decision point for **all analysis requests that carry scientific risk** (data modification, multi-step pipelines, parameter changes).
+The universal approval gate is the central decision point for all analysis requests.
 
 ```text
-CommandRouter.route_command(command, session_context)
+CommandRouter.route_command(command, session_context)   ← LLM-first (HELIX_LLM_ROUTER_FIRST=1)
     |
     +--> _should_stage_for_approval(tool, command, params)?
          |
@@ -39,7 +62,6 @@ CommandRouter.route_command(command, session_context)
                  |
                  +--> Always: stage WorkflowCheckpoint(WAITING_FOR_APPROVAL)
                               return status=workflow_planned
-                              (binding_diagnostics added to plan text if inputs missing)
          |
          No  --> pass through to agent / fallback router
 ```
@@ -69,35 +91,21 @@ The checkpoint is saved by `history_manager.save_checkpoint()` and loaded at the
 
 ---
 
-## CommandRouter Fast-Paths
+## CommandRouter
 
-`CommandRouter.route_command()` applies deterministic keyword rules **before** falling back to LLM-based routing. Current fast-paths (in order):
+`CommandRouter.route_command()` uses LLM routing by default (`HELIX_LLM_ROUTER_FIRST=1`). If the LLM returns `None` (unavailable), it raises `RoutingError`.
 
-| Fast-path | Trigger | Routes to |
-|---|---|---|
-| `_use_historical` | `"use … before/prior/original … dataset/data/version"` | `handle_natural_command` |
-| `_recreate_historical` | `"recreate/reconstruct … figure/state/version/before"` | `bio_diff_runs` |
-| bio diff / compare | `"compare … run/version/result"` | `bio_diff_runs` |
-| S3 browse | explicit S3 list/display patterns | `s3_browse` |
-| rerun | `"rerun/re-run … excluding/without"` | `bio_rerun` |
-| patch and rerun | `"fix … and … rerun/regenerate/plot"` | `patch_and_rerun` |
-| GO enrichment | `"go enrichment/pathway enrichment"` | `go_enrichment_analysis` |
-| single-cell explicit | explicit `"single.cell/scrna"` | `single_cell_analysis` |
-| bulk RNA-seq explicit | explicit `"bulk.*rnaseq/deseq"` | `bulk_rnaseq_analysis` |
-
-The `_use_historical` fast-path is specifically important: it routes "use X from before Y" commands directly to `handle_natural_command`, **bypassing the approval gate** and preventing the agent from treating them as new pipeline requests. Without it, these commands would time out waiting for LLM-based routing.
-
-The LLM-based `_route_with_llm` fallback is wrapped in `asyncio.wait_for` with a configurable timeout (`HELIX_GATE_ROUTE_TIMEOUT_S`, default 20 s) to prevent the `/execute` endpoint from hanging indefinitely.
+Set `HELIX_LLM_ROUTER_FIRST=0` only for local debugging of specific keyword routing branches. Keyword routing is preserved in the code as a test/debug aid; it is not used in production.
 
 ---
 
 ## Frontend Workflow State Integration
 
-The frontend (`frontend/src/App.tsx`) renders buttons and sections based on the `workflow_state` field in the backend response — not heuristics:
+The frontend (`frontend/src/App.tsx`) renders buttons and sections based on the `workflow_state` field in the backend response:
 
 | `workflow_state` | UI shown |
 |---|---|
-| `WAITING_FOR_APPROVAL` | "I approve" button |
+| `WAITING_FOR_APPROVAL` | Plan display + approval action chips |
 | `EXECUTING` / `READY_TO_EXECUTE` | "Execute Pipeline" button |
 | `COMPLETED` (with download links) | "Download Results" section |
 | anything else | no action button |
@@ -107,7 +115,8 @@ The frontend (`frontend/src/App.tsx`) renders buttons and sections based on the 
 ## Acceptance Checks
 
 - Analytical commands with clear intent must return `workflow_planned` + `WAITING_FOR_APPROVAL`.
+- Approval classifier must use keyword fast-path for exact approval phrases (no LLM call).
+- Approval classifier must raise (not silently fall back) when LLM is unavailable and phrase is ambiguous.
 - Missing file bindings must not downgrade a plan to `needs_inputs` at the `workflow_state` level.
-- "Use X from before Y" commands must route to `handle_natural_command` (not `bio_rerun` or `bulk_rnaseq_analysis`).
 - LLM routing timeout must not block the `/execute` endpoint beyond `HELIX_GATE_ROUTE_TIMEOUT_S`.
 - Approval commands must execute the staged checkpoint, not re-stage another plan.
