@@ -2736,6 +2736,46 @@ async def approve_policy_uploads(session_id: str, request: Request):
         "pending_before": len(pending),
     }
 
+@app.post("/dispatch")
+async def direct_dispatch(req: HelixToolRequest, request: Request):
+    """Directly dispatch a named tool with pre-specified arguments, bypassing LLM routing.
+
+    Use this endpoint when the tool name and all required parameters are already
+    known (e.g. tests, scripts, or frontend flows where the user has already
+    filled in an input form).  The LLM agent is NOT invoked — the call goes
+    straight to ``dispatch_tool``.
+
+    Returns the same envelope structure as POST /execute.
+    """
+    logger.info("📥 /dispatch tool=%s session=%s", req.tool_name, req.session_id)
+
+    if not req.session_id:
+        req.session_id = history_manager.create_session()
+    else:
+        history_manager.ensure_session_exists(req.session_id)
+
+    # Inject session_id so dispatch_tool side-effects can persist context
+    req.arguments["session_id"] = req.session_id
+
+    try:
+        result = await dispatch_tool(req.tool_name, req.arguments)
+    except Exception as exc:
+        logger.exception("/dispatch error for tool=%s", req.tool_name)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return {
+        "version": "1.0",
+        "success": True,
+        "session_id": req.session_id,
+        "tool": req.tool_name,
+        "status": result.get("status", "success"),
+        "result": result,
+        "text": result.get("text", ""),
+        "job_id": result.get("job_id"),
+        "stream_url": result.get("stream_url"),
+    }
+
+
 @app.post("/execute")
 async def execute(req: CommandRequest, request: Request):
     logger.info(f"📥 Received execute request: command='{req.command[:100]}...', session_id={req.session_id}")
@@ -5884,8 +5924,18 @@ async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
         )
         return response
     
+    elif tool_name == "chip_seq_analysis":
+        # Require at least the treatment BAM before launching the pipeline.
+        # If inputs are missing, return the structured needs_inputs form so the
+        # user knows exactly what to upload.
+        treatment_bam = arguments.get("treatment_bam") or arguments.get("input_bam") or ""
+        if not treatment_bam:
+            return _build_needs_inputs_response(tool_name, arguments)
+        _session_id_nf = arguments.get("session_id", "")
+        from backend.nextflow_executor import launch_pipeline as _nf_launch
+        return await _nf_launch(tool_name, arguments, _session_id_nf)
+
     elif tool_name in (
-        "chip_seq_analysis",
         "atac_seq_analysis",
         "genome_assembly",
         "variant_calling",
@@ -5894,9 +5944,18 @@ async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
         "rna_splicing_isoform",
         "crispr_screen_analysis",
     ):
-        # These tools are registered and routable but not yet fully implemented.
-        # Return a structured needs_inputs response that describes what is required.
-        return _build_needs_inputs_response(tool_name, arguments)
+        # Check whether enough input parameters were provided.
+        # Input key names vary by tool — use the _TOOL_INPUT_REQUIREMENTS
+        # registry to determine the first required parameter name.
+        spec = _TOOL_INPUT_REQUIREMENTS.get(tool_name, {})
+        required_inputs = spec.get("required_inputs", [])
+        first_required = required_inputs[0]["name"] if required_inputs else None
+        has_input = first_required and bool(arguments.get(first_required))
+        if not has_input:
+            return _build_needs_inputs_response(tool_name, arguments)
+        _session_id_nf = arguments.get("session_id", "")
+        from backend.nextflow_executor import launch_pipeline as _nf_launch
+        return await _nf_launch(tool_name, arguments, _session_id_nf)
 
     elif tool_name == "dna_vendor_research":
         # Handle DNA vendor research
@@ -6235,6 +6294,124 @@ async def get_job_status(job_id: str):
     except Exception as e:
         logger.error(f"Failed to get job status: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/internal/nextflow/events")
+async def receive_nextflow_event(payload: Dict[str, Any]):
+    """Receive a Nextflow weblog event posted by a running pipeline.
+
+    Nextflow is launched with ``-with-weblog http://localhost:{PORT}/internal/nextflow/events``.
+    It POSTs JSON at every workflow lifecycle change:
+    started | process_submitted | process_completed | completed | failed | error
+    """
+    from backend.nextflow_event_bus import get_event_bus
+    from backend.job_manager import get_job_manager
+
+    event_type = payload.get("event", "unknown")
+    # Nextflow sets runName to the value passed via -name.
+    # We set -name to "helix-{job_id}", so strip the prefix to recover the UUID.
+    # As a fallback we also look for the helix_job_id param we inject directly.
+    run_name = payload.get("runName") or ""
+    if run_name.startswith("helix-"):
+        run_name = run_name[6:]   # strip "helix-" prefix → raw UUID
+    job_id = (
+        run_name
+        or (payload.get("metadata") or {}).get("parameters", {}).get("helix_job_id")
+        or ""
+    )
+
+    if not job_id:
+        logger.warning("Nextflow weblog event has no identifiable job_id: %s", payload)
+        return {"ok": False, "reason": "no job_id"}
+
+    trace = payload.get("trace") or {}
+    event = {
+        "type":    event_type,
+        "job_id":  job_id,
+        "trace":   trace,
+        "process": trace.get("name") or trace.get("process", ""),
+        "status":  trace.get("status", ""),
+    }
+
+    logger.info("Nextflow event job=%s type=%s process=%s", job_id, event_type, event["process"])
+    await get_event_bus().publish(job_id, event)
+
+    # Sync job state for terminal events
+    jm = get_job_manager()
+    if event_type in ("completed",):
+        result_dir = str(
+            Path(jm.jobs.get(job_id, {}).get("infra", {}).get("result_dir", ""))
+        )
+        from backend.nextflow_executor import _collect_results
+        files = _collect_results(Path(result_dir)) if result_dir else []
+        jm.set_nextflow_job_completed(job_id, result_dir=result_dir, result_files=files)
+    elif event_type in ("error", "failed"):
+        err = payload.get("error") or trace.get("exit") or "Pipeline failed"
+        jm.set_nextflow_job_failed(job_id, error=str(err))
+
+    return {"ok": True, "job_id": job_id, "event": event_type}
+
+
+@app.get("/jobs/{job_id}/stream")
+async def job_event_stream(job_id: str, request: Request):
+    """Server-Sent Events stream for real-time Nextflow pipeline progress.
+
+    The frontend opens ``EventSource('/jobs/{job_id}/stream')`` immediately
+    after receiving a ``{job_id, status: 'submitted'}`` response from
+    ``POST /execute``.  Events are pushed as they arrive from the Nextflow
+    weblog receiver until the pipeline completes or fails.
+
+    Reconnecting clients receive buffered history automatically.
+    """
+    from backend.nextflow_event_bus import get_event_bus
+    from sse_starlette.sse import EventSourceResponse
+
+    bus = get_event_bus()
+
+    # Verify the job exists
+    from backend.job_manager import get_job_manager
+    jm = get_job_manager()
+    try:
+        job = jm.get_job_status(job_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
+
+    # If already terminal, return a single synthetic event and close
+    if job.get("status") in ("completed", "failed", "cancelled"):
+        async def terminal_stream():
+            terminal_type = "completed" if job.get("status") == "completed" else "failed"
+            yield {
+                "event": terminal_type,
+                "data": json.dumps({
+                    "type": terminal_type,
+                    "job_id": job_id,
+                    "result_files": job.get("result_files", []),
+                    "error": job.get("error"),
+                }),
+            }
+        return EventSourceResponse(terminal_stream())
+
+    async def event_generator():
+        q = bus.subscribe(job_id, replay=True)
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    event = await asyncio.wait_for(q.get(), timeout=30.0)
+                except asyncio.TimeoutError:
+                    # Heartbeat to keep connection alive
+                    yield {"event": "heartbeat", "data": json.dumps({"job_id": job_id})}
+                    continue
+
+                yield {"event": event.get("type", "update"), "data": json.dumps(event)}
+
+                if event.get("type") in ("completed", "failed", "error"):
+                    break
+        finally:
+            bus.unsubscribe(job_id, q)
+
+    return EventSourceResponse(event_generator())
+
 
 @app.get("/jobs/{job_id}/results")
 async def get_job_results(job_id: str):

@@ -275,5 +275,62 @@ export const helixApi = {
     console.warn('⚠️ synthesisSubmission is deprecated. Use executeCommand() instead.');
     const response = await axios.post(`${API_BASE_URL}/tools/synthesis-submission`, params);
     return response.data;
-  }
+  },
+
+  /**
+   * Subscribe to real-time Nextflow pipeline progress via Server-Sent Events.
+   *
+   * Opens an EventSource to GET /jobs/{jobId}/stream and fires callbacks as
+   * Nextflow lifecycle events arrive.  Returns the EventSource so the caller
+   * can close it manually if needed (e.g. component unmount).
+   *
+   * @param jobId        - The job_id returned by POST /execute for pipeline tools.
+   * @param onEvent      - Called for each intermediate event (process_completed, etc.).
+   * @param onDone       - Called once when the pipeline completes successfully.
+   * @param onError      - Called when the pipeline fails or the connection errors.
+   * @returns The underlying EventSource instance.
+   */
+  subscribeJobStream: (
+    jobId: string,
+    onEvent: (event: { type: string; process?: string; trace?: object }) => void,
+    onDone: (result: { job_id: string; result_files: string[] }) => void,
+    onError: (err: Error) => void,
+  ): EventSource => {
+    const source = new EventSource(`${API_BASE_URL}/jobs/${jobId}/stream`);
+
+    // Intermediate progress events
+    source.addEventListener('process_submitted',  (e: MessageEvent) => {
+      try { onEvent({ type: 'process_submitted',  ...JSON.parse(e.data) }); } catch (_) { /* ignore */ }
+    });
+    source.addEventListener('process_completed',  (e: MessageEvent) => {
+      try { onEvent({ type: 'process_completed',  ...JSON.parse(e.data) }); } catch (_) { /* ignore */ }
+    });
+    source.addEventListener('started', (e: MessageEvent) => {
+      try { onEvent({ type: 'started', ...JSON.parse(e.data) }); } catch (_) { /* ignore */ }
+    });
+    source.addEventListener('heartbeat', () => {
+      // keep-alive ping — no action needed
+    });
+
+    // Terminal events
+    source.addEventListener('completed', (e: MessageEvent) => {
+      try { onDone(JSON.parse(e.data)); } catch (_) { /* ignore */ }
+      source.close();
+    });
+    source.addEventListener('failed', (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data);
+        onError(new Error(data.error || 'Pipeline failed'));
+      } catch (_) {
+        onError(new Error('Pipeline failed'));
+      }
+      source.close();
+    });
+    source.addEventListener('error', (e: Event) => {
+      onError(new Error('SSE connection error'));
+      source.close();
+    });
+
+    return source;
+  },
 }; 

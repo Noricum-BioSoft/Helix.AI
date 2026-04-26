@@ -765,3 +765,9 @@ pre {
   margin-right: 0.4rem;
 }
 
+
+/* Pipeline job progress card spinner */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+

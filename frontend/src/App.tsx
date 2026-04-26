@@ -435,7 +435,103 @@ function App() {
       console.log('Calling agent via /execute endpoint...');
       response = await helixApi.executeCommand(finalCommand, sessionId || undefined);
       console.log('Agent response:', response);
-      
+
+      // ── Async pipeline job — switch to SSE mode ────────────────────────
+      // When a pipeline tool (chip_seq_analysis, etc.) is dispatched, the
+      // backend returns {job_id, status: 'submitted'} immediately instead of
+      // a synchronous result.  Open an EventSource to receive live progress.
+      if ((response as any).job_id && (response as any).status === 'submitted') {
+        const jobId    = (response as any).job_id as string;
+        const pipeline = (response as any).pipeline || (response as any).tool || 'pipeline';
+
+        // Augment the raw response so the renderer can show a "submitted" card
+        const submittedResponse = {
+          ...(response as any),
+          _pipelineJob: {
+            jobId,
+            pipeline,
+            status: 'submitted' as string,
+            steps:  [] as Array<{ type: string; process?: string }>,
+            streamUrl: (response as any).stream_url || `/jobs/${jobId}/stream`,
+          },
+        };
+
+        const historyItem: HistoryItem = {
+          input:     commandText,
+          output:    submittedResponse,
+          type:      'agent',
+          timestamp: new Date(),
+          scenarioId: scenarioIdOverride ?? pendingScenarioId,
+        };
+
+        setPendingScenarioId(undefined);
+        setHistory(prev => [historyItem, ...prev]);
+        setTimeout(() => historyTopRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
+        updateActivity(activityId, 'completed');
+
+        // Open the SSE stream and update the history item in-place as events arrive
+        helixApi.subscribeJobStream(
+          jobId,
+          (evt) => {
+            setHistory(prev => prev.map(item => {
+              if (!item.output?._pipelineJob || item.output._pipelineJob.jobId !== jobId) return item;
+              return {
+                ...item,
+                output: {
+                  ...item.output,
+                  _pipelineJob: {
+                    ...item.output._pipelineJob,
+                    status: 'running',
+                    steps:  [...(item.output._pipelineJob.steps || []), evt],
+                  },
+                },
+              };
+            }));
+          },
+          (result) => {
+            setHistory(prev => prev.map(item => {
+              if (!item.output?._pipelineJob || item.output._pipelineJob.jobId !== jobId) return item;
+              return {
+                ...item,
+                output: {
+                  ...item.output,
+                  status: 'completed',
+                  text: `Pipeline **${pipeline}** completed. ${result.result_files?.length ?? 0} output file(s) ready.`,
+                  _pipelineJob: {
+                    ...item.output._pipelineJob,
+                    status: 'completed',
+                    resultFiles: result.result_files || [],
+                  },
+                },
+              };
+            }));
+          },
+          (err) => {
+            setHistory(prev => prev.map(item => {
+              if (!item.output?._pipelineJob || item.output._pipelineJob.jobId !== jobId) return item;
+              return {
+                ...item,
+                output: {
+                  ...item.output,
+                  status: 'error',
+                  text: `Pipeline **${pipeline}** failed: ${err.message}`,
+                  _pipelineJob: {
+                    ...item.output._pipelineJob,
+                    status: 'failed',
+                    error: err.message,
+                  },
+                },
+              };
+            }));
+          },
+        );
+
+        setLoading(false);
+        if (clearInputsAfter) setCommand('');
+        return;   // skip the normal synchronous history push below
+      }
+      // ── end async pipeline job ─────────────────────────────────────────
+
       // Update session ID if the backend created one automatically
       if ((response as any).session_id && !sessionId) {
         const sid = (response as any).session_id;
@@ -2312,6 +2408,113 @@ function App() {
 
   const renderOutput = (item: HistoryItem) => {
     const { output, type } = item;
+
+    // ── Async Nextflow pipeline job card ──────────────────────────────────
+    const pj = output?._pipelineJob;
+    if (pj) {
+      const statusColors: Record<string, string> = {
+        submitted: '#6366f1',
+        running:   '#f59e0b',
+        completed: '#10b981',
+        failed:    '#ef4444',
+      };
+      const color = statusColors[pj.status] ?? '#6b7280';
+
+      const statusIcon: Record<string, string> = {
+        submitted: '⏳',
+        running:   '⚙️',
+        completed: '✅',
+        failed:    '❌',
+      };
+      const icon = statusIcon[pj.status] ?? '🔄';
+
+      const steps: Array<{ type: string; process?: string }> = pj.steps ?? [];
+
+      return (
+        <div style={{
+          border: `1.5px solid ${color}`,
+          borderRadius: '8px',
+          padding: '14px 18px',
+          background: '#fafafa',
+          maxWidth: '640px',
+        }}>
+          {/* Header */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
+            <span style={{ fontSize: '20px' }}>{icon}</span>
+            <div>
+              <div style={{ fontWeight: 600, color: '#111' }}>
+                Pipeline: {pj.pipeline || output?.tool || 'Nextflow'}
+              </div>
+              <div style={{ fontSize: '12px', color: '#6b7280' }}>
+                Job <code style={{ background: '#f3f4f6', padding: '1px 4px', borderRadius: '3px' }}>
+                  {(pj.jobId ?? '').slice(0, 8)}…
+                </code>
+                {' · '}
+                <span style={{ color, fontWeight: 500, textTransform: 'capitalize' }}>{pj.status}</span>
+              </div>
+            </div>
+            {pj.status === 'running' && (
+              <div style={{
+                marginLeft: 'auto',
+                width: '18px', height: '18px',
+                border: '2px solid #f59e0b',
+                borderTopColor: 'transparent',
+                borderRadius: '50%',
+                animation: 'spin 0.8s linear infinite',
+              }} />
+            )}
+          </div>
+
+          {/* Step timeline */}
+          {steps.length > 0 && (
+            <div style={{ marginTop: '8px', borderTop: '1px solid #e5e7eb', paddingTop: '8px' }}>
+              <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: '4px' }}>Steps</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                {steps.map((s, i) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px' }}>
+                    <span style={{ color: s.type === 'process_completed' ? '#10b981' : '#6b7280' }}>
+                      {s.type === 'process_completed' ? '✓' : s.type === 'failed' ? '✗' : '·'}
+                    </span>
+                    <span style={{ color: '#374151' }}>{s.process || s.type}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Result files */}
+          {pj.resultFiles && pj.resultFiles.length > 0 && (
+            <div style={{ marginTop: '8px', borderTop: '1px solid #e5e7eb', paddingTop: '8px' }}>
+              <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: '4px' }}>Output files</div>
+              {pj.resultFiles.map((f: string, i: number) => (
+                <div key={i} style={{ fontSize: '12px', color: '#374151', fontFamily: 'monospace' }}>
+                  📄 {f}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Error detail */}
+          {pj.error && (
+            <div style={{
+              marginTop: '8px', padding: '8px', borderRadius: '4px',
+              background: '#fef2f2', color: '#dc2626', fontSize: '12px',
+              fontFamily: 'monospace', whiteSpace: 'pre-wrap', maxHeight: '120px', overflow: 'auto',
+            }}>
+              {pj.error}
+            </div>
+          )}
+
+          {/* Stream URL hint while running */}
+          {pj.status === 'submitted' || pj.status === 'running' ? (
+            <div style={{ marginTop: '8px', fontSize: '11px', color: '#9ca3af' }}>
+              Live stream: {pj.streamUrl}
+            </div>
+          ) : null}
+        </div>
+      );
+    }
+    // ── end pipeline job card ─────────────────────────────────────────────
 
     if (type === 'agent_error') {
       const message = output?.error || 'Agent encountered an error while processing the request.';
