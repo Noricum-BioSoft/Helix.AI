@@ -67,18 +67,12 @@ def parse_fasta_string(fasta_string: str) -> List[Dict[str, str]]:
                     "sequence": current_sequence
                 })
             
-            # Parse the header line - it might contain sequence data
-            header_parts = line[1:].split(None, 1)  # Split on whitespace, max 1 split
-            if len(header_parts) == 2:
-                # Header contains both name and sequence
-                current_name = header_parts[0]
-                current_sequence = header_parts[1]
-                print(f"🔍 Header contains sequence: name='{current_name}', sequence='{current_sequence}'")
-            else:
-                # Header contains only name
-                current_name = header_parts[0]
-                current_sequence = ""
-                print(f"🔍 Starting new sequence with name: '{current_name}'")
+            # Parse the header line: first word is the accession/name, rest is description
+            # Standard FASTA: ">accession description" — description is metadata, NOT sequence
+            header_words = line[1:].split()
+            current_name = header_words[0] if header_words else "seq"
+            current_sequence = ""
+            print(f"🔍 Starting new sequence with name: '{current_name}'")
         else:
             # Add to current sequence
             if current_name:  # Only add if we have a name (we're in a sequence)
@@ -96,20 +90,43 @@ def parse_fasta_string(fasta_string: str) -> List[Dict[str, str]]:
     print(f"🔍 Final parsed sequences: {sequences}")
     return sequences
 
+_NUCLEOTIDE_BASES = set("ATCGUNRYWSKMBDHV-.")   # IUPAC nucleotide + gap chars
+_PROTEIN_RESIDUES = set("ACDEFGHIKLMNPQRSTVWYBZXJUO-.")  # IUPAC amino acid + gap chars
+
+
+def _detect_sequence_type(sequences: List[Dict[str, str]]) -> str:
+    """Return 'nucleotide' or 'protein' based on the character composition."""
+    nucleotide_only = set("ATCGU")
+    total_chars = 0
+    nuc_chars = 0
+    for seq_data in sequences:
+        seq = seq_data["sequence"].upper().replace("-", "").replace(".", "")
+        total_chars += len(seq)
+        nuc_chars += sum(1 for c in seq if c in nucleotide_only)
+    if total_chars == 0:
+        return "nucleotide"
+    # If ≥ 85% of characters are unambiguous nucleotide bases, treat as nucleotide
+    return "nucleotide" if (nuc_chars / total_chars) >= 0.85 else "protein"
+
+
 def validate_sequences(sequences: List[Dict[str, str]]) -> str:
-    """Validate that sequences are valid DNA/RNA."""
-    valid_bases = set("ATCGU")
-    
-    print(f"🔍 Validating {len(sequences)} sequences")
+    """Validate that sequences are valid DNA/RNA or protein sequences."""
+    seq_type = _detect_sequence_type(sequences)
+    valid_chars = _NUCLEOTIDE_BASES if seq_type == "nucleotide" else _PROTEIN_RESIDUES
+
+    print(f"🔍 Validating {len(sequences)} sequences as {seq_type}")
     for seq_data in sequences:
         sequence = seq_data["sequence"].upper()
-        print(f"🔍 Validating sequence '{sequence}' from '{seq_data['name']}'")
-        invalid_bases = [base for base in sequence if base not in valid_bases]
-        if invalid_bases:
-            print(f"🔍 Found invalid bases: {invalid_bases}")
-            return f"Invalid sequence '{sequence}' in {seq_data['name']}. Only A, T, C, G, U allowed."
-    
-    print(f"🔍 All sequences validated successfully")
+        invalid = [c for c in sequence if c not in valid_chars]
+        if invalid:
+            print(f"🔍 Found invalid characters: {invalid}")
+            alphabet = "nucleotide (IUPAC)" if seq_type == "nucleotide" else "protein (IUPAC amino acid)"
+            return (
+                f"Invalid characters {sorted(set(invalid))} in sequence '{seq_data['name']}'. "
+                f"Detected sequence type: {alphabet}."
+            )
+
+    print(f"🔍 All {seq_type} sequences validated successfully")
     return ""
 
 def run_alignment(sequences: str):

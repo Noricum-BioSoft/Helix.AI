@@ -27,10 +27,11 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
         "inputs": {
             "type": "object",
             "properties": {
-                "sequences": {"type": "string", "description": "FASTA formatted sequences"},
+                "sequences": {"type": "string", "description": "FASTA formatted sequences (optional if accessions_to_fetch is provided)"},
+                "accessions_to_fetch": {"type": "array", "items": {"type": "string"}, "description": "NCBI accession IDs to fetch and include before aligning (e.g. ['NM_001301717', 'NM_007719'])"},
                 "algorithm": {"type": "string", "enum": ["clustal", "muscle", "mafft"], "default": "clustal"},
             },
-            "required": ["sequences"],
+            "required": [],
         },
     },
     {

@@ -112,6 +112,113 @@ def _truncate_text(text: str, max_chars: int = 100) -> str:
     return text[:max_chars] + f"... ({len(text)} chars)"
 
 
+def _build_run_summary(result: Any, tool: str) -> str:
+    """Build a short human-readable summary of a tool result for the session brief.
+
+    Designed to give the agent enough context to make targeted 'what's next'
+    recommendations without including large data blobs.  Capped at 200 chars.
+    """
+    if not isinstance(result, dict):
+        return str(result)[:200] if result else "no result"
+
+    # ── Tool-specific compact summaries ───────────────────────────────────────
+    # Bulk RNA-seq / DESeq2 — extract numeric stats from nested result.summary
+    if tool in ("bulk_rnaseq_analysis", "run_deseq2"):
+        inner = result.get("result") or result
+        summary_list = inner.get("summary") or []
+        if isinstance(summary_list, list) and summary_list:
+            parts = []
+            for c in summary_list:
+                if not isinstance(c, dict):
+                    continue
+                sig = c.get("significant", 0)
+                up = c.get("upregulated", 0)
+                dn = c.get("downregulated", 0)
+                total = c.get("total_genes", "?")
+                contrast = c.get("contrast", "contrast")
+                parts.append(
+                    f"{contrast}: {sig} sig genes (↑{up} ↓{dn}) / {total} total"
+                )
+            if parts:
+                return "; ".join(parts)[:200]
+        # fallback to message/text if summary unavailable
+        for key in ("message", "text"):
+            val = inner.get(key) or result.get(key)
+            if isinstance(val, str) and val.strip():
+                # strip markdown headers so we get the numeric content
+                clean = " ".join(
+                    ln for ln in val.splitlines()
+                    if ln.strip() and not ln.strip().startswith("#")
+                )
+                return clean[:200]
+
+    # Sequence fetch / NCBI
+    if tool in ("fetch_ncbi_sequence", "ncbi_fetch"):
+        inner = result.get("result") or result
+        acc = inner.get("accession") or result.get("accession", "")
+        name = inner.get("gene_name") or inner.get("name") or result.get("gene_name", "")
+        length = inner.get("length") or inner.get("seq_len") or ""
+        organism = inner.get("organism") or result.get("organism", "")
+        if acc or name:
+            return f"Fetched {name or acc} ({organism}); length={length}".strip()[:200]
+
+    # Sequence alignment
+    if tool in ("sequence_alignment", "multiple_sequence_alignment"):
+        inner = result.get("result") or result
+        n_seq = inner.get("num_sequences") or result.get("num_sequences", "?")
+        aln_len = inner.get("alignment_length") or result.get("alignment_length", "?")
+        return f"MSA: {n_seq} sequences, alignment length {aln_len}"[:200]
+
+    # tabular_qa
+    if tool == "tabular_qa":
+        text = result.get("text") or result.get("answer") or ""
+        if isinstance(text, str) and text.strip():
+            return text.strip()[:200]
+
+    # ── Generic: prefer short text fields ────────────────────────────────────
+    # Skip markdown-heavy "text" fields; prefer user_friendly_summary / message first
+    for key in ("user_friendly_summary", "message", "description"):
+        val = result.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()[:200]
+
+    # "text" last — skip if it looks like a markdown document
+    text_val = result.get("text", "")
+    if isinstance(text_val, str) and text_val.strip():
+        clean = " ".join(
+            ln for ln in text_val.splitlines()
+            if ln.strip() and not ln.strip().startswith("#")
+        )
+        return clean[:200]
+
+    # Tool-specific numeric key fields
+    parts: list[str] = []
+    status = result.get("status", result.get("state", ""))
+    if status:
+        parts.append(f"status={status}")
+
+    for key in (
+        "accession", "gene_name", "organism", "sequence_id",
+        "alignment_length", "num_sequences", "num_reads", "num_variants",
+        "n_cells", "n_genes", "num_rows", "num_cols",
+        "de_genes", "significant_genes", "significant",
+    ):
+        val = result.get(key)
+        if val is not None:
+            parts.append(f"{key}={val}")
+
+    # Fallback: stringify top-level scalar keys
+    if not parts:
+        for k, v in result.items():
+            if isinstance(v, (str, int, float, bool)) and v:
+                parts.append(f"{k}={str(v)[:40]}")
+            if len(parts) >= 4:
+                break
+
+    summary = "; ".join(parts) if parts else f"{tool} completed"
+    return summary[:200]
+
+
 def build_session_brief(session_context: Dict[str, Any], max_tokens: int = 800) -> str:
     """
     Build a thin Session Brief (≤800 tokens) with pointer IDs only.
@@ -261,33 +368,38 @@ def build_session_brief(session_context: Dict[str, Any], max_tokens: int = 800) 
     
     brief["latest_artifacts"] = artifacts
     
-    # Latest runs (IDs + tool + version + params_hash + output_refs)
+    # Latest runs (IDs + tool + version + params_hash + output_refs + result_summary)
     runs = []
     for i, entry in enumerate(history[-5:]):  # Last 5 runs
         run_id = f"{entry.get('tool', 'unknown')}_{i+1}"
         tool = entry.get("tool", "unknown")
         timestamp = entry.get("timestamp", "")
         result = entry.get("result", {})
-        
+
         # Try to extract version from result
         version = "unknown"
         if isinstance(result, dict):
             version = result.get("version", result.get("tool_version", "unknown"))
-        
+
         params_hash = _compute_hash(entry)
         output_refs = []
-        
+
         # Reference outputs by ID
         if isinstance(result, dict) and "artifact_id" in result:
             output_refs.append(result["artifact_id"])
-        
+
+        # Build a short, human-readable result summary so the agent can give
+        # context-aware recommendations without fetching full result objects.
+        result_summary = _build_run_summary(result, tool)
+
         runs.append({
             "run_id": run_id,
             "tool": tool,
             "version": str(version)[:50],
             "params_hash": params_hash,
             "outputs": output_refs,
-            "timestamp": timestamp[:50]
+            "result_summary": result_summary,
+            "timestamp": timestamp[:50],
         })
     
     brief["latest_runs"] = runs

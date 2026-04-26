@@ -207,6 +207,42 @@ def _requires_approval_semantics(command: str) -> bool:
     return approval_requires_approval_semantics(command)
 
 
+def _extract_inline_csv(text: str) -> Optional[str]:
+    """Return inline CSV content embedded in *text*, or None if not found.
+
+    Looks for a header row (comma-separated words) followed by at least two
+    data rows.  Strips any prose before/after the tabular block.
+    """
+    lines = text.splitlines()
+    start = None
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        # A CSV header has ≥2 comma-separated tokens and no spaces that look
+        # like natural-language prose (e.g. not "here are the results:").
+        parts = stripped.split(",")
+        if len(parts) >= 2 and all(p.strip() for p in parts):
+            # Peek ahead — at least 2 more lines that also look like CSV rows
+            following = [l.strip() for l in lines[i + 1 : i + 3]]
+            if len(following) >= 2 and all(len(l.split(",")) >= 2 for l in following):
+                start = i
+                break
+    if start is None:
+        return None
+    # Collect contiguous CSV-looking lines from start
+    csv_lines = []
+    for line in lines[start:]:
+        stripped = line.strip()
+        if not stripped:
+            break  # blank line ends the block
+        if len(stripped.split(",")) >= 2:
+            csv_lines.append(stripped)
+        else:
+            break
+    if len(csv_lines) < 3:  # need header + at least 2 data rows
+        return None
+    return "\n".join(csv_lines) + "\n"
+
+
 def _should_stage_for_approval(tool_name: str, command: str, params: Optional[Dict[str, Any]] = None) -> bool:
     return approval_should_stage_for_approval(
         tool_name,
@@ -1085,6 +1121,25 @@ async def _dispatch_result(
         except Exception:
             pass
 
+    # Always run session-context side effects so that session state (e.g.
+    # last_fetched_fasta, aligned_sequences) is up-to-date regardless of
+    # whether the tool ran through the broker or the BioAgent path.
+    if req.session_id and isinstance(result, dict):
+        _effective_tool = tool
+        # When the BioAgent ran a single tool, the tool name is "agent" but the
+        # actual tool is embedded in result["routing"]["tool_name"] or result["tool_name"].
+        if tool == "agent":
+            _inner = result.get("result") or result
+            if isinstance(_inner, dict):
+                _effective_tool = (
+                    _inner.get("tool_name")
+                    or ((_inner.get("routing") or {}).get("tool_name"))
+                    or tool
+                )
+                _apply_session_context_side_effects(req.session_id, _effective_tool, _inner)
+        else:
+            _apply_session_context_side_effects(req.session_id, _effective_tool, result)
+
     if record_history:
         metadata = _extract_metadata(result, tool_args=effective_tool_args)
         persisted = _materialize_run_artifacts(
@@ -1328,6 +1383,28 @@ def _apply_session_context_side_effects(
                 if step_tool and isinstance(step_result, dict):
                     _apply_session_context_side_effects(session_id, step_tool, step_result)
         return
+
+    if tool_name == "fetch_ncbi_sequence":
+        # Cache the full FASTA so downstream tools (e.g. sequence_alignment) can use
+        # "this sequence" / "the previously fetched sequence" from session context.
+        # The broker wraps dispatch_tool output as: result["result"] = dispatch_tool_output,
+        # and dispatch_tool returns: {"accession": ..., "result": ncbi_row, "text": ...}
+        # where ncbi_row = {"sequence": FULL_SEQ, "accession": ..., ...}
+        _full_seq = ""
+        _acc = ""
+        # Walk the nesting: broker_result → dispatch_result → ncbi_row
+        for _candidate in [result, result.get("result") or {}, (result.get("result") or {}).get("result") or {}]:
+            if not isinstance(_candidate, dict):
+                continue
+            _seq_cand = _candidate.get("sequence") or _candidate.get("full_sequence") or ""
+            # Accept only clean sequence strings (no "..." or metadata text)
+            if _seq_cand and "..." not in _seq_cand and "(" not in _seq_cand and " " not in _seq_cand:
+                _full_seq = _seq_cand
+            if not _acc:
+                _acc = _candidate.get("accession") or ""
+        if _full_seq and _acc:
+            history_manager.sessions[session_id]["last_fetched_fasta"] = f">{_acc}\n{_full_seq}"
+            logger.debug("Stored last_fetched_fasta for %s (%d bp) in session context", _acc, len(_full_seq))
 
     if tool_name == "mutate_sequence":
         variants = (
@@ -1591,6 +1668,21 @@ def build_standard_response(
                 "Your workflow has been planned. Use **Execute Pipeline** to run it, or **Load & run** to use example data."
             )
             status = "workflow_planned"
+
+    # For the agent/guru path the result is a LangGraph dict with `messages`
+    # (list of BaseMessage). Extract the last AI message content so advisory
+    # responses like "What should I do next?" are rendered correctly.
+    if not text and tool in ("agent", "handle_natural_command") and isinstance(truncated_result, dict):
+        _msgs = truncated_result.get("messages") or []
+        for _m in reversed(_msgs):
+            _content = getattr(_m, "content", None) or (
+                _m.get("content") if isinstance(_m, dict) else None
+            )
+            # Skip tool-call-only messages (content is empty or is a list of tool-use blocks)
+            if _content and isinstance(_content, str) and _content.strip():
+                text = _content.strip()
+                status = "success"
+                break
 
     text = _build_actionable_fallback_text(tool, status, text, truncated_result)
 
@@ -3023,7 +3115,7 @@ async def execute(req: CommandRequest, request: Request):
         # rather than returning another plan document.
         if req.execute_plan:
             from backend.agent import handle_command
-            agent_timeout_s = int(os.getenv("HELIX_AGENT_TIMEOUT_S", "25"))
+            agent_timeout_s = int(os.getenv("HELIX_AGENT_TIMEOUT_S", "90"))
             agent_result, agent_diag = await _run_agent_with_retry(
                 lambda: handle_command(
                     req.command,
@@ -3122,7 +3214,7 @@ async def execute(req: CommandRequest, request: Request):
             # keeping lightweight endpoints like /health and /tools/list fast and allowing the service
             # to work in sandbox/CI environments where LLM dependencies may not be installed.
             from backend.agent import handle_command
-            agent_timeout_s = int(os.getenv("HELIX_AGENT_TIMEOUT_S", "25"))
+            agent_timeout_s = int(os.getenv("HELIX_AGENT_TIMEOUT_S", "90"))
             agent_result, agent_diag = await _run_agent_with_retry(
                 lambda: handle_command(req.command, session_id=req.session_id, session_context=session_context),
                 timeout_s=agent_timeout_s,
@@ -4295,10 +4387,18 @@ async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
     if tool_name == "tabular_qa":
         from backend.tabular_qa.agent import run_tabular_qa
         session_id = arguments.get("session_id", "")
-        question = arguments.get("question") or arguments.get("command") or arguments.get("objective", "")
+        raw_question = arguments.get("question") or arguments.get("command") or arguments.get("objective", "")
         file_path = arguments.get("file_path", "")
         sheet = arguments.get("sheet")
         profile = arguments.get("profile") or {}
+
+        # Strip inline CSV from the question text so the question itself is clean.
+        # The CSV will be materialized into a temp file below if no file is on disk.
+        inline_csv_in_q = _extract_inline_csv(raw_question or "")
+        if inline_csv_in_q:
+            question = raw_question.replace(inline_csv_in_q.strip(), "").strip().rstrip(":")
+        else:
+            question = raw_question
 
         # If no explicit file_path, find first tabular file in session uploads
         if not file_path and session_id:
@@ -4309,6 +4409,31 @@ async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
                     file_path = up.get("local_path") or ""
                     profile = up.get("schema_preview") or profile
                     break
+
+        # Last resort: if the command itself contains inline CSV data, materialise it
+        # as a temp file so the Q&A agent can use it directly.
+        if not file_path:
+            inline_csv = inline_csv_in_q or _extract_inline_csv(raw_question or "")
+            if inline_csv:
+                import tempfile as _tf
+                import uuid as _uuid
+                _tmp = _tf.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, prefix="helix_inline_")
+                _tmp.write(inline_csv)
+                _tmp.flush()
+                _tmp.close()
+                file_path = _tmp.name
+                logger.info("tabular_qa: materialised inline CSV to %s", file_path)
+                # Register the temp file in the session so follow-up queries can
+                # find it without needing the CSV to be re-pasted.
+                if session_id:
+                    _fid = str(_uuid.uuid4())
+                    history_manager.add_uploaded_file(session_id, {
+                        "file_id": _fid,
+                        "filename": "inline_data.csv",
+                        "local_path": file_path,
+                        "source": "inline",
+                        "schema_preview": profile or {},
+                    })
 
         if not file_path:
             return {
@@ -4346,6 +4471,19 @@ async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
                     data_path = up.get("local_path") or ""
                     break
 
+        # Last resort: materialise inline CSV from the original command text
+        if not data_path:
+            _src = arguments.get("command") or arguments.get("query") or ""
+            inline_csv = _extract_inline_csv(_src)
+            if inline_csv:
+                import tempfile as _tf
+                _tmp = _tf.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, prefix="helix_inline_")
+                _tmp.write(inline_csv)
+                _tmp.flush()
+                _tmp.close()
+                data_path = _tmp.name
+                logger.info("tabular_analysis: materialised inline CSV to %s", data_path)
+
         if not data_path:
             return {
                 "status": "error",
@@ -4377,7 +4515,64 @@ async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
 
     if tool_name == "sequence_alignment":
         import alignment
-        return alignment.run_alignment(arguments.get("sequences", ""))
+        import re as _re_align
+
+        _raw_seqs = arguments.get("sequences", "")
+        _accs_arg = arguments.get("accessions_to_fetch") or []
+
+        # Auto-fetch any accession IDs that were passed in place of inline sequences.
+        _acc_pat = _re_align.compile(r'\b([A-Z]{1,2}_\d+(?:\.\d+)?)\b')
+        if isinstance(_accs_arg, str):
+            _accs_arg = [a.strip() for a in _accs_arg.split(",") if a.strip()]
+        _all_accs: list = list(_accs_arg)
+
+        # Also collect accession-only FASTA headers (no sequence body follows them)
+        _fasta_lines = (_raw_seqs or "").splitlines()
+        _kept_lines: list = []
+        _fi = 0
+        while _fi < len(_fasta_lines):
+            _line = _fasta_lines[_fi].strip()
+            if not _line:
+                _fi += 1
+                continue
+            if _line.startswith(">"):
+                _nxt = _fasta_lines[_fi + 1].strip() if _fi + 1 < len(_fasta_lines) else ""
+                if _nxt and not _nxt.startswith(">"):
+                    _kept_lines.append(_line)
+                    _kept_lines.append(_nxt)
+                    _fi += 2
+                else:
+                    _m = _acc_pat.search(_line)
+                    if _m and _m.group(1) not in _all_accs:
+                        _all_accs.append(_m.group(1))
+                    _fi += 1
+            else:
+                # Bare line without '>': check if it's a lone accession ID (nothing else on line).
+                # If so, treat it as an accession to fetch rather than raw sequence content.
+                _bare_acc_m = _acc_pat.fullmatch(_line)
+                if _bare_acc_m and _bare_acc_m.group(1) not in _all_accs:
+                    _all_accs.append(_bare_acc_m.group(1))
+                elif not _bare_acc_m:
+                    _kept_lines.append(_line)
+                _fi += 1
+
+        if _all_accs and os.getenv("HELIX_MOCK_MODE") != "1":
+            try:
+                from ncbi_tools import fetch_sequence_from_ncbi as _fetch_acc
+                for _acc in _all_accs:
+                    _fr = _fetch_acc(_acc)
+                    if _fr.get("status") == "success" and _fr.get("sequence"):
+                        _desc = _fr.get("description") or _acc
+                        _kept_lines.append(f">{_acc} {_desc}")
+                        _kept_lines.append(_fr["sequence"])
+            except Exception as _acc_err:
+                logger.warning("sequence_alignment dispatch: NCBI fetch failed: %s", _acc_err)
+        elif _all_accs:
+            for _acc in _all_accs:
+                _kept_lines += [f">{_acc}", "ATGCGATCGATCGATCG"]
+
+        _final_seqs = "\n".join(_kept_lines).strip() or _raw_seqs or ">seq1\nATGCGATCGATCGATCG\n>seq2\nATGCGATCGATCGATCG"
+        return alignment.run_alignment(_final_seqs)
     
     elif tool_name == "mutate_sequence":
         import mutations
@@ -4805,7 +5000,36 @@ async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
         else:
             result = await _orch_rerun.rerun(_target_run, _changes_rr, session_id=_session_id_rr)
         _result_status = result.get("status", "success")
-        _text_default = result.get("text", result.get("summary_text", "Re-run complete."))
+        _tool_text = result.get("text", "")
+        _summary_text = result.get("summary_text", "")
+        _delta = result.get("delta") or {}
+
+        # Build a comparison-aware display text:
+        # When re-running against a prior run, show the updated results AND a
+        # delta comparison section so the user can see what actually changed.
+        if _result_status != "error":
+            _delta_narrative = _delta.get("narrative", "")
+            _param_lines: list[str] = []
+            if _changes_rr:
+                for k, v in _changes_rr.items():
+                    _param_lines.append(f"  - `{k}` → `{v}`")
+
+            _comparison_section = ""
+            if _delta_narrative or _summary_text or _param_lines:
+                _comparison_section = "\n\n---\n\n### Re-run Summary\n\n"
+                if _param_lines:
+                    _comparison_section += "**Parameter changes applied:**\n" + "\n".join(_param_lines) + "\n\n"
+                if _delta_narrative:
+                    _comparison_section += f"**What changed:** {_delta_narrative}\n\n"
+                # Include the reviewer narrative (which already embeds the delta) if
+                # it doesn't duplicate the raw tool text.
+                if _summary_text and _summary_text not in (_tool_text or ""):
+                    _comparison_section += _summary_text
+
+            _text_default = (_tool_text or _summary_text or "Re-run complete.") + _comparison_section
+        else:
+            _text_default = result.get("message") or _tool_text or "Re-run failed."
+
         _message_default = result.get("message") or _text_default
         return {
             "status": _result_status,
@@ -4815,7 +5039,7 @@ async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
             "links": result.get("links", []),
             "run_id": result.get("run_id"),
             "parent_run_id": result.get("parent_run_id"),
-            "delta": result.get("delta", {}),
+            "delta": _delta,
             "result": result,
         }
 
