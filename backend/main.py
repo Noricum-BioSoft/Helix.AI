@@ -4197,6 +4197,250 @@ _TOOL_INPUT_REQUIREMENTS: Dict[str, Dict[str, Any]] = {
             },
         ],
     },
+    "chip_seq_analysis": {
+        "display_name": "ChIP-seq / CUT&RUN analysis",
+        "description": (
+            "Calls peaks, performs motif enrichment, and computes differential binding "
+            "from ChIP-seq or CUT&RUN experiments (e.g. H3K27ac, CTCF, RNAPII)."
+        ),
+        "required_inputs": [
+            {
+                "name": "treatment_bam",
+                "description": "S3 path to the ChIP/CUT&RUN BAM file (IP or treatment).",
+                "example": "s3://your-bucket/h3k27ac_ip.bam",
+            },
+            {
+                "name": "control_bam",
+                "description": "S3 path to the input control or IgG BAM file.",
+                "example": "s3://your-bucket/input_control.bam",
+            },
+        ],
+        "optional_inputs": [
+            {
+                "name": "genome",
+                "description": "Reference genome assembly (default: hg38).",
+                "example": "hg38",
+            },
+            {
+                "name": "peak_type",
+                "description": "narrow (TFs, H3K4me3) or broad (H3K27ac, H3K4me1).",
+                "example": "narrow",
+            },
+        ],
+    },
+    "atac_seq_analysis": {
+        "display_name": "ATAC-seq open-chromatin analysis",
+        "description": (
+            "Calls open-chromatin peaks, performs TF footprinting, and computes "
+            "differential accessibility between conditions from ATAC-seq data."
+        ),
+        "required_inputs": [
+            {
+                "name": "bam_files",
+                "description": "S3 paths to BAM files for each sample/condition.",
+                "example": "s3://your-bucket/tumor_atac.bam, s3://your-bucket/normal_atac.bam",
+            },
+            {
+                "name": "sample_metadata",
+                "description": "CSV mapping sample names to conditions.",
+                "example": "s3://your-bucket/atac_metadata.csv",
+            },
+        ],
+        "optional_inputs": [
+            {
+                "name": "genome",
+                "description": "Reference genome assembly (default: hg38).",
+                "example": "hg38",
+            },
+        ],
+    },
+    "genome_assembly": {
+        "display_name": "Genome / transcriptome assembly",
+        "description": (
+            "Assembles a genome or transcriptome from long reads (Nanopore/PacBio) "
+            "or short reads (Illumina), then assesses completeness with BUSCO/QUAST."
+        ),
+        "required_inputs": [
+            {
+                "name": "reads",
+                "description": "S3 path(s) to FASTQ read files.",
+                "example": "s3://your-bucket/nanopore_reads.fastq.gz",
+            },
+        ],
+        "optional_inputs": [
+            {
+                "name": "read_type",
+                "description": "Technology: nanopore, pacbio, illumina (default: nanopore).",
+                "example": "nanopore",
+            },
+            {
+                "name": "genome_size",
+                "description": "Estimated genome size for assembly (e.g. 5m, 50m, 3g).",
+                "example": "50m",
+            },
+            {
+                "name": "busco_lineage",
+                "description": "BUSCO lineage dataset for completeness check.",
+                "example": "bacteria_odb10",
+            },
+        ],
+    },
+    "variant_calling": {
+        "display_name": "Variant calling (germline / somatic)",
+        "description": (
+            "Calls SNPs, indels, and structural variants from WGS or WES data. "
+            "Supports germline single-sample, cohort joint-calling, and tumor-normal "
+            "somatic mutation detection with driver gene annotation."
+        ),
+        "required_inputs": [
+            {
+                "name": "bam_files",
+                "description": "S3 path(s) to aligned BAM/CRAM files.",
+                "example": "s3://your-bucket/sample.bam",
+            },
+            {
+                "name": "reference_genome",
+                "description": "Reference genome FASTA (or genome ID: hg38, hg19, mm10).",
+                "example": "hg38",
+            },
+        ],
+        "optional_inputs": [
+            {
+                "name": "mode",
+                "description": "germline, somatic_tumor_normal, or cohort (default: germline).",
+                "example": "germline",
+            },
+            {
+                "name": "normal_bam",
+                "description": "For somatic mode: S3 path to matched normal BAM.",
+                "example": "s3://your-bucket/normal.bam",
+            },
+            {
+                "name": "target_bed",
+                "description": "For WES: S3 path to capture kit target BED file.",
+                "example": "s3://your-bucket/exome_targets.bed",
+            },
+        ],
+    },
+    "metagenomics_16s": {
+        "display_name": "16S rRNA amplicon analysis",
+        "description": (
+            "Processes 16S rRNA sequencing data through denoising (DADA2/QIIME2), "
+            "OTU/ASV clustering, taxonomic classification, and alpha/beta diversity."
+        ),
+        "required_inputs": [
+            {
+                "name": "fastq_dir",
+                "description": "S3 prefix containing per-sample FASTQ files.",
+                "example": "s3://your-bucket/16s-reads/",
+            },
+            {
+                "name": "sample_metadata",
+                "description": "TSV/CSV with sample IDs and grouping variables.",
+                "example": "s3://your-bucket/16s_metadata.tsv",
+            },
+        ],
+        "optional_inputs": [
+            {
+                "name": "primer_f",
+                "description": "Forward primer sequence (for trimming).",
+                "example": "GTGYCAGCMGCCGCGGTAA",
+            },
+            {
+                "name": "primer_r",
+                "description": "Reverse primer sequence.",
+                "example": "GGACTACNVGGGTWTCTAAT",
+            },
+            {
+                "name": "reference_db",
+                "description": "Taxonomy reference database (default: silva138).",
+                "example": "silva138",
+            },
+        ],
+    },
+    "metagenomics_shotgun": {
+        "display_name": "Shotgun metagenomics analysis",
+        "description": (
+            "Runs taxonomic profiling (Kraken2/MetaPhlAn), functional annotation "
+            "(HUMAnN3), and pathway enrichment on shotgun metagenomics samples."
+        ),
+        "required_inputs": [
+            {
+                "name": "fastq_files",
+                "description": "S3 path(s) to paired-end FASTQ files.",
+                "example": "s3://your-bucket/gut_R1.fastq.gz, s3://your-bucket/gut_R2.fastq.gz",
+            },
+            {
+                "name": "sample_metadata",
+                "description": "CSV with sample IDs and grouping variables.",
+                "example": "s3://your-bucket/metadata.csv",
+            },
+        ],
+        "optional_inputs": [
+            {
+                "name": "host_genome",
+                "description": "Host genome to decontaminate reads (default: hg38).",
+                "example": "hg38",
+            },
+        ],
+    },
+    "rna_splicing_isoform": {
+        "display_name": "RNA splicing and isoform analysis",
+        "description": (
+            "Detects differentially spliced exons (rMATS/LeafCutter) from short-read "
+            "RNA-seq, or discovers novel transcript isoforms from long-read data (PacBio IsoSeq)."
+        ),
+        "required_inputs": [
+            {
+                "name": "bam_files",
+                "description": "S3 paths to aligned BAM files.",
+                "example": "s3://your-bucket/tumor.bam, s3://your-bucket/normal.bam",
+            },
+            {
+                "name": "gtf",
+                "description": "Reference gene annotation GTF file.",
+                "example": "s3://your-bucket/gencode.v44.gtf",
+            },
+        ],
+        "optional_inputs": [
+            {
+                "name": "mode",
+                "description": "short_read_splicing or long_read_isoforms (default: short_read_splicing).",
+                "example": "short_read_splicing",
+            },
+        ],
+    },
+    "crispr_screen_analysis": {
+        "display_name": "CRISPR screen analysis (MAGeCK)",
+        "description": (
+            "Processes CRISPR KO, CRISPRa, or Perturb-seq screen data through "
+            "MAGeCK/DESeq2 to identify essential genes, activators, or transcriptional hits."
+        ),
+        "required_inputs": [
+            {
+                "name": "count_table",
+                "description": "Guide-count matrix (MAGeCK count output or equivalent).",
+                "example": "s3://your-bucket/screen_counts.txt",
+            },
+            {
+                "name": "sample_metadata",
+                "description": "CSV describing treatment vs control samples.",
+                "example": "s3://your-bucket/screen_metadata.csv",
+            },
+        ],
+        "optional_inputs": [
+            {
+                "name": "screen_type",
+                "description": "knockout, activation, or perturb_seq (default: knockout).",
+                "example": "knockout",
+            },
+            {
+                "name": "fdr_threshold",
+                "description": "FDR cutoff for hit calling (default: 0.1).",
+                "example": "0.1",
+            },
+        ],
+    },
 }
 
 
@@ -5640,6 +5884,20 @@ async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
         )
         return response
     
+    elif tool_name in (
+        "chip_seq_analysis",
+        "atac_seq_analysis",
+        "genome_assembly",
+        "variant_calling",
+        "metagenomics_16s",
+        "metagenomics_shotgun",
+        "rna_splicing_isoform",
+        "crispr_screen_analysis",
+    ):
+        # These tools are registered and routable but not yet fully implemented.
+        # Return a structured needs_inputs response that describes what is required.
+        return _build_needs_inputs_response(tool_name, arguments)
+
     elif tool_name == "dna_vendor_research":
         # Handle DNA vendor research
         import dna_vendor_research

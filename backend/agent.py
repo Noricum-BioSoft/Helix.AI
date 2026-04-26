@@ -1468,6 +1468,7 @@ class CommandProcessor:
                 "fetch_ncbi_sequence",
                 "query_uniprot",
                 "lookup_go_term",
+                "go_enrichment_analysis",
                 "bulk_rnaseq_analysis",
                 "single_cell_analysis",
                 # Iterative workflow tools
@@ -1477,6 +1478,19 @@ class CommandProcessor:
                 "local_edit_visualization",
                 "local_update_scatter_x_scale",
                 "visualize_job_results",
+                # Tabular analysis
+                "tabular_analysis",
+                "tabular_qa",
+                "ds_run_analysis",
+                # New clinical / multi-omics workflow tools
+                "chip_seq_analysis",
+                "atac_seq_analysis",
+                "genome_assembly",
+                "variant_calling",
+                "metagenomics_16s",
+                "metagenomics_shotgun",
+                "rna_splicing_isoform",
+                "crispr_screen_analysis",
             }
             
             # Consensus must not be routed to sequence_alignment: consensus is derived FROM
@@ -2050,11 +2064,21 @@ class CommandProcessor:
                         "data": {"results": {}, "visuals": [], "sequences": [], "links": []},
                     }
 
-                print("[CommandProcessor] ⚠️  All paths exhausted — no result produced")
+                # All paths exhausted — generate a minimal advisory so the user
+                # gets a meaningful response instead of a generic error.
+                print("[CommandProcessor] ⚠️  All paths exhausted — returning generic advisory")
                 return {
-                    "status": "error",
-                    "text": "Could not identify or generate a tool for this request.",
+                    "status": "success",
                     "tool": "agent",
+                    "text": (
+                        "Helix understood your request but needs input data before it can "
+                        "execute. Please upload your data files (FASTQ, BAM, CSV, FASTA, "
+                        "etc.) and re-submit your request — Helix will then identify the "
+                        "right analysis pipeline and run it automatically.\n\n"
+                        "If you have specific files already available, you can also provide "
+                        "S3 paths directly in your message."
+                    ),
+                    "data": {"results": {}, "visuals": [], "sequences": [], "links": []},
                 }
                 
             except asyncio.TimeoutError:
