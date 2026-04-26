@@ -1447,76 +1447,55 @@ class CommandProcessor:
         }
     
     async def _try_router_fallback(self, command: str, session_context: Dict) -> Optional[Dict]:
-        """Try deterministic router fallback for safe tools."""
+        """Ask the LLM router which tool to use and return its decision.
+
+        The router already received the full ROUTER_TOOLS list, so we trust its
+        output for any tool name it returns — no separate allowlist needed.
+        The only exception is ``handle_natural_command`` (the router's explicit
+        "I don't know" signal) and a small set of LLM-unsafe tool names that
+        must never be dispatched directly (destructive or privileged operations).
+
+        This replaces the old hand-maintained ``safe_tools`` set, which had to
+        be kept in sync with ROUTER_TOOLS manually and silently discarded valid
+        LLM decisions whenever a newly-added tool was forgotten.
+        """
+        # Tools that must never be dispatched via the router fast-path.
+        # This is an EXCLUSION list, not an allowlist — all other router
+        # decisions are trusted because the LLM already validated against the
+        # full ROUTER_TOOLS menu.
+        _NEVER_DISPATCH = {
+            "handle_natural_command",  # router's "I don't know" signal
+        }
+
         try:
             router = self._get_router()
             print(f"[CommandProcessor] Router type: {type(router)}, is Mock: {type(router).__name__ == 'Mock'}")
             tool_name, parameters = router.route_command(command, session_context or {})
-            print(f"[CommandProcessor] Router returned: tool_name={tool_name}, parameters={parameters}")
-            
-            safe_tools = {
-                "toolbox_inventory",
-                "read_merging",
-                "read_trimming",
-                "fastqc_quality_analysis",
-                "sequence_alignment",
-                "mutate_sequence",
-                "plasmid_visualization",
-                "phylogenetic_tree",
-                "clustering_analysis",
-                "variant_selection",
-                "fetch_ncbi_sequence",
-                "query_uniprot",
-                "lookup_go_term",
-                "go_enrichment_analysis",
-                "bulk_rnaseq_analysis",
-                "single_cell_analysis",
-                # Iterative workflow tools
-                "patch_and_rerun",
-                "bio_rerun",
-                "bio_diff_runs",
-                "local_edit_visualization",
-                "local_update_scatter_x_scale",
-                "visualize_job_results",
-                # Tabular analysis
-                "tabular_analysis",
-                "tabular_qa",
-                "ds_run_analysis",
-                # New clinical / multi-omics workflow tools
-                "chip_seq_analysis",
-                "atac_seq_analysis",
-                "genome_assembly",
-                "variant_calling",
-                "metagenomics_16s",
-                "metagenomics_shotgun",
-                "rna_splicing_isoform",
-                "crispr_screen_analysis",
-            }
-            
-            # Consensus must not be routed to sequence_alignment: consensus is derived FROM
-            # alignment (e.g. majority-rule per column), not "run alignment again". See
-            # docs/CONSENSUS_FROM_ALIGNMENT_GAP.md.
+            print(f"[CommandProcessor] Router returned: tool_name={tool_name}")
+
+            if not tool_name or tool_name in _NEVER_DISPATCH:
+                print(f"[CommandProcessor] Router returned {tool_name!r} — no specific tool identified")
+                return None
+
+            # Consensus must not be routed to sequence_alignment: consensus is
+            # derived FROM alignment output, not a re-run of alignment itself.
             _consensus_phrases = (
                 "consensus sequence", "calculate consensus", "compute consensus",
                 "consensus of", "consensus from", "derived from the alignment",
             )
             _cmd_lower = (command or "").lower()
-            _wants_consensus = any(p in _cmd_lower for p in _consensus_phrases)
-            if tool_name == "sequence_alignment" and _wants_consensus:
-                print("[CommandProcessor] Router returned sequence_alignment but command asks for consensus -> use tool generator")
+            if tool_name == "sequence_alignment" and any(p in _cmd_lower for p in _consensus_phrases):
+                print("[CommandProcessor] Router → sequence_alignment but command asks for consensus → tool generator")
                 return None
 
-            if tool_name and tool_name in safe_tools:
-                print(f"[CommandProcessor] Deterministic router fallback -> {tool_name}")
-                return {
-                    "tool_mapping": {"tool_name": tool_name, "parameters": parameters or {}},
-                    "tool_name": tool_name,
-                    "parameters": parameters or {},
-                    "status": "tool_mapped",
-                    "message": f"Deterministic router fallback identified tool: {tool_name}. Execution will be handled by router.",
-                }
-            else:
-                print(f"[CommandProcessor] Router returned tool_name={tool_name}, not in safe_tools or None")
+            print(f"[CommandProcessor] Router fallback → {tool_name}")
+            return {
+                "tool_mapping": {"tool_name": tool_name, "parameters": parameters or {}},
+                "tool_name": tool_name,
+                "parameters": parameters or {},
+                "status": "tool_mapped",
+                "message": f"Router identified tool: {tool_name}.",
+            }
         except Exception as e:
             print(f"[CommandProcessor] ⚠️  Router fallback exception: {e}")
             import traceback
