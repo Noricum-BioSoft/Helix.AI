@@ -324,12 +324,17 @@ set_verbose(verbose_enabled)
 set_debug(debug_enabled)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-AGENT_PROMPT_PATH = PROJECT_ROOT / "agent.md"
+# Search for agent.md in order: repo root, then docs/
+_AGENT_PROMPT_CANDIDATES = [
+    PROJECT_ROOT / "agent.md",
+    PROJECT_ROOT / "docs" / "agent.md",
+]
+AGENT_PROMPT_PATH = next((p for p in _AGENT_PROMPT_CANDIDATES if p.exists()), None)
 
 # Load system prompt (static, no placeholders)
-try:
+if AGENT_PROMPT_PATH:
     BIOAGENT_SYSTEM_PROMPT = AGENT_PROMPT_PATH.read_text()
-except Exception:
+else:
     BIOAGENT_SYSTEM_PROMPT = (
         "You are BioAgent, an autonomous bioinformatics assistant. "
         "Classify prompts, plan, execute with real tools, and return structured JSON "

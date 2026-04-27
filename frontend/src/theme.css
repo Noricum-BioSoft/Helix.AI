@@ -771,3 +771,19 @@ pre {
   to { transform: rotate(360deg); }
 }
 
+/* Pending history item — thinking dots */
+@keyframes helix-bounce {
+  0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
+  40%           { transform: translateY(-6px); opacity: 1; }
+}
+
+/* Prompt bubble text — matches response typography */
+.prompt-bubble-text {
+  font-size: 1.12rem;
+  line-height: 1.6;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+

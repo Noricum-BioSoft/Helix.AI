@@ -402,33 +402,59 @@ When performing statistical analyses (DE, enrichment, clustering comparisons):
 
 ## 11. Output Format (Strict JSON for Frontend Rendering)
 
-Every final answer must be a single JSON object with the following top-level fields:
+Every final answer that is an advisory, planning, or explanation response **must** use the following canonical `HelixAdvisory` JSON schema.  The backend validates and normalises this schema before sending it to the frontend, so any deviation will be detected and corrected — but producing it correctly the first time avoids lossy normalisation.
 
 ```json
 {
-  "domain": "bioinformatics|non_bioinformatics",
-  "task_type": "qa|analysis|mixed",
-  "status": "success|partial_success|failed|declined",
-  "user_friendly_summary": "",
-  "details_markdown": "",
-  "data_inventory": {
-    "inputs_detected": [],
-    "assumptions": [],
-    "qc_warnings": []
+  "helix_type": "advisory",
+  "title": "Short, descriptive title (e.g. 'ChIP-seq peak calling plan')",
+  "summary": "One-paragraph plain-English summary of the answer or plan.",
+  "classification": {
+    "domain": "bioinformatics",
+    "task_type": "ChIP-seq analysis planning",
+    "feasible": true
   },
-  "artifacts": [],
-  "errors": [],
-  "provenance": {
-    "tools_used": [],
-    "references": [],
-    "commands_run": [],
-    "environment": {
-      "os": "",
-      "container_or_env": ""
+  "sections": [
+    {
+      "heading": "Section heading",
+      "content": "Optional prose content for this section.",
+      "items": [
+        {
+          "label": "Item label",
+          "description": "Optional description.",
+          "examples": ["example1", "example2"],
+          "tools": ["tool1", "tool2"]
+        }
+      ]
     }
-  }
+  ],
+  "workflow_steps": [
+    { "step": 1, "name": "Step name", "description": "What this step does." }
+  ],
+  "requirements": [
+    { "label": "Requirement label", "description": "Details.", "examples": ["hg38"] }
+  ],
+  "questions_for_user": [
+    { "label": "Question text?", "examples": ["option A", "option B"] }
+  ],
+  "next_steps": [
+    "Action item or follow-up instruction."
+  ]
 }
 ```
+
+**Rules:**
+- Always set `"helix_type": "advisory"` — this is the frontend's primary dispatch signal.
+- `title` and `summary` are **required**.
+- Use `sections` for narrative explanations (e.g. "How to interpret peaks", "Quality metrics").  Each section can have `content` (prose) and/or `items` (bulleted entries).
+- Use `workflow_steps` for ordered numbered pipeline steps.
+- Use `requirements` for a flat list of inputs / reference files / tools required.
+- Use `questions_for_user` for any clarifying questions you need answered before proceeding.
+- Use `next_steps` for actionable follow-up items.
+- Omit any field that is empty or not applicable (null / empty array fields are fine to omit).
+- Do **not** invent new top-level keys outside this schema.
+
+For non-advisory responses (tool execution results, plain answers), use `details_markdown` and `user_friendly_summary` as before.
 
 ### Artifact Schemas (examples)
 

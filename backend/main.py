@@ -40,6 +40,7 @@ logger.info("Backend application starting up...")
 # Reload with updated env vars
 
 from backend.history_manager import history_manager, sanitize_command_for_storage
+from backend.advisory_normalizer import normalize_advisory_text
 from backend.tool_schemas import list_tool_schemas
 from backend.context_builder import _truncate_sequence
 from backend.orchestration.action_planner import (
@@ -1685,6 +1686,11 @@ def build_standard_response(
                 break
 
     text = _build_actionable_fallback_text(tool, status, text, truncated_result)
+
+    # Normalise any advisory/planning/explanation JSON to the canonical
+    # HelixAdvisory schema so the frontend has a single, predictable contract.
+    if text:
+        text = normalize_advisory_text(text)
 
     # Download links should only be surfaced for completed/executed outputs.
     # Planning, needs-inputs, and in-progress states should not expose downloads.
