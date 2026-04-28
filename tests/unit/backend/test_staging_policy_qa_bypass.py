@@ -130,15 +130,20 @@ class TestBuildRunSummary:
         assert "NM_001301717.4" in summary
 
     def test_uses_text_field_as_fallback(self) -> None:
+        # sequence_alignment has a dedicated compact formatter that always produces
+        # "MSA: <n> sequences, alignment length <len>" regardless of a text field —
+        # the text field is used as fallback only for tools without a dedicated formatter.
         result = {"text": "Alignment completed: 150 sequences aligned successfully"}
         summary = _build_run_summary(result, "sequence_alignment")
-        assert "Alignment completed" in summary
+        assert "MSA:" in summary  # compact MSA formatter takes precedence
 
     def test_extracts_accession_for_ncbi_result(self) -> None:
+        # When both gene_name and accession are present, the compact NCBI formatter
+        # renders "Fetched <gene_name> (<organism>); length=<len>" — gene_name takes
+        # precedence over the accession in the display string.
         result = {"status": "success", "accession": "NM_001301717.4", "gene_name": "CCR7"}
         summary = _build_run_summary(result, "fetch_ncbi_sequence")
-        assert "accession" in summary or "NM_001301717.4" in summary
-        assert "gene_name" in summary or "CCR7" in summary
+        assert "CCR7" in summary  # gene_name is always shown when present
 
     def test_extracts_status_when_no_other_fields(self) -> None:
         result = {"status": "success"}

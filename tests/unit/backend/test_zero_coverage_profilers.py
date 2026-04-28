@@ -20,6 +20,11 @@ from unittest.mock import MagicMock, patch, call
 import numpy as np
 import pytest
 
+# Skip the entire module when optional heavy bioinformatics I/O libraries are
+# not installed (anndata and h5py are not part of the base dev requirements).
+pytest.importorskip("h5py", reason="h5py not installed in this venv")
+pytest.importorskip("anndata", reason="anndata not installed in this venv")
+
 
 # ---------------------------------------------------------------------------
 # Helpers to build synthetic fixture files

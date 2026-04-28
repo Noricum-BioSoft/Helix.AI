@@ -158,14 +158,19 @@ def _normalise_shape1(obj: Dict[str, Any]) -> HelixAdvisory:
         or obj.get("summary", "")
     )
 
-    # Title – derive from task_type or classification
+    # Title – derive from title field, then task_type, then classification
+    raw_title = obj.get("title", "")
     task_type = (raw_cls or {}).get("task_type", "") if isinstance(raw_cls, dict) else ""
-    title = task_type or "Analysis Plan"
+    title = raw_title or task_type or "Analysis Plan"
 
-    # Requirements sections
+    # Requirements — may be a flat list OR a nested dict of sub-sections
     req = obj.get("requirements", {})
     sections: List[AdvisorySection] = []
-    if isinstance(req, dict):
+    requirements: List[AdvisoryItem] = []
+    if isinstance(req, list):
+        # Flat list → populate requirements directly
+        requirements = [_item_from_dict(i) for i in req]
+    elif isinstance(req, dict):
         for section_key, heading in [
             ("input_data", "Required Input Data"),
             ("reference_files", "Reference Files"),
@@ -196,13 +201,17 @@ def _normalise_shape1(obj: Dict[str, Any]) -> HelixAdvisory:
     questions = [_item_from_dict({"label": q.get("question", ""), **q})
                  for q in (q_raw if isinstance(q_raw, list) else [])]
 
-    # Next steps
-    next_step = obj.get("next_step", {})
-    next_steps: List[str] = []
-    if isinstance(next_step, dict) and next_step.get("message"):
-        next_steps.append(next_step["message"])
-    elif isinstance(next_step, str):
-        next_steps.append(next_step)
+    # Next steps — may be "next_steps" (list) or legacy "next_step" (str/dict)
+    next_steps_raw = obj.get("next_steps") or []
+    next_steps: List[str] = [ns if isinstance(ns, str) else str(ns)
+                              for ns in (next_steps_raw if isinstance(next_steps_raw, list)
+                                         else [next_steps_raw])]
+    if not next_steps:
+        next_step = obj.get("next_step", {})
+        if isinstance(next_step, dict) and next_step.get("message"):
+            next_steps.append(next_step["message"])
+        elif isinstance(next_step, str):
+            next_steps.append(next_step)
 
     return HelixAdvisory(
         title=title,
@@ -210,6 +219,7 @@ def _normalise_shape1(obj: Dict[str, Any]) -> HelixAdvisory:
         classification=classification,
         sections=sections,
         workflow_steps=workflow_steps,
+        requirements=requirements,
         questions_for_user=questions,
         next_steps=next_steps,
     )
@@ -218,7 +228,9 @@ def _normalise_shape1(obj: Dict[str, Any]) -> HelixAdvisory:
 def _normalise_shape3(obj: Dict[str, Any]) -> HelixAdvisory:
     """Normalise the gpt-4.1 plan+answer shape.
 
-    Shape: { classification: str, plan: [str, ...], answer: { section_key: { ... }, ... } }
+    Handles two sub-variants:
+      a) { plan: [str, ...], answer: { section_key: { ... }, ... } }
+      b) { plan: { title, summary, workflow_type }, answer: { sections: [...], next_steps: [...] } }
     """
     raw_cls = obj.get("classification")
     task_type = ""
@@ -227,13 +239,21 @@ def _normalise_shape3(obj: Dict[str, Any]) -> HelixAdvisory:
     elif isinstance(raw_cls, str):
         task_type = raw_cls
 
-    title = task_type.replace("_", " ").title() if task_type else "Analysis Plan"
+    # plan may be a list of step strings OR a dict with title/summary/workflow_type
+    plan_raw = obj.get("plan", [])
+    if isinstance(plan_raw, dict):
+        title = (plan_raw.get("title")
+                 or (plan_raw.get("workflow_type") or task_type or "").replace("_", " ").title()
+                 or "Analysis Plan")
+        summary = plan_raw.get("summary", "")
+        # Prefer workflow_type from plan dict if top-level classification was absent
+        if not task_type:
+            task_type = plan_raw.get("workflow_type", "")
+    else:
+        title = task_type.replace("_", " ").title() if task_type else "Analysis Plan"
+        summary = " ".join(plan_raw) if isinstance(plan_raw, list) else ""
 
-    # Build summary from plan steps
-    plan_steps = obj.get("plan", [])
-    summary = " ".join(plan_steps) if plan_steps else ""
-
-    # Walk the answer dict and turn each key into a section
+    # Walk the answer dict
     answer = obj.get("answer", {})
     sections: List[AdvisorySection] = []
     workflow_steps: List[AdvisoryWorkflowStep] = []
@@ -241,42 +261,53 @@ def _normalise_shape3(obj: Dict[str, Any]) -> HelixAdvisory:
     questions: List[AdvisoryItem] = []
 
     if isinstance(answer, dict):
-        step_counter = 1
-        for section_key, section_val in answer.items():
-            heading = section_key.replace("_", " ").title()
-            if isinstance(section_val, dict):
-                # Flatten sub-keys into items
-                items: List[Union[AdvisoryItem, str]] = []
-                for sub_key, sub_val in section_val.items():
-                    sub_heading = sub_key.replace("_", " ").title()
-                    if isinstance(sub_val, list):
-                        for entry in sub_val:
-                            if isinstance(entry, str):
-                                items.append(AdvisoryItem(label=entry))
-                            elif isinstance(entry, dict):
-                                items.append(_item_from_dict(entry))
-                    elif isinstance(sub_val, str):
-                        items.append(AdvisoryItem(label=sub_heading, description=sub_val))
-                sections.append(AdvisorySection(heading=heading, items=items if items else None))
-            elif isinstance(section_val, list):
-                items_list: List[Union[AdvisoryItem, str]] = []
-                for entry in section_val:
-                    if isinstance(entry, str):
-                        # Could be a workflow step description
-                        workflow_steps.append(AdvisoryWorkflowStep(
-                            step=step_counter, name=entry
-                        ))
-                        step_counter += 1
-                    elif isinstance(entry, dict):
-                        items_list.append(_item_from_dict(entry))
-                if items_list:
-                    sections.append(AdvisorySection(heading=heading, items=items_list))
-            elif isinstance(section_val, str):
-                sections.append(AdvisorySection(heading=heading, content=section_val))
+        # Sub-variant b: answer has explicit "sections" / "next_steps" keys
+        if "sections" in answer or "next_steps" in answer:
+            for s in (answer.get("sections") or []):
+                if isinstance(s, dict):
+                    sections.append(_section_from_shape2(s))
+        else:
+            # Sub-variant a: freeform section_key → section_value mapping
+            step_counter = 1
+            for section_key, section_val in answer.items():
+                heading = section_key.replace("_", " ").title()
+                if isinstance(section_val, dict):
+                    items: List[Union[AdvisoryItem, str]] = []
+                    for sub_key, sub_val in section_val.items():
+                        sub_heading = sub_key.replace("_", " ").title()
+                        if isinstance(sub_val, list):
+                            for entry in sub_val:
+                                if isinstance(entry, str):
+                                    items.append(AdvisoryItem(label=entry))
+                                elif isinstance(entry, dict):
+                                    items.append(_item_from_dict(entry))
+                        elif isinstance(sub_val, str):
+                            items.append(AdvisoryItem(label=sub_heading, description=sub_val))
+                    sections.append(AdvisorySection(heading=heading, items=items if items else None))
+                elif isinstance(section_val, list):
+                    items_list: List[Union[AdvisoryItem, str]] = []
+                    for entry in section_val:
+                        if isinstance(entry, str):
+                            workflow_steps.append(AdvisoryWorkflowStep(
+                                step=step_counter, name=entry
+                            ))
+                            step_counter += 1
+                        elif isinstance(entry, dict):
+                            items_list.append(_item_from_dict(entry))
+                    if items_list:
+                        sections.append(AdvisorySection(heading=heading, items=items_list))
+                elif isinstance(section_val, str):
+                    sections.append(AdvisorySection(heading=heading, content=section_val))
     elif isinstance(answer, str):
         summary = answer
 
-    next_steps_raw = obj.get("next_steps") or obj.get("next_step") or []
+    # next_steps from answer.next_steps (sub-variant b) or obj.next_steps
+    next_steps_raw = (
+        (answer.get("next_steps") if isinstance(answer, dict) else None)
+        or obj.get("next_steps")
+        or obj.get("next_step")
+        or []
+    )
     next_steps: List[str] = [ns if isinstance(ns, str) else str(ns)
                               for ns in (next_steps_raw if isinstance(next_steps_raw, list)
                                          else [next_steps_raw])]

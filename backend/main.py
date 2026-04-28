@@ -3424,6 +3424,10 @@ async def execute(req: CommandRequest, request: Request):
                 execution_path="fallback_router",
                 validation_execution_path="validation_message",
             )
+    except HTTPException:
+        # Re-raise HTTP exceptions (e.g. 409 policy blocks, 429 rate limits) so
+        # FastAPI returns the correct status code to the client.
+        raise
     except Exception as e:
         return CustomJSONResponse({
             "success": False,
