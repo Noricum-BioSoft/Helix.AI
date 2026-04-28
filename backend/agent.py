@@ -1869,9 +1869,17 @@ class CommandProcessor:
                 "errors": [{"code": "POLICY_VIOLATION", "message": str(e), "severity": "error"}]
             }
         
-        # Classify intent (using injected classifier if provided, otherwise default)
-        intent = self._get_intent_classifier()(command)
-        
+        # Classify intent concurrently with message preparation.
+        # classify_intent uses llm.invoke() (synchronous/blocking) so we run it in a
+        # thread to avoid blocking the event loop.  _prepare_messages is CPU-only and
+        # also runs in a thread so both complete in parallel.
+        _classifier_fn = self._get_intent_classifier()
+        intent, _msg_result = await asyncio.gather(
+            asyncio.to_thread(_classifier_fn, command),
+            asyncio.to_thread(self._prepare_messages, command, session_context or {}),
+        )
+        input_message, system_message, session_brief = _msg_result
+
         # Step 2: Route based on intent (validate next agent)
         try:
             next_agent = self.handoff_policy.get_next_agent_for_intent(intent.intent)
@@ -1886,10 +1894,7 @@ class CommandProcessor:
                 "message": f"Intent routing violation: {e}",
                 "errors": [{"code": "POLICY_VIOLATION", "message": str(e), "severity": "error"}]
             }
-        
-        # Prepare messages
-        input_message, system_message, session_brief = self._prepare_messages(command, session_context or {})
-        
+
         # Create session config
         temp_session_config = self._create_session_config(session_id)
         

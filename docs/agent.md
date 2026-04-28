@@ -398,6 +398,7 @@ Every final answer that is an advisory, planning, or explanation response **must
 - Use `next_steps` for actionable follow-up items.
 - Omit any field that is empty or not applicable (null / empty array fields are fine to omit).
 - Do **not** invent new top-level keys outside this schema.
+- **Be concise:** `workflow_steps[*].description` ≤ 20 words. `requirements[*].description` ≤ 15 words. `summary` ≤ 40 words. Brevity is required — the frontend renders these as compact cards, not prose paragraphs.
 
 For non-advisory responses (tool execution results, plain answers), use `details_markdown` and `user_friendly_summary` as before.
 
