@@ -22,11 +22,26 @@ from backend.intent_classifier import classify_intent, IntentDecision
 # ---------------------------------------------------------------------------
 
 def _mock_llm(intent_labels: list[str]) -> MagicMock:
-    """Return a mock LLM that responds with the given intent labels."""
+    """Return a mock LLM that responds with the new direct qa/execute format.
+
+    Maps legacy label lists to the new schema so tests exercise the same
+    intent logic without needing an actual LLM call.
+    """
     import json
+    has_action = "action" in intent_labels
+    has_question = "question" in intent_labels
+    if has_action:
+        direct_intent = "execute"
+        reason = f"test: action label present ({intent_labels})"
+    elif has_question:
+        direct_intent = "qa"
+        reason = f"test: question label only ({intent_labels})"
+    else:
+        direct_intent = "execute"
+        reason = f"test: default execute ({intent_labels})"
     llm = MagicMock()
     llm.invoke.return_value = MagicMock(
-        content=json.dumps({"prompt": "test", "intent": intent_labels})
+        content=json.dumps({"intent": direct_intent, "reason": reason})
     )
     return llm
 
@@ -77,7 +92,7 @@ def test_llm_action_label_maps_to_execute(mock_get_llm):
     mock_get_llm.return_value = _mock_llm(["action"])
     decision = classify_intent("Run FastQC on my reads")
     assert decision.intent == "execute"
-    assert "llm_classified_action" in decision.reason
+    assert decision.reason  # reason string is present
     mock_get_llm.assert_called()
 
 
@@ -86,7 +101,7 @@ def test_llm_question_label_maps_to_qa(mock_get_llm):
     mock_get_llm.return_value = _mock_llm(["question"])
     decision = classify_intent("What is a FASTQ file?")
     assert decision.intent == "qa"
-    assert "llm_classified_question" in decision.reason
+    assert decision.reason  # reason string is present
 
 
 @patch("backend.intent_classifier._get_llm")

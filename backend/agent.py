@@ -91,6 +91,38 @@ from backend.routing_keywords import INLINE_PIPELINE_TOOL_MAP
 logger = logging.getLogger(__name__)
 
 
+def _log_token_usage(result: dict, label: str = "agent") -> None:
+    """Extract and log OpenAI token-usage (including prompt-cache hits) from a
+    LangGraph/LangChain invoke result.  Fires an INFO line like:
+        [token-usage/qa] prompt=8042  cached=7680 (95%)  completion=312
+    so you can verify prompt-caching without needing the OpenAI dashboard.
+    """
+    try:
+        if not isinstance(result, dict):
+            return
+        for msg in reversed(result.get("messages", [])):
+            meta = getattr(msg, "response_metadata", None) or {}
+            usage = meta.get("token_usage") or meta.get("usage") or {}
+            if not usage:
+                continue
+            prompt     = usage.get("prompt_tokens", 0)
+            completion = usage.get("completion_tokens", 0)
+            details    = usage.get("prompt_tokens_details") or {}
+            cached     = details.get("cached_tokens", 0)
+            model      = meta.get("model_name") or meta.get("model") or "unknown"
+            logger.info(
+                "[token-usage/%s] model=%s  prompt=%d  cached=%d (%.0f%%)  completion=%d",
+                label, model, prompt, cached,
+                100 * cached / prompt if prompt else 0,
+                completion,
+            )
+            # Full details at debug level for investigation
+            logger.debug("[token-usage/%s] full response_metadata: %s", label, meta)
+            return  # only log the last AI message
+    except Exception:
+        pass  # never let logging crash a request
+
+
 # ============================================================================
 # HANDOFF POLICY: Enforces agent routing rules per agent-responsibilities.md
 # ============================================================================
@@ -646,6 +678,8 @@ class CommandProcessor:
             timeout=60.0  # Longer timeout for Q&A responses
         )
         
+        _log_token_usage(result, label="qa")
+
         # Deduplicate messages
         if isinstance(result, dict) and "messages" in result:
             result["messages"] = self._deduplicate_messages(result.get("messages", []))
@@ -1669,6 +1703,8 @@ class CommandProcessor:
                 timeout=30.0
             )
             
+            _log_token_usage(result, label="planning")
+
             if isinstance(result, dict) and "messages" in result:
                 result["messages"] = self._deduplicate_messages(result.get("messages", []))
             
