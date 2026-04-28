@@ -77,6 +77,76 @@ export const helixApi = {
     return response.data;
   },
 
+  /**
+   * Stream a command execution via SSE (POST /execute/stream).
+   *
+   * Immediately fires `onProgress` with the first "received" event so the UI
+   * can show activity, then keeps calling `onProgress` with heartbeat phases
+   * until the agent finishes.  `onResult` is called exactly once with the full
+   * response payload (same shape as `executeCommand`).  `onError` is called on
+   * network or server errors.
+   *
+   * Returns a cleanup function — call it on component unmount to abort.
+   */
+  executeCommandStream: (
+    command: string,
+    sessionId: string | undefined,
+    onProgress: (phase: string, message: string) => void,
+    onResult: (data: unknown) => void,
+    onError: (err: Error) => void,
+  ): (() => void) => {
+    const controller = new AbortController();
+
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/execute/stream`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ command, session_id: sessionId }),
+          signal: controller.signal,
+        });
+
+        if (!res.ok || !res.body) {
+          onError(new Error(`HTTP ${res.status}: ${res.statusText}`));
+          return;
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() ?? '';   // keep any partial line
+
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            try {
+              const event = JSON.parse(line.slice(6));
+              if (event.type === 'progress') {
+                onProgress(event.phase ?? '', event.message ?? '');
+              } else if (event.type === 'result') {
+                onResult(event.data);
+              } else if (event.type === 'error') {
+                onError(new Error(event.detail ?? 'Server error'));
+              }
+            } catch { /* malformed line — skip */ }
+          }
+        }
+      } catch (err) {
+        if ((err as Error).name !== 'AbortError') {
+          onError(err instanceof Error ? err : new Error(String(err)));
+        }
+      }
+    })();
+
+    return () => controller.abort();
+  },
+
   // Dispatch a previously-planned pipeline (execute_plan=true flag)
   executePipelinePlan: async (command: string, sessionId?: string) => {
     const response = await axios.post(`${API_BASE_URL}/execute`, {

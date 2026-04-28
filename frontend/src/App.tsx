@@ -233,18 +233,10 @@ function App() {
     return Array.from(s);
   }, [history]);
   // On mount: restore session from storage if valid (and restore history), otherwise create new; check server health
-  // Cycle through informative loading messages while waiting for the backend
+  // Reset loading message when loading finishes.  While loading, SSE progress
+  // events drive setLoadingMsg() directly so no timer is needed.
   useEffect(() => {
-    if (!loading) {
-      setLoadingMsg(BIOINF_LOADING_MESSAGES[0]);
-      return;
-    }
-    let idx = 0;
-    const id = setInterval(() => {
-      idx = (idx + 1) % BIOINF_LOADING_MESSAGES.length;
-      setLoadingMsg(BIOINF_LOADING_MESSAGES[idx]);
-    }, 2800);
-    return () => clearInterval(id);
+    if (!loading) setLoadingMsg(BIOINF_LOADING_MESSAGES[0]);
   }, [loading]);
 
   useEffect(() => {
@@ -469,10 +461,28 @@ function App() {
       // Uploaded files are now persisted server-side under the session directory.
       // Commands should reference session context rather than embedding file contents.
       
-      // ALWAYS use the agent endpoint - never bypass it
-      // The agent will handle routing, tool selection, and execution
-      console.log('Calling agent via /execute endpoint...');
-      response = await helixApi.executeCommand(finalCommand, sessionId || undefined);
+      // Use SSE streaming endpoint for improved perceived latency.
+      // Progress events update the loading message; the final "result" event
+      // resolves this promise with the same payload as the REST endpoint.
+      console.log('Calling agent via /execute/stream endpoint…');
+      response = await new Promise<unknown>((resolve, reject) => {
+        const cleanup = helixApi.executeCommandStream(
+          finalCommand,
+          sessionId || undefined,
+          (phase, message) => {
+            // Update the cycling loading message from SSE progress events
+            setLoadingMsg(message || phase);
+          },
+          (data) => {
+            cleanup();
+            resolve(data);
+          },
+          (err) => {
+            cleanup();
+            reject(err);
+          },
+        );
+      });
       console.log('Agent response:', response);
 
       // ── Async pipeline job — switch to SSE mode ────────────────────────

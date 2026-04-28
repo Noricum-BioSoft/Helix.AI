@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi import File, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import Dict, Any, Optional, List
 import asyncio
@@ -3434,6 +3434,66 @@ async def execute(req: CommandRequest, request: Request):
             "error": str(e),
             "session_id": req.session_id
         })
+
+
+@app.post("/execute/stream")
+async def execute_stream(req: CommandRequest, request: Request):
+    """
+    SSE wrapper around /execute for improved perceived latency.
+
+    Immediately emits a ``progress`` event so the frontend can show activity
+    while the agent processes the request, then emits a final ``result`` event
+    carrying the same JSON payload as the regular /execute endpoint.
+
+    Event wire format (newline-delimited SSE):
+        data: {"type": "progress", "phase": "...", "message": "..."}\n\n
+        data: {"type": "result",   "data": {...}}\n\n
+        data: {"type": "error",    "detail": "...", "status": 4xx}\n\n
+    """
+    import itertools
+
+    _PROGRESS_PHASES = [
+        ("classifying", "Classifying your request\u2026"),
+        ("planning",    "Building analysis plan\u2026"),
+        ("generating",  "Generating advisory\u2026"),
+        ("finalizing",  "Finalising response\u2026"),
+    ]
+
+    async def _event_generator():
+        # Acknowledge immediately — this is the key latency win
+        yield 'data: {"type":"progress","phase":"received","message":"Analyzing your request\u2026"}\n\n'
+
+        try:
+            task: asyncio.Task = asyncio.create_task(execute(req, request))
+            phase_cycle = itertools.cycle(_PROGRESS_PHASES)
+
+            while not task.done():
+                await asyncio.sleep(2.5)
+                if not task.done():
+                    phase, msg = next(phase_cycle)
+                    yield f'data: {json.dumps({"type": "progress", "phase": phase, "message": msg})}\n\n'
+
+            # Retrieve the CustomJSONResponse returned by execute()
+            response_obj = task.result()
+            body_bytes: bytes = response_obj.body  # populated by JSONResponse.__init__
+            yield f'data: {json.dumps({"type": "result", "data": json.loads(body_bytes.decode("utf-8"))})}\n\n'
+
+        except HTTPException as http_exc:
+            yield f'data: {json.dumps({"type": "error", "status": http_exc.status_code, "detail": http_exc.detail})}\n\n'
+        except Exception as exc:
+            logger.exception("SSE /execute/stream generator error: %s", exc)
+            yield f'data: {json.dumps({"type": "error", "detail": str(exc)})}\n\n'
+
+    return StreamingResponse(
+        _event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection":     "keep-alive",
+        },
+    )
+
 
 @app.post("/agent")
 async def agent_command(req: AgentCommandRequest, request: Request):
