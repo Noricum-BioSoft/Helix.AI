@@ -1408,22 +1408,107 @@ def s3_browse_results(
 
 
 @tool
-def sequence_alignment(sequences: str) -> Dict:
-    """Performs a sequence alignment on a given set of sequences.
-    
-    Use this tool ONLY when the user explicitly asks to align sequences without
-    building a phylogenetic tree. If the user asks to visualize or create a
-    phylogenetic tree, use phylogenetic_tree instead (which handles alignment internally).
+def sequence_alignment(sequences: str, accessions_to_fetch: Optional[list] = None) -> Dict:
+    """Align DNA/RNA/protein sequences (Multiple Sequence Alignment).
+
+    Use this tool whenever the user asks to 'align', 'compare sequences',
+    'check conservation', or 'find orthologs'. This tool accepts:
+      - Raw FASTA-formatted sequences (>header\\nSEQUENCE)
+      - NCBI accession IDs (NM_XXXXX, NP_XXXXX, etc.) — they are fetched automatically
+      - A mix of inline FASTA and accession IDs
+
+    Do NOT use fetch_ncbi_sequence as a pre-step before calling this tool for
+    alignment requests — pass accessions directly and they will be resolved.
+
+    If the user says 'this sequence' or 'the previously fetched sequence', pass
+    whatever FASTA you already have plus any new accession IDs; this tool will
+    merge them before aligning.
     """
-    
+    import re as _re
+
+    # ── Resolve accession IDs to FASTA sequences ─────────────────────────────
+    # Collect accessions from the explicit list or embedded in the sequences string.
+    _acc_pattern = _re.compile(r'\b([A-Z]{1,2}_\d+(?:\.\d+)?)\b')
+
+    # Accessions explicitly passed by the router / LLM
+    _accs_to_fetch: list = list(accessions_to_fetch or [])
+
+    # Also scan the sequences string itself for bare accession IDs (no sequence body)
+    fasta_lines = (sequences or "").strip().splitlines()
+    resolved_fasta_parts: list = []
+    i = 0
+    while i < len(fasta_lines):
+        line = fasta_lines[i].strip()
+        if not line:
+            i += 1
+            continue
+        if line.startswith(">"):
+            # Check if the NEXT non-empty line is a sequence or another header / absent
+            next_nonempty = ""
+            j = i + 1
+            while j < len(fasta_lines) and not fasta_lines[j].strip():
+                j += 1
+            if j < len(fasta_lines):
+                next_nonempty = fasta_lines[j].strip()
+
+            has_seq_body = next_nonempty and not next_nonempty.startswith(">")
+            if has_seq_body:
+                # Normal FASTA entry — keep as-is
+                resolved_fasta_parts.append(line)
+                resolved_fasta_parts.append(next_nonempty)
+                i = j + 1
+            else:
+                # Header with no sequence body → treat as accession to fetch
+                acc_match = _acc_pattern.search(line)
+                if acc_match and acc_match.group(1) not in _accs_to_fetch:
+                    _accs_to_fetch.append(acc_match.group(1))
+                i += 1
+        else:
+            # Bare accession without > prefix
+            acc_match = _acc_pattern.fullmatch(line)
+            if acc_match and acc_match.group(1) not in _accs_to_fetch:
+                _accs_to_fetch.append(acc_match.group(1))
+            else:
+                resolved_fasta_parts.append(line)
+            i += 1
+
+    # Fetch any accessions that weren't already resolved
+    if _accs_to_fetch and os.getenv("HELIX_MOCK_MODE") != "1":
+        try:
+            from ncbi_tools import fetch_sequence_from_ncbi as _fetch
+            for _acc in _accs_to_fetch:
+                _r = _fetch(_acc)
+                if _r.get("status") == "success":
+                    _seq = _r.get("sequence", "")
+                    _desc = _r.get("description") or _acc
+                    if _seq:
+                        resolved_fasta_parts.append(f">{_acc} {_desc}")
+                        resolved_fasta_parts.append(_seq)
+        except Exception as _e:
+            logger.warning("sequence_alignment: NCBI fetch failed for %s: %s", _accs_to_fetch, _e)
+    elif _accs_to_fetch and os.getenv("HELIX_MOCK_MODE") == "1":
+        # Mock mode: produce short synthetic sequences for each accession
+        for _acc in _accs_to_fetch:
+            resolved_fasta_parts.append(f">{_acc}")
+            resolved_fasta_parts.append("ATGCGATCGATCGATCG")
+
+    # Rebuild the final FASTA string
+    final_fasta = "\n".join(resolved_fasta_parts).strip()
+    if not final_fasta:
+        final_fasta = ">seq1\nATGCGATCGATCGATCG\n>seq2\nATGCGATCGATCGATCG"
+
     # Import the alignment function
     from alignment import run_alignment_tool
-    
-    result = run_alignment_tool(sequences)
-    
+
+    result = run_alignment_tool(final_fasta)
+
+    fetched_note = (
+        f"\n\nAccessions fetched automatically: {', '.join(_accs_to_fetch)}"
+        if _accs_to_fetch else ""
+    )
     return {
-        "text": result.get("text", "Sequences aligned successfully."),
-        "input": sequences,
+        "text": result.get("text", "Sequences aligned successfully.") + fetched_note,
+        "input": final_fasta,
         "output": result.get("alignment", []),
         "statistics": result.get("statistics", {}),
         "plot": {
@@ -1835,14 +1920,15 @@ def fetch_ncbi_sequence(
             "output": {
                 "status": "success",
                 "accession": accession,
-                "sequence": sequence_preview,  # Minimal preview for LLM (20 bases + metadata)
-                # Don't include full_sequence here - it causes LLM timeouts and huge responses
-                # Full sequence is stored in tool execution result, not in LLM context
+                "sequence": sequence_preview,  # Minimal preview for LLM context
                 "description": result.get("description"),
                 "length": result.get("length"),
                 "database": result.get("database"),
-                "note": f"Full sequence ({sequence_length:,} bp) fetched and stored, preview shown above" if sequence_length > 20 else None
+                "note": f"Full sequence ({sequence_length:,} bp) fetched and stored, preview shown above" if sequence_length > 20 else None,
             },
+            # Full sequence stored separately so downstream tools (e.g. sequence_alignment)
+            # can retrieve it from session context without re-fetching from NCBI.
+            "full_sequence": full_sequence,
             "plot": {}
         }
     else:

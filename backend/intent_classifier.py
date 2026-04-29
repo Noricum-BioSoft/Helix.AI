@@ -6,7 +6,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, List
+from typing import Literal, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -86,103 +86,56 @@ def _get_llm():
     )
 
 
-def _map_intent_labels_to_binary(intent_labels: List[str]) -> tuple[Intent, str]:
-    """
-    Map multi-label intent classification to binary decision (execute or qa).
-    
-    Args:
-        intent_labels: List of intent labels from LLM (e.g., ["question", "action", "data"])
-        
-    Returns:
-        Tuple of (intent, reason) where:
-        - intent: "execute" or "qa"
-        - reason: String describing the classification reason
-    """
-    has_action = "action" in intent_labels
-    has_question = "question" in intent_labels
-    
-    if has_action:
-        # If action is present, it's an execute request
-        intent: Intent = "execute"
-        reason = f"llm_classified_action_{','.join(intent_labels)}"
-    elif has_question and not has_action:
-        # Only question, no action → Q&A
-        intent = "qa"
-        reason = f"llm_classified_question_{','.join(intent_labels)}"
-    else:
-        # Default to execute for ambiguous cases (safer for command-style UI)
-        intent = "execute"
-        reason = f"llm_classified_default_{','.join(intent_labels) if intent_labels else 'no_labels'}"
-    
-    return intent, reason
-
-
 def _classify_intent_with_llm(text: str) -> IntentDecision:
     """
-    Classify intent using LLM agent based on intent-detector-agent.md prompt.
-    
-    Returns IntentDecision with intent ("execute" or "qa") and reason.
-    Maps multi-label output from agent to binary decision:
-    - If "action" is in labels → "execute"
-    - If only "question" (no "action") → "qa"
-    - Otherwise → "execute" (safer default for command-style UI)
-    """
-    try:
-        llm = _get_llm()
-        
-        # Build the classification request
-        # The system prompt defines the task and format. Pass the user prompt directly
-        # as the agent description specifies - it should return JSON with the prompt included
-        user_message = text.strip()
-        
-        # Invoke LLM with system prompt and user prompt
-        # LangChain ChatModel accepts messages as dicts with "role" and "content"
-        # The system prompt (INTENT_DETECTOR_SYSTEM_PROMPT) instructs the LLM to return JSON
-        # with "prompt" (the original user message) and "intent" (array of labels)
-        
-        # Debug: Verify prompt is loaded
-        logger.debug(f"Loaded system prompt from {INTENT_DETECTOR_PROMPT_PATH}: {INTENT_DETECTOR_SYSTEM_PROMPT}")
+    Classify intent using LLM based on intent-detector-agent.md prompt.
 
-        if not INTENT_DETECTOR_SYSTEM_PROMPT or not INTENT_DETECTOR_SYSTEM_PROMPT.strip():
-            logger.error(f"INTENT_DETECTOR_SYSTEM_PROMPT is empty! Path was: {INTENT_DETECTOR_PROMPT_PATH}")
-            raise ValueError("System prompt is empty - cannot classify intent")
-        
-        logger.debug(f"Using system prompt ({len(INTENT_DETECTOR_SYSTEM_PROMPT)} chars) for intent classification")
-        
-        messages = [
-            {"role": "system", "content": INTENT_DETECTOR_SYSTEM_PROMPT},
-            {"role": "user", "content": user_message}
-        ]
-        
-        response = llm.invoke(messages)
-        response_content = response.content.strip()
-        
-        # Parse JSON response
-        # Try to extract JSON from response (handle cases where LLM adds extra text)
-        json_start = response_content.find("{")
-        json_end = response_content.rfind("}") + 1
-        
-        if json_start >= 0 and json_end > json_start:
-            json_str = response_content[json_start:json_end]
-            result = json.loads(json_str)
+    The prompt now returns {"intent": "qa"|"execute", "reason": "..."} directly,
+    so no multi-label translation is needed.
+    """
+    llm = _get_llm()
+
+    if not INTENT_DETECTOR_SYSTEM_PROMPT or not INTENT_DETECTOR_SYSTEM_PROMPT.strip():
+        raise ValueError("INTENT_DETECTOR_SYSTEM_PROMPT is empty — check agents/intent-detector-agent.md")
+
+    messages = [
+        {"role": "system", "content": INTENT_DETECTOR_SYSTEM_PROMPT},
+        {"role": "user", "content": text.strip()},
+    ]
+
+    response = llm.invoke(messages)
+    response_content = response.content.strip()
+
+    # Strip optional markdown fences the model might add
+    response_content = re.sub(r"^```(?:json)?\s*", "", response_content)
+    response_content = re.sub(r"\s*```$", "", response_content)
+
+    # Extract JSON object
+    json_start = response_content.find("{")
+    json_end = response_content.rfind("}") + 1
+    if json_start >= 0 and json_end > json_start:
+        result = json.loads(response_content[json_start:json_end])
+    else:
+        result = json.loads(response_content)
+
+    raw_intent = str(result.get("intent", "")).lower().strip()
+    reason: str = str(result.get("reason", f"llm_{raw_intent}"))
+
+    # Accept both the new direct format and the old multi-label list format
+    if isinstance(result.get("intent"), list):
+        # Legacy: map old multi-label array to binary
+        labels = result["intent"]
+        if "action" in labels:
+            raw_intent = "execute"
+        elif "question" in labels:
+            raw_intent = "qa"
         else:
-            # Fallback: try parsing the whole response
-            result = json.loads(response_content)
-        
-        # Extract intent labels
-        intent_labels: List[str] = result.get("intent", [])
-        if not isinstance(intent_labels, list):
-            intent_labels = []
-        
-        # Map multi-label to binary decision
-        intent, reason = _map_intent_labels_to_binary(intent_labels)
-        
-        logger.info(f"Intent classified by LLM: {intent} (labels: {intent_labels}, reason: {reason})")
-        return IntentDecision(intent=intent, reason=reason)
-        
-    except Exception as e:
-        logger.warning(f"LLM intent classification failed: {e}")
-        raise
+            raw_intent = "execute"
+        reason = f"llm_legacy_labels_{','.join(labels)}"
+
+    intent: Intent = raw_intent if raw_intent in ("qa", "execute") else "execute"
+    logger.info("Intent classified: %s (%s)", intent, reason)
+    return IntentDecision(intent=intent, reason=reason)
 
 
 
@@ -202,8 +155,6 @@ def classify_intent(
     - WAITING_FOR_APPROVAL / CLARIFICATION / INPUTS → "execute"
     - Prior runs + rerun cue → "execute"
     """
-    from typing import Optional  # noqa: PLC0415 – local to avoid circular at module level
-
     # ── Checkpoint-state shortcuts ────────────────────────────────────────────
     if workflow_state:
         _ws = (workflow_state or "").upper()
@@ -225,7 +176,3 @@ def classify_intent(
     # No heuristic fallback — if LLM is unavailable the exception propagates.
     # A wrong silent answer is worse than a visible error.
     return _classify_intent_with_llm(text)
-
-
-# Keep Optional importable at module level for type annotations
-from typing import Optional  # noqa: E402

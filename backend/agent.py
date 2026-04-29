@@ -91,6 +91,38 @@ from backend.routing_keywords import INLINE_PIPELINE_TOOL_MAP
 logger = logging.getLogger(__name__)
 
 
+def _log_token_usage(result: dict, label: str = "agent") -> None:
+    """Extract and log OpenAI token-usage (including prompt-cache hits) from a
+    LangGraph/LangChain invoke result.  Fires an INFO line like:
+        [token-usage/qa] prompt=8042  cached=7680 (95%)  completion=312
+    so you can verify prompt-caching without needing the OpenAI dashboard.
+    """
+    try:
+        if not isinstance(result, dict):
+            return
+        for msg in reversed(result.get("messages", [])):
+            meta = getattr(msg, "response_metadata", None) or {}
+            usage = meta.get("token_usage") or meta.get("usage") or {}
+            if not usage:
+                continue
+            prompt     = usage.get("prompt_tokens", 0)
+            completion = usage.get("completion_tokens", 0)
+            details    = usage.get("prompt_tokens_details") or {}
+            cached     = details.get("cached_tokens", 0)
+            model      = meta.get("model_name") or meta.get("model") or "unknown"
+            logger.info(
+                "[token-usage/%s] model=%s  prompt=%d  cached=%d (%.0f%%)  completion=%d",
+                label, model, prompt, cached,
+                100 * cached / prompt if prompt else 0,
+                completion,
+            )
+            # Full details at debug level for investigation
+            logger.debug("[token-usage/%s] full response_metadata: %s", label, meta)
+            return  # only log the last AI message
+    except Exception:
+        pass  # never let logging crash a request
+
+
 # ============================================================================
 # HANDOFF POLICY: Enforces agent routing rules per agent-responsibilities.md
 # ============================================================================
@@ -324,12 +356,17 @@ set_verbose(verbose_enabled)
 set_debug(debug_enabled)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-AGENT_PROMPT_PATH = PROJECT_ROOT / "agent.md"
+# Search for agent.md in order: repo root, then docs/
+_AGENT_PROMPT_CANDIDATES = [
+    PROJECT_ROOT / "agent.md",
+    PROJECT_ROOT / "docs" / "agent.md",
+]
+AGENT_PROMPT_PATH = next((p for p in _AGENT_PROMPT_CANDIDATES if p.exists()), None)
 
 # Load system prompt (static, no placeholders)
-try:
+if AGENT_PROMPT_PATH:
     BIOAGENT_SYSTEM_PROMPT = AGENT_PROMPT_PATH.read_text()
-except Exception:
+else:
     BIOAGENT_SYSTEM_PROMPT = (
         "You are BioAgent, an autonomous bioinformatics assistant. "
         "Classify prompts, plan, execute with real tools, and return structured JSON "
@@ -641,6 +678,8 @@ class CommandProcessor:
             timeout=60.0  # Longer timeout for Q&A responses
         )
         
+        _log_token_usage(result, label="qa")
+
         # Deduplicate messages
         if isinstance(result, dict) and "messages" in result:
             result["messages"] = self._deduplicate_messages(result.get("messages", []))
@@ -1281,84 +1320,75 @@ class CommandProcessor:
         
         def capture_tool_call_sync():
             """
-            Synchronous function to stream agent execution and capture first tool call.
-            
-            This function iterates through stream events as they're generated in real-time.
-            Each event represents a node update in the LangGraph execution graph.
+            Stream agent execution, capturing either:
+            - A tool_call (AIMessage.tool_calls) → return (tool_mapping, None)
+            - A prose response (no tool selected) → return (None, prose_text)
+
+            Returns a 2-tuple so the caller can skip invoke() entirely:
+            if a tool was found → use it; if not → prose is the stream's answer.
             """
             print("[CommandProcessor] 🔄 Starting agent.stream() with stream_mode='updates'...")
-            print("[CommandProcessor]    This will yield events as each graph node updates its state")
-            print("[CommandProcessor]    Looking for tool_calls in 'agent' or 'tools' node events...")
             event_count = 0
+            last_prose: str = ""
             try:
-                # agent.stream() is a generator that yields events as the graph executes
-                # Each iteration of this loop receives one event (one node update)
                 for event in self.agent.stream(
                     {"messages": [system_message, input_message]},
                     session_config,
-                    stream_mode="updates"  # Yields events when nodes update their state
+                    stream_mode="updates"
                 ):
                     event_count += 1
-                    # Each event is a dict with node names as keys
-                    # Example: {"agent": {...}} or {"tools": {...}} or {"agent": {...}, "tools": {...}}
                     node_names = list(event.keys()) if isinstance(event, dict) else []
                     print(f"[CommandProcessor] 📡 Stream event #{event_count}: nodes={node_names}")
-                    print(f"[CommandProcessor]    Event structure: {list(event.keys()) if isinstance(event, dict) else 'not a dict'}")
-                    
-                    # Check this event for tool calls
+
+                    # Check for tool call first
                     tool_mapping = self._extract_tool_from_stream_event(event)
                     if tool_mapping:
-                        print(f"[CommandProcessor] ✅ Tool call found in stream event #{event_count}!")
-                        print(f"[CommandProcessor]    Tool: {tool_mapping['tool_name']}")
-                        print(f"[CommandProcessor]    Params: {tool_mapping['parameters']}")
-                        print(f"[CommandProcessor]    Stopping stream early (no need to wait for full execution)")
-                        return tool_mapping
-                    else:
-                        print(f"[CommandProcessor]    No tool call detected in this event")
-                
-                print(f"[CommandProcessor] ⚠️  Streamed through {event_count} events but no tool call was detected")
-                print(f"[CommandProcessor]    Possible reasons:")
-                print(f"[CommandProcessor]      - Agent decided to answer directly (no tool needed)")
-                print(f"[CommandProcessor]      - Tool call format didn't match expected structure")
-                print(f"[CommandProcessor]      - Tool call was in an event we didn't check properly")
+                        print(f"[CommandProcessor] ✅ Tool call: {tool_mapping['tool_name']} — stopping stream early")
+                        return (tool_mapping, None)
+
+                    # Capture prose from final agent messages (no tool_calls present)
+                    agent_node = event.get("agent") if isinstance(event, dict) else None
+                    if agent_node:
+                        msgs = agent_node.get("messages", []) if isinstance(agent_node, dict) else []
+                        for msg in (msgs if isinstance(msgs, list) else []):
+                            if hasattr(msg, "content") and msg.content and not getattr(msg, "tool_calls", None):
+                                last_prose = str(msg.content)
+
+                print(f"[CommandProcessor] ⚠️  Stream completed ({event_count} events), no tool call detected")
             except Exception as e:
-                print(f"[CommandProcessor] ❌ Error during streaming tool call capture: {e}")
+                print(f"[CommandProcessor] ❌ Error during stream: {e}")
                 import traceback
                 traceback.print_exc()
-                # Don't return None here - let the exception propagate or return None explicitly
-                return None
-        
-        tool_mapping = None  # Initialize to avoid UnboundLocalError
+            return (None, last_prose or None)
+
+        tool_mapping = None
+        stream_prose: str | None = None
         try:
-            print("[CommandProcessor] 🚀 Attempting to capture tool call via streaming (timeout: 30s)...")
-            tool_mapping = await asyncio.wait_for(
+            print("[CommandProcessor] 🚀 Streaming agent (timeout: 18s)...")
+            result_tuple = await asyncio.wait_for(
                 asyncio.to_thread(capture_tool_call_sync),
-                timeout=30.0
+                timeout=18.0
             )
+            tool_mapping, stream_prose = result_tuple if isinstance(result_tuple, tuple) else (result_tuple, None)
             if tool_mapping:
-                print(f"[CommandProcessor] ✅ Successfully captured tool call from stream: {tool_mapping.get('tool_name')}")
+                print(f"[CommandProcessor] ✅ Tool captured from stream: {tool_mapping.get('tool_name')}")
             else:
-                print("[CommandProcessor] ⚠️  No tool call captured from stream - will try fallback methods")
+                print(f"[CommandProcessor] ⚠️  No tool from stream — prose length: {len(stream_prose or '')}")
         except asyncio.TimeoutError:
             print("⚠️  Agent streaming timed out after 30s")
-            print("🔍 Attempting to extract tool call from agent state...")
-            # Try to extract from state
             if self.memory:
                 extracted = _extract_tool_call_from_state(self.memory, session_config)
                 if extracted:
-                    print(f"[CommandProcessor] ✅ Extracted tool call from agent state: {extracted.get('tool_name')}")
+                    print(f"[CommandProcessor] ✅ Extracted tool from state: {extracted.get('tool_name')}")
                     tool_mapping = extracted
-                else:
-                    print("[CommandProcessor] ⚠️  Could not extract tool call from agent state")
-            else:
-                print("[CommandProcessor] ⚠️  No memory available to extract tool call from state")
         except Exception as e:
-            print(f"[CommandProcessor] ❌ Exception during stream capture: {e}")
+            print(f"[CommandProcessor] ❌ Exception during stream: {e}")
             import traceback
             traceback.print_exc()
             tool_mapping = None
-        
-        return tool_mapping
+
+        # Return both tool_mapping and captured prose so process_command can skip invoke()
+        return tool_mapping, stream_prose
     
     def _extract_tool_from_result_messages(self, result: Dict) -> Optional[Dict]:
         """
@@ -1456,62 +1486,55 @@ class CommandProcessor:
         }
     
     async def _try_router_fallback(self, command: str, session_context: Dict) -> Optional[Dict]:
-        """Try deterministic router fallback for safe tools."""
+        """Ask the LLM router which tool to use and return its decision.
+
+        The router already received the full ROUTER_TOOLS list, so we trust its
+        output for any tool name it returns — no separate allowlist needed.
+        The only exception is ``handle_natural_command`` (the router's explicit
+        "I don't know" signal) and a small set of LLM-unsafe tool names that
+        must never be dispatched directly (destructive or privileged operations).
+
+        This replaces the old hand-maintained ``safe_tools`` set, which had to
+        be kept in sync with ROUTER_TOOLS manually and silently discarded valid
+        LLM decisions whenever a newly-added tool was forgotten.
+        """
+        # Tools that must never be dispatched via the router fast-path.
+        # This is an EXCLUSION list, not an allowlist — all other router
+        # decisions are trusted because the LLM already validated against the
+        # full ROUTER_TOOLS menu.
+        _NEVER_DISPATCH = {
+            "handle_natural_command",  # router's "I don't know" signal
+        }
+
         try:
             router = self._get_router()
             print(f"[CommandProcessor] Router type: {type(router)}, is Mock: {type(router).__name__ == 'Mock'}")
             tool_name, parameters = router.route_command(command, session_context or {})
-            print(f"[CommandProcessor] Router returned: tool_name={tool_name}, parameters={parameters}")
-            
-            safe_tools = {
-                "toolbox_inventory",
-                "read_merging",
-                "read_trimming",
-                "fastqc_quality_analysis",
-                "sequence_alignment",
-                "mutate_sequence",
-                "plasmid_visualization",
-                "phylogenetic_tree",
-                "clustering_analysis",
-                "variant_selection",
-                "fetch_ncbi_sequence",
-                "query_uniprot",
-                "lookup_go_term",
-                "bulk_rnaseq_analysis",
-                "single_cell_analysis",
-                # Iterative workflow tools
-                "patch_and_rerun",
-                "bio_rerun",
-                "bio_diff_runs",
-                "local_edit_visualization",
-                "local_update_scatter_x_scale",
-                "visualize_job_results",
-            }
-            
-            # Consensus must not be routed to sequence_alignment: consensus is derived FROM
-            # alignment (e.g. majority-rule per column), not "run alignment again". See
-            # docs/CONSENSUS_FROM_ALIGNMENT_GAP.md.
+            print(f"[CommandProcessor] Router returned: tool_name={tool_name}")
+
+            if not tool_name or tool_name in _NEVER_DISPATCH:
+                print(f"[CommandProcessor] Router returned {tool_name!r} — no specific tool identified")
+                return None
+
+            # Consensus must not be routed to sequence_alignment: consensus is
+            # derived FROM alignment output, not a re-run of alignment itself.
             _consensus_phrases = (
                 "consensus sequence", "calculate consensus", "compute consensus",
                 "consensus of", "consensus from", "derived from the alignment",
             )
             _cmd_lower = (command or "").lower()
-            _wants_consensus = any(p in _cmd_lower for p in _consensus_phrases)
-            if tool_name == "sequence_alignment" and _wants_consensus:
-                print("[CommandProcessor] Router returned sequence_alignment but command asks for consensus -> use tool generator")
+            if tool_name == "sequence_alignment" and any(p in _cmd_lower for p in _consensus_phrases):
+                print("[CommandProcessor] Router → sequence_alignment but command asks for consensus → tool generator")
                 return None
 
-            if tool_name and tool_name in safe_tools:
-                print(f"[CommandProcessor] Deterministic router fallback -> {tool_name}")
-                return {
-                    "tool_mapping": {"tool_name": tool_name, "parameters": parameters or {}},
-                    "tool_name": tool_name,
-                    "parameters": parameters or {},
-                    "status": "tool_mapped",
-                    "message": f"Deterministic router fallback identified tool: {tool_name}. Execution will be handled by router.",
-                }
-            else:
-                print(f"[CommandProcessor] Router returned tool_name={tool_name}, not in safe_tools or None")
+            print(f"[CommandProcessor] Router fallback → {tool_name}")
+            return {
+                "tool_mapping": {"tool_name": tool_name, "parameters": parameters or {}},
+                "tool_name": tool_name,
+                "parameters": parameters or {},
+                "status": "tool_mapped",
+                "message": f"Router identified tool: {tool_name}.",
+            }
         except Exception as e:
             print(f"[CommandProcessor] ⚠️  Router fallback exception: {e}")
             import traceback
@@ -1665,12 +1688,12 @@ class CommandProcessor:
         
         # Try to extract tool mapping (this is the current implementation)
         # In a future iteration, this would return a full WorkflowPlan
-        tool_mapping = await self._extract_tool_mapping_from_stream(
+        tool_mapping, _plan_prose = await self._extract_tool_mapping_from_stream(
             input_message, system_message, session_config
         )
-        
+
         if not tool_mapping:
-            # Fallback to invoke
+            # Fallback to invoke (planning path can afford one extra LLM round-trip)
             result = await asyncio.wait_for(
                 asyncio.to_thread(
                     self.agent.invoke,
@@ -1680,6 +1703,8 @@ class CommandProcessor:
                 timeout=30.0
             )
             
+            _log_token_usage(result, label="planning")
+
             if isinstance(result, dict) and "messages" in result:
                 result["messages"] = self._deduplicate_messages(result.get("messages", []))
             
@@ -1844,9 +1869,17 @@ class CommandProcessor:
                 "errors": [{"code": "POLICY_VIOLATION", "message": str(e), "severity": "error"}]
             }
         
-        # Classify intent (using injected classifier if provided, otherwise default)
-        intent = self._get_intent_classifier()(command)
-        
+        # Classify intent concurrently with message preparation.
+        # classify_intent uses llm.invoke() (synchronous/blocking) so we run it in a
+        # thread to avoid blocking the event loop.  _prepare_messages is CPU-only and
+        # also runs in a thread so both complete in parallel.
+        _classifier_fn = self._get_intent_classifier()
+        intent, _msg_result = await asyncio.gather(
+            asyncio.to_thread(_classifier_fn, command),
+            asyncio.to_thread(self._prepare_messages, command, session_context or {}),
+        )
+        input_message, system_message, session_brief = _msg_result
+
         # Step 2: Route based on intent (validate next agent)
         try:
             next_agent = self.handoff_policy.get_next_agent_for_intent(intent.intent)
@@ -1861,10 +1894,7 @@ class CommandProcessor:
                 "message": f"Intent routing violation: {e}",
                 "errors": [{"code": "POLICY_VIOLATION", "message": str(e), "severity": "error"}]
             }
-        
-        # Prepare messages
-        input_message, system_message, session_brief = self._prepare_messages(command, session_context or {})
-        
+
         # Create session config
         temp_session_config = self._create_session_config(session_id)
         
@@ -1997,69 +2027,87 @@ class CommandProcessor:
                     print("[CommandProcessor] 📋 Using workflow_planner + workflow_executor...")
                     return await self._handle_multi_step_workflow(command, session_id, session_context or {})
                 
-                print("[CommandProcessor] 🎯 Single-tool execution detected - attempting to identify tool to use...")
-                print("[CommandProcessor] 📋 Strategy: stream → invoke → router → tool-generator")
-                
-                # Try to extract tool mapping from stream
-                tool_mapping = await self._extract_tool_mapping_from_stream(
+                print("[CommandProcessor] 🎯 Single-tool execution: stream → router → tool-generator")
+
+                # Step 1: stream — intercept tool call before it executes inside the agent
+                tool_mapping, stream_prose = await self._extract_tool_mapping_from_stream(
                     input_message, system_message, temp_session_config
                 )
-                
+
                 if tool_mapping and tool_mapping.get("tool_name"):
-                    print(f"[CommandProcessor] ✅ Returning tool mapping from stream (no execution): {tool_mapping['tool_name']}")
+                    print(f"[CommandProcessor] ✅ Tool from stream: {tool_mapping['tool_name']}")
                     return self._build_tool_mapped_response(tool_mapping)
-                
-                # Fallback: try regular invoke
-                # Streaming didn't capture a tool call, so we run the agent to completion
-                # and check the final result messages for tool calls
-                print("[CommandProcessor] ⚠️  Streaming didn't capture tool call - tool call may not have been in stream events")
-                print("[CommandProcessor] 🔄 Fallback: Running agent.invoke() to completion to check final result messages for tool calls...")
-                print("[CommandProcessor]    (invoke() runs the full agent execution and returns all messages, slower but more reliable)")
-                import uuid
-                fallback_session_id = f"{session_id}_mapping_{uuid.uuid4().hex[:8]}"
-                fallback_session_config = {"configurable": {"thread_id": fallback_session_id}}
-                
-                result = await asyncio.wait_for(
-                    asyncio.to_thread(self.agent.invoke, {"messages": [system_message, input_message]}, fallback_session_config),
-                    timeout=30.0
-                )
-                
-                print(f"[CommandProcessor] ✅ agent.invoke() completed - checking {len(result.get('messages', [])) if isinstance(result, dict) else 0} messages for tool calls...")
-                
-                # Deduplicate messages
-                if isinstance(result, dict) and "messages" in result:
-                    result["messages"] = self._deduplicate_messages(result.get("messages", []))
-                
-                # Try to extract tool from result
-                tool_mapping = self._extract_tool_from_result_messages(result)
-                if tool_mapping:
-                    print(f"[CommandProcessor] ✅ Found tool call in invoke() result: {tool_mapping.get('tool_name')}")
-                    return self._build_tool_mapped_response(tool_mapping)
-                else:
-                    print("[CommandProcessor] ⚠️  No tool call found in invoke() result messages - will try router fallback")
-                
-                # Try router fallback
-                print("[CommandProcessor] 🔄 Attempting router fallback...")
+
+                # Stream ran to completion with no tool call.
+                # Skipping invoke() — it would ask the same LLM the same question, adding ~15 s
+                # with no new information. Instead proceed directly to router → tool-generator.
+                print("[CommandProcessor] ⚠️  Stream: no tool call — skipping invoke(), going to router")
+
+                # Step 2: router — fast LLM call over the known ROUTER_TOOLS list
                 router_result = await self._try_router_fallback(command, session_context or {})
-                if router_result:
-                    print(f"[CommandProcessor] ✅ Router fallback succeeded: {router_result.get('tool_name')}")
+                if router_result and router_result.get("tool_name") not in (None, "handle_natural_command"):
+                    print(f"[CommandProcessor] ✅ Router: {router_result.get('tool_name')}")
                     return router_result
                 else:
-                    print("[CommandProcessor] ⚠️  Router fallback returned None")
-                
-                # Try tool generator fallback
-                toolgen_result = await self._try_tool_generator_fallback(command, session_id, session_context or {}, intent)
-                if toolgen_result:
-                    return toolgen_result
-                
-                # Return original result
-                msg_count = len(result.get("messages", [])) if isinstance(result, dict) else 0
-                print(f"[CommandProcessor] result: {msg_count} messages in response (no tool mapping extracted)")
-                return result
+                    print("[CommandProcessor] ⚠️  Router: no specific tool — proceeding to tool-generator")
+
+                # Step 3: tool-generator — only run when the user has uploaded input files.
+                # Without real data there is nothing to execute; generating code speculatively
+                # takes 50+ s and the result can't be run.  Instead return the advisory plan
+                # the stream already produced and let the Plan → Approve → Execute loop handle
+                # execution once the user uploads data and approves.
+                _has_uploads = bool(
+                    (session_context or {}).get("uploaded_files")
+                    or (session_context or {}).get("last_fetched_fasta")
+                    or (session_context or {}).get("file_profile")
+                )
+                if _has_uploads:
+                    print("[CommandProcessor] ℹ️  Input files present — running tool-generator")
+                    toolgen_result = await self._try_tool_generator_fallback(command, session_id, session_context or {}, intent)
+                    if toolgen_result:
+                        print("[CommandProcessor] ✅ Tool-generator produced a result")
+                        return toolgen_result
+                else:
+                    print("[CommandProcessor] ℹ️  No input files — skipping tool-generator, returning advisory plan")
+
+                # Return the advisory plan from the stream (+ router steps if available)
+                advisory_text = stream_prose or ""
+                router_steps = (router_result or {}).get("router_reasoning", {}).get("suggested_steps", []) if router_result else []
+                if router_steps and advisory_text:
+                    steps_md = "\n".join(f"{i+1}. {s}" for i, s in enumerate(router_steps))
+                    advisory_text = advisory_text.rstrip() + f"\n\n**Suggested pipeline steps:**\n{steps_md}"
+                elif router_steps:
+                    steps_md = "\n".join(f"{i+1}. {s}" for i, s in enumerate(router_steps))
+                    advisory_text = f"**Suggested pipeline steps:**\n{steps_md}"
+
+                if advisory_text:
+                    print("[CommandProcessor] ℹ️  Returning advisory plan as response")
+                    return {
+                        "status": "success",
+                        "text": advisory_text,
+                        "tool": "agent",
+                        "data": {"results": {}, "visuals": [], "sequences": [], "links": []},
+                    }
+
+                # All paths exhausted — generate a minimal advisory so the user
+                # gets a meaningful response instead of a generic error.
+                print("[CommandProcessor] ⚠️  All paths exhausted — returning generic advisory")
+                return {
+                    "status": "success",
+                    "tool": "agent",
+                    "text": (
+                        "Helix understood your request but needs input data before it can "
+                        "execute. Please upload your data files (FASTQ, BAM, CSV, FASTA, "
+                        "etc.) and re-submit your request — Helix will then identify the "
+                        "right analysis pipeline and run it automatically.\n\n"
+                        "If you have specific files already available, you can also provide "
+                        "S3 paths directly in your message."
+                    ),
+                    "data": {"results": {}, "visuals": [], "sequences": [], "links": []},
+                }
                 
             except asyncio.TimeoutError:
-                print("⚠️  Agent tool mapping timed out after 30s")
-                print("🔍 Attempting to extract tool call from agent state...")
+                print("⚠️  Agent tool mapping timed out")
                 if self.memory:
                     extracted = _extract_tool_call_from_state(self.memory, temp_session_config)
                     if extracted:

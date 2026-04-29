@@ -351,15 +351,33 @@ class TestRouterFallback:
         assert result["status"] == "tool_mapped"
     
     @pytest.mark.asyncio
-    async def test_router_fallback_unsafe_tool(self, processor, mock_router_mock):
-        """Test that unsafe tools are not returned."""
-        mock_router_mock.route_command.return_value = ("unsafe_tool", {})
-        # Set the private _router attribute that _get_router() uses
+    async def test_router_fallback_handle_natural_command_blocked(self, processor, mock_router_mock):
+        """Test that handle_natural_command (the router's 'I don't know' signal) returns None.
+
+        Since commit 384de18 the router uses an exclusion list rather than a
+        safe-tools allowlist.  The only entry blocked is handle_natural_command;
+        all other tool names returned by the router are trusted because the LLM
+        already validated against the full ROUTER_TOOLS menu.
+        """
+        mock_router_mock.route_command.return_value = ("handle_natural_command", {})
         processor._router = mock_router_mock
-        
-        result = await processor._try_router_fallback("unsafe command", {})
-        
+
+        result = await processor._try_router_fallback("some command", {})
+
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_router_fallback_unknown_tool_trusted(self, processor, mock_router_mock):
+        """Any tool name the router returns (other than the exclusion list) is
+        trusted and dispatched — the LLM already validated it against ROUTER_TOOLS."""
+        mock_router_mock.route_command.return_value = ("some_specialist_tool", {"param": "value"})
+        processor._router = mock_router_mock
+
+        result = await processor._try_router_fallback("do something", {})
+
+        assert result is not None
+        assert result["tool_name"] == "some_specialist_tool"
+        assert result["status"] == "tool_mapped"
     
     @pytest.mark.asyncio
     async def test_router_fallback_exception(self, processor, mock_router_mock):
@@ -494,25 +512,33 @@ class TestFullProcessFlow:
     
     @pytest.mark.asyncio
     async def test_process_timeout_handling(self, processor, mock_agent):
-        """Test handling of timeouts during tool mapping."""
-        # Set execute intent
+        """When the streaming agent times out, the system must degrade gracefully.
+
+        Since commit e5d4c2d the streaming timeout is caught in
+        _extract_tool_mapping_from_stream and the processor continues through the
+        router → tool-generator → advisory fallback chain instead of propagating
+        an exception.  In unit-test conditions (no LLM keys, no uploaded files) the
+        chain exhausts and returns an advisory plan dict — never raises.
+        """
         def execute_intent_classifier(command: str) -> IntentDecision:
             return IntentDecision(intent="execute", reason="Command")
-        
+
         processor._intent_classifier = execute_intent_classifier
         processor.agent = mock_agent
-        processor.memory = None  # No memory, so it will raise TimeoutError
-        
-        # Patch asyncio.wait_for to raise TimeoutError immediately
+        processor.memory = None  # no state to extract a partial tool call from
+
         import asyncio
         from unittest.mock import patch
-        
-        with patch('backend.agent.asyncio.wait_for') as mock_wait_for:
+
+        with patch("backend.agent.asyncio.wait_for") as mock_wait_for:
             mock_wait_for.side_effect = asyncio.TimeoutError("Simulated timeout")
-            
-            # Should raise TimeoutError
-            with pytest.raises(TimeoutError, match="Agent tool mapping timed out"):
-                await processor.process("command", "session1")
+
+            # Must NOT raise — returns an advisory fallback dict instead
+            result = await processor.process("command", "session1")
+
+        assert isinstance(result, dict), "Expected a dict response, not an exception"
+        # The fallback must carry some content so the frontend can render something
+        assert result.get("status") or result.get("text") or result.get("tool_mapping")
 
 
 class TestSessionConfig:

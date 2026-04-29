@@ -115,7 +115,16 @@ _ANALYTICAL_PATTERNS = re.compile(
           |run|execute                        # These are all clearly NOT approvals.
           |change|update|modify|adjust|fix
           |switch|replace|rename|remove|delete
-          |scale|set|revert|rerun|patch)\b
+          |scale|set|revert|rerun|patch
+          |assemble|assembly|scaffold         # genome assembly verbs
+          |phase|infer|reconstruct|profile    # additional bioinformatics verbs
+          |detect|identify|find|discover      # search/discovery verbs
+          |predict|classify|train|model       # ML verbs
+          |sequence|map|call|genotype         # sequencing-specific verbs
+          |type|annotate|characterize|assess  # characterization verbs
+          |integrate|combine|intersect        # data integration verbs
+          |decompose|deconvolve|impute        # advanced analysis verbs
+          )\b
     """,
     re.VERBOSE | re.IGNORECASE,
 )

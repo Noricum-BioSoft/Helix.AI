@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const normalizeBaseUrl = (value?: string) => {
+export const normalizeBaseUrl = (value?: string): string | undefined => {
   const trimmed = value?.trim();
   if (!trimmed) return undefined;
   return trimmed.replace(/\/+$/, '');
@@ -75,6 +75,76 @@ export const helixApi = {
       session_id: sessionId 
     });
     return response.data;
+  },
+
+  /**
+   * Stream a command execution via SSE (POST /execute/stream).
+   *
+   * Immediately fires `onProgress` with the first "received" event so the UI
+   * can show activity, then keeps calling `onProgress` with heartbeat phases
+   * until the agent finishes.  `onResult` is called exactly once with the full
+   * response payload (same shape as `executeCommand`).  `onError` is called on
+   * network or server errors.
+   *
+   * Returns a cleanup function — call it on component unmount to abort.
+   */
+  executeCommandStream: (
+    command: string,
+    sessionId: string | undefined,
+    onProgress: (phase: string, message: string) => void,
+    onResult: (data: unknown) => void,
+    onError: (err: Error) => void,
+  ): (() => void) => {
+    const controller = new AbortController();
+
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/execute/stream`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ command, session_id: sessionId }),
+          signal: controller.signal,
+        });
+
+        if (!res.ok || !res.body) {
+          onError(new Error(`HTTP ${res.status}: ${res.statusText}`));
+          return;
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() ?? '';   // keep any partial line
+
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            try {
+              const event = JSON.parse(line.slice(6));
+              if (event.type === 'progress') {
+                onProgress(event.phase ?? '', event.message ?? '');
+              } else if (event.type === 'result') {
+                onResult(event.data);
+              } else if (event.type === 'error') {
+                onError(new Error(event.detail ?? 'Server error'));
+              }
+            } catch { /* malformed line — skip */ }
+          }
+        }
+      } catch (err) {
+        if ((err as Error).name !== 'AbortError') {
+          onError(err instanceof Error ? err : new Error(String(err)));
+        }
+      }
+    })();
+
+    return () => controller.abort();
   },
 
   // Dispatch a previously-planned pipeline (execute_plan=true flag)
@@ -275,5 +345,62 @@ export const helixApi = {
     console.warn('⚠️ synthesisSubmission is deprecated. Use executeCommand() instead.');
     const response = await axios.post(`${API_BASE_URL}/tools/synthesis-submission`, params);
     return response.data;
-  }
+  },
+
+  /**
+   * Subscribe to real-time Nextflow pipeline progress via Server-Sent Events.
+   *
+   * Opens an EventSource to GET /jobs/{jobId}/stream and fires callbacks as
+   * Nextflow lifecycle events arrive.  Returns the EventSource so the caller
+   * can close it manually if needed (e.g. component unmount).
+   *
+   * @param jobId        - The job_id returned by POST /execute for pipeline tools.
+   * @param onEvent      - Called for each intermediate event (process_completed, etc.).
+   * @param onDone       - Called once when the pipeline completes successfully.
+   * @param onError      - Called when the pipeline fails or the connection errors.
+   * @returns The underlying EventSource instance.
+   */
+  subscribeJobStream: (
+    jobId: string,
+    onEvent: (event: { type: string; process?: string; trace?: object }) => void,
+    onDone: (result: { job_id: string; result_files: string[] }) => void,
+    onError: (err: Error) => void,
+  ): EventSource => {
+    const source = new EventSource(`${API_BASE_URL}/jobs/${jobId}/stream`);
+
+    // Intermediate progress events
+    source.addEventListener('process_submitted',  (e: MessageEvent) => {
+      try { onEvent({ type: 'process_submitted',  ...JSON.parse(e.data) }); } catch (_) { /* ignore */ }
+    });
+    source.addEventListener('process_completed',  (e: MessageEvent) => {
+      try { onEvent({ type: 'process_completed',  ...JSON.parse(e.data) }); } catch (_) { /* ignore */ }
+    });
+    source.addEventListener('started', (e: MessageEvent) => {
+      try { onEvent({ type: 'started', ...JSON.parse(e.data) }); } catch (_) { /* ignore */ }
+    });
+    source.addEventListener('heartbeat', () => {
+      // keep-alive ping — no action needed
+    });
+
+    // Terminal events
+    source.addEventListener('completed', (e: MessageEvent) => {
+      try { onDone(JSON.parse(e.data)); } catch (_) { /* ignore */ }
+      source.close();
+    });
+    source.addEventListener('failed', (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data);
+        onError(new Error(data.error || 'Pipeline failed'));
+      } catch (_) {
+        onError(new Error('Pipeline failed'));
+      }
+      source.close();
+    });
+    source.addEventListener('error', (e: Event) => {
+      onError(new Error('SSE connection error'));
+      source.close();
+    });
+
+    return source;
+  },
 }; 

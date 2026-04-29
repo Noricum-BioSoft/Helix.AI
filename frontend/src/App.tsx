@@ -7,6 +7,9 @@ import { API_BASE_URL, helixApi } from './services/helixApi';
 import type { UploadedFileResponse } from './services/helixApi';
 import { SchemaPreviewPanel } from './components/SchemaPreviewPanel';
 import { AnalysisPlanCard } from './components/AnalysisPlanCard';
+import { CapabilityGrid } from './components/CapabilityGrid';
+import { FollowUpChips } from './components/FollowUpChips';
+import { getContextualPlaceholder } from './utils/followUpSuggestions';
 import { CommandParser, ParsedCommand } from './utils/commandParser';
 import { PlasmidDataVisualizer, PlasmidRepresentativesVisualizer } from './components/PlasmidVisualizer';
 import { PhylogeneticTree } from './components/PhylogeneticTree';
@@ -27,24 +30,12 @@ import { getDemoScenarioById, getDemoScenarioByTool, getDemoScenarioByCommandAnd
 import { ThinkingIndicator, ActivityIndicator } from './components/ThinkingIndicator';
 
 const SESSION_STORAGE_KEY = 'helix_session_id';
-const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
-const MAX_UPLOAD_MB = 20;
-const ALLOWED_UPLOAD_EXTENSIONS = [
-  // Sequence / FASTA / FASTQ
-  '.fasta',
-  '.fa',
-  '.fas',
-  '.fastq',
-  '.fq',
-  '.gz',
-  // Tabular / structured data
-  '.csv',
-  '.tsv',
-  '.xlsx',
-  '.xls',
-  // Generic text
-  '.txt',
-];
+import {
+  MAX_UPLOAD_BYTES,
+  MAX_UPLOAD_MB,
+  ALLOWED_UPLOAD_EXTENSIONS,
+  validateSelectedFiles,
+} from './utils/uploadValidation';
 
 interface HistoryItem {
   input: string;
@@ -56,7 +47,19 @@ interface HistoryItem {
   /** Bioinformatics run tracking IDs, populated from BioOrchestrator responses */
   run_id?: string;
   parent_run_id?: string;
+  /** Temporary ID used to match a 'pending' placeholder with its resolved response */
+  pendingId?: string;
 }
+
+const BIOINF_LOADING_MESSAGES = [
+  'Analyzing your request…',
+  'Consulting the bioinformatics knowledge base…',
+  'Evaluating workflow requirements…',
+  'Identifying required tools and inputs…',
+  'Preparing a detailed plan…',
+  'Checking tool dependencies…',
+  'Almost ready…',
+];
 
 /** Map backend session history entries to frontend HistoryItem[] (newest first). */
 function sessionHistoryToItems(session: { history?: Array<{ command?: string; tool?: string; result?: any; metadata?: any; run_id?: string; timestamp?: string }> }): HistoryItem[] {
@@ -104,6 +107,7 @@ function App() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [agentLoading, setAgentLoading] = useState(false);
+  const [loadingMsg, setLoadingMsg] = useState(BIOINF_LOADING_MESSAGES[0]);
   const [serverStatus, setServerStatus] = useState<string>('unknown');
   const [dragActive, setDragActive] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -229,6 +233,12 @@ function App() {
     return Array.from(s);
   }, [history]);
   // On mount: restore session from storage if valid (and restore history), otherwise create new; check server health
+  // Reset loading message when loading finishes.  While loading, SSE progress
+  // events drive setLoadingMsg() directly so no timer is needed.
+  useEffect(() => {
+    if (!loading) setLoadingMsg(BIOINF_LOADING_MESSAGES[0]);
+  }, [loading]);
+
   useEffect(() => {
     const initializeApp = async () => {
       if (isInitialized) return; // Prevent duplicate initialization
@@ -310,37 +320,6 @@ function App() {
       // ignore storage errors
     }
     return res.session_id;
-  };
-
-  const validateSelectedFiles = (files: File[]): { accepted: File[]; rejected: UploadedSessionFile[] } => {
-    const accepted: File[] = [];
-    const rejected: UploadedSessionFile[] = [];
-    files.forEach((file) => {
-      const lowerName = file.name.toLowerCase();
-      const hasValidExt = ALLOWED_UPLOAD_EXTENSIONS.some((ext) => lowerName.endsWith(ext))
-        || lowerName.endsWith('.fastq.gz')
-        || lowerName.endsWith('.fq.gz');
-      if (!hasValidExt) {
-        rejected.push({
-          name: file.name,
-          size: file.size,
-          status: 'failed',
-          error: 'Unsupported type — accepted: FASTA/FASTQ (.fa .fas .fasta .fastq .fq .gz), tabular (.csv .tsv .xlsx .xls), or .txt',
-        });
-        return;
-      }
-      if (file.size > MAX_UPLOAD_BYTES) {
-        rejected.push({
-          name: file.name,
-          size: file.size,
-          status: 'failed',
-          error: `Exceeds ${MAX_UPLOAD_MB}MB`,
-        });
-        return;
-      }
-      accepted.push(file);
-    });
-    return { accepted, rejected };
   };
 
   const handleUploadFiles = async (files: File[]) => {
@@ -447,7 +426,19 @@ function App() {
     clearInputsAfter: boolean = true
   ) => {
     if (!commandText.trim()) return;
-    
+
+    // Immediately show user message + thinking card — don't wait for the backend
+    const pendingId = `pending-${Date.now()}`;
+    const pendingItem: HistoryItem = {
+      input: commandText,
+      output: null,
+      type: 'pending',
+      timestamp: new Date(),
+      pendingId,
+    };
+    setHistory(prev => [pendingItem, ...prev]);
+    setTimeout(() => historyTopRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+
     setLoading(true);
     const activityId = addActivity('Processing your request...');
     
@@ -470,12 +461,126 @@ function App() {
       // Uploaded files are now persisted server-side under the session directory.
       // Commands should reference session context rather than embedding file contents.
       
-      // ALWAYS use the agent endpoint - never bypass it
-      // The agent will handle routing, tool selection, and execution
-      console.log('Calling agent via /execute endpoint...');
-      response = await helixApi.executeCommand(finalCommand, sessionId || undefined);
+      // Use SSE streaming endpoint for improved perceived latency.
+      // Progress events update the loading message; the final "result" event
+      // resolves this promise with the same payload as the REST endpoint.
+      console.log('Calling agent via /execute/stream endpoint…');
+      response = await new Promise<unknown>((resolve, reject) => {
+        const cleanup = helixApi.executeCommandStream(
+          finalCommand,
+          sessionId || undefined,
+          (phase, message) => {
+            // Update the cycling loading message from SSE progress events
+            setLoadingMsg(message || phase);
+          },
+          (data) => {
+            cleanup();
+            resolve(data);
+          },
+          (err) => {
+            cleanup();
+            reject(err);
+          },
+        );
+      });
       console.log('Agent response:', response);
-      
+
+      // ── Async pipeline job — switch to SSE mode ────────────────────────
+      // When a pipeline tool (chip_seq_analysis, etc.) is dispatched, the
+      // backend returns {job_id, status: 'submitted'} immediately instead of
+      // a synchronous result.  Open an EventSource to receive live progress.
+      if ((response as any).job_id && (response as any).status === 'submitted') {
+        const jobId    = (response as any).job_id as string;
+        const pipeline = (response as any).pipeline || (response as any).tool || 'pipeline';
+
+        // Augment the raw response so the renderer can show a "submitted" card
+        const submittedResponse = {
+          ...(response as any),
+          _pipelineJob: {
+            jobId,
+            pipeline,
+            status: 'submitted' as string,
+            steps:  [] as Array<{ type: string; process?: string }>,
+            streamUrl: (response as any).stream_url || `/jobs/${jobId}/stream`,
+          },
+        };
+
+        const historyItem: HistoryItem = {
+          input:     commandText,
+          output:    submittedResponse,
+          type:      'agent',
+          timestamp: new Date(),
+          scenarioId: scenarioIdOverride ?? pendingScenarioId,
+        };
+
+        setPendingScenarioId(undefined);
+        setHistory(prev => prev.map(item => item.pendingId === pendingId ? historyItem : item));
+        setTimeout(() => historyTopRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
+        updateActivity(activityId, 'completed');
+
+        // Open the SSE stream and update the history item in-place as events arrive
+        helixApi.subscribeJobStream(
+          jobId,
+          (evt) => {
+            setHistory(prev => prev.map(item => {
+              if (!item.output?._pipelineJob || item.output._pipelineJob.jobId !== jobId) return item;
+              return {
+                ...item,
+                output: {
+                  ...item.output,
+                  _pipelineJob: {
+                    ...item.output._pipelineJob,
+                    status: 'running',
+                    steps:  [...(item.output._pipelineJob.steps || []), evt],
+                  },
+                },
+              };
+            }));
+          },
+          (result) => {
+            setHistory(prev => prev.map(item => {
+              if (!item.output?._pipelineJob || item.output._pipelineJob.jobId !== jobId) return item;
+              return {
+                ...item,
+                output: {
+                  ...item.output,
+                  status: 'completed',
+                  text: `Pipeline **${pipeline}** completed. ${result.result_files?.length ?? 0} output file(s) ready.`,
+                  _pipelineJob: {
+                    ...item.output._pipelineJob,
+                    status: 'completed',
+                    resultFiles: result.result_files || [],
+                  },
+                },
+              };
+            }));
+          },
+          (err) => {
+            setHistory(prev => prev.map(item => {
+              if (!item.output?._pipelineJob || item.output._pipelineJob.jobId !== jobId) return item;
+              return {
+                ...item,
+                output: {
+                  ...item.output,
+                  status: 'error',
+                  text: `Pipeline **${pipeline}** failed: ${err.message}`,
+                  _pipelineJob: {
+                    ...item.output._pipelineJob,
+                    status: 'failed',
+                    error: err.message,
+                  },
+                },
+              };
+            }));
+          },
+        );
+
+        setLoading(false);
+        if (clearInputsAfter) setCommand('');
+        return;   // skip the normal synchronous history push below
+      }
+      // ── end async pipeline job ─────────────────────────────────────────
+
       // Update session ID if the backend created one automatically
       if ((response as any).session_id && !sessionId) {
         const sid = (response as any).session_id;
@@ -578,7 +683,8 @@ function App() {
       console.log('🔍 Response result keys:', (response as any).result ? Object.keys((response as any).result) : 'No result');
       
       setPendingScenarioId(undefined);
-      setHistory(prev => [historyItem, ...prev]);
+      // Replace the pending placeholder with the resolved item
+      setHistory(prev => prev.map(item => item.pendingId === pendingId ? historyItem : item));
       setTimeout(() => historyTopRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
       updateActivity(activityId, 'completed');
       
@@ -596,7 +702,8 @@ function App() {
         scenarioId: scenarioIdOverride ?? pendingScenarioId,
       };
       
-      setHistory(prev => [historyItem, ...prev]);
+      // Replace the pending placeholder with the error item
+      setHistory(prev => prev.map(item => item.pendingId === pendingId ? historyItem : item));
       setTimeout(() => historyTopRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
     } finally {
       if (clearInputsAfter) {
@@ -2075,6 +2182,42 @@ function App() {
     }
 
     if (finalText) {
+      // ── Advisory JSON detection ──────────────────────────────────────────
+      // The backend normalises advisory responses to { helix_type: "advisory", ... }.
+      // Also handle legacy / cached variants with or without code-fence wrapping.
+      {
+        let parseCandidate = finalText.trimStart();
+        // Strip fenced code blocks (```json ... ``` or ``` ... ```)
+        if (parseCandidate.startsWith('```')) {
+          const fenceMatch = parseCandidate.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+          if (fenceMatch) parseCandidate = fenceMatch[1].trim();
+        }
+        if (parseCandidate.startsWith('{')) {
+          try {
+            const maybeAdvisory = JSON.parse(parseCandidate);
+            if (maybeAdvisory && typeof maybeAdvisory === 'object') {
+              const isAdvisory = (
+                // Canonical (backend-normalised)
+                maybeAdvisory.helix_type === 'advisory' ||
+                // Legacy shape 1: planning advisor
+                maybeAdvisory.classification ||
+                maybeAdvisory.recommended_workflow ||
+                (maybeAdvisory.requirements && !maybeAdvisory.domain) ||
+                maybeAdvisory.minimum_information_needed_from_you ||
+                // Legacy shape 2: explanation advisor
+                (maybeAdvisory.type === 'answer' && Array.isArray(maybeAdvisory.sections)) ||
+                (Array.isArray(maybeAdvisory.sections) && maybeAdvisory.summary)
+              );
+              if (isAdvisory) {
+                return <div>{renderAdvisoryJSON(maybeAdvisory)}</div>;
+              }
+            }
+          } catch {
+            // Not valid JSON — fall through to markdown rendering
+          }
+        }
+      }
+
       // If it's a question and has no special visualizations, render only the markdown
       if (isQuestion && !hasSpecialVisualizations) {
         return (
@@ -2350,8 +2493,315 @@ function App() {
     );
   };
 
+  // ── Advisory JSON renderer ───────────────────────────────────────────────
+  // The LLM sometimes returns a rich structured JSON advisory plan (classification,
+  // answer summary, requirements, workflow steps, questions for the user).
+  // This helper detects that shape and renders it as a clean, sectioned card.
+  // ── Canonical HelixAdvisory renderer ────────────────────────────────────
+  // Renders a normalised `{ helix_type: "advisory", ... }` object produced by
+  // the backend advisory_normalizer.  Also handles legacy ad-hoc shapes as a
+  // fallback so old cached responses continue to display correctly.
+  const renderAdvisoryJSON = (json: Record<string, any>): React.ReactNode => {
+    // ── Normalise to canonical shape on the client (legacy / cached responses)
+    // The backend normalises new responses, but old history entries may still
+    // carry the raw LLM JSON.  Re-normalise here for safety.
+    const isCanonical = json.helix_type === 'advisory';
+
+    // Pull fields from either the canonical schema or any legacy variant.
+    const cls = json.classification as { domain?: string; task_type?: string; feasible?: boolean } | undefined;
+
+    const title: string = json.title || cls?.task_type || '';
+
+    // Summary: canonical → json.summary; legacy shape 1 → json.answer?.summary; legacy shape 2 → json.summary
+    const summary: string =
+      json.summary ||
+      (typeof json.answer === 'string' ? json.answer : json.answer?.summary) ||
+      '';
+
+    // Sections (canonical + shape 2)
+    const sections: Array<{
+      heading: string;
+      content?: string;
+      items?: Array<{ label?: string; description?: string; examples?: string[]; tools?: string[]; term?: string; meaning?: string; metric?: string; interpretation?: string } | string>;
+    }> = json.sections || [];
+
+    // Workflow steps (canonical: workflow_steps; legacy shape 1: recommended_workflow)
+    const workflowSteps: Array<{ step: number; name: string; description?: string }> =
+      json.workflow_steps || json.recommended_workflow || [];
+
+    // Requirements (canonical: requirements[]; legacy shape 1: requirements.{input_data,...})
+    // Flatten all requirement groups into a single list for rendering
+    const requirementsList: Array<{ label: string; description?: string; examples?: string[]; tools?: string[] }> = (() => {
+      if (Array.isArray(json.requirements)) return json.requirements;
+      if (json.requirements && typeof json.requirements === 'object') {
+        const { input_data = [], reference_files = [], software_or_pipeline_components = [] } = json.requirements as any;
+        return [
+          ...input_data.map((d: any) => ({ label: d.item || d.label || '', description: d.details || d.description, examples: d.examples })),
+          ...reference_files.map((f: any) => ({ label: f.item || f.label || '', description: f.details || f.description, examples: f.examples })),
+          ...software_or_pipeline_components.map((s: any) => ({ label: s.step || s.label || '', description: s.purpose || s.description, tools: s.tools })),
+        ];
+      }
+      return [];
+    })();
+
+    // Questions for user (canonical; legacy: minimum_information_needed_from_you)
+    const questions: Array<{ label?: string; question?: string; description?: string; examples?: string[] }> =
+      json.questions_for_user || json.minimum_information_needed_from_you || [];
+
+    // Next steps (canonical: next_steps[]; legacy: next_step?.message)
+    const nextSteps: string[] = Array.isArray(json.next_steps) ? json.next_steps : (
+      json.next_step?.message ? [json.next_step.message] : []
+    );
+
+    // ── Helpers ──────────────────────────────────────────────────────────
+    const sectionLabel = (text: string, color: string) => (
+      <div style={{ fontWeight: 600, color, marginBottom: 8, textTransform: 'uppercase' as const, fontSize: '0.72rem', letterSpacing: '0.05em' }}>
+        {text}
+      </div>
+    );
+
+    const badge = (label: string, bg: string, fg: string) => (
+      <span style={{ background: bg, color: fg, borderRadius: 6, padding: '2px 10px', fontSize: '0.75rem', fontWeight: 600, marginRight: 6 }}>
+        {label}
+      </span>
+    );
+
+    const renderItem = (item: any, i: number, bullet: string, bulletColor: string) => {
+      const label = item.label || item.item || item.step || item.metric || item.term || item.question || (typeof item === 'string' ? item : '');
+      const desc = item.description || item.details || item.purpose || item.content || item.meaning || item.interpretation || '';
+      const examples: string[] = item.examples || [];
+      const tools: string[] = item.tools || [];
+      return (
+        <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+          <span style={{ color: bulletColor, fontWeight: 700, minWidth: 14, marginTop: 1 }}>{bullet}</span>
+          <div>
+            <span style={{ fontWeight: 600, color: '#0F172A' }}>{label}</span>
+            {tools.length > 0 && (
+              <span style={{ marginLeft: 6 }}>
+                {tools.map((t: string) => (
+                  <span key={t} style={{ background: '#E0F2FE', color: '#0369A1', borderRadius: 4, padding: '1px 6px', fontSize: '0.75rem', fontFamily: 'monospace', marginRight: 4 }}>{t}</span>
+                ))}
+              </span>
+            )}
+            {examples.length > 0 && <span style={{ color: '#9CA3AF', fontSize: '0.8rem' }}> ({examples.join(', ')})</span>}
+            {desc && <div style={{ color: '#64748B', marginTop: 1, lineHeight: 1.5 }}>{desc}</div>}
+          </div>
+        </div>
+      );
+    };
+
+    // ── Render ────────────────────────────────────────────────────────────
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 18, fontSize: '0.88rem' }}>
+
+        {/* Title + classification badges */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          {title && <span style={{ fontWeight: 700, fontSize: '1rem', color: '#0F172A' }}>{title}</span>}
+          {cls?.domain && badge(cls.domain, '#EFF6FF', '#1D4ED8')}
+          {cls?.task_type && !title && badge(cls.task_type, '#F0FDF4', '#166534')}
+          {cls?.feasible === true && badge('✓ Feasible', '#ECFDF5', '#059669')}
+          {cls?.feasible === false && badge('⚠ Needs Review', '#FFF7ED', '#C2410C')}
+        </div>
+
+        {/* Summary */}
+        {summary && (
+          <div style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 8, padding: '12px 16px', lineHeight: 1.7, color: '#334155' }}>
+            {summary}
+          </div>
+        )}
+
+        {/* Sections (canonical + shape 2 explanation sections) */}
+        {sections.map((sec, si) => (
+          <div key={si}>
+            {sectionLabel(sec.heading, '#0369A1')}
+            {sec.content && (
+              <div style={{ color: '#334155', lineHeight: 1.7, marginBottom: sec.items ? 8 : 0 }}>
+                {sec.content}
+              </div>
+            )}
+            {Array.isArray(sec.items) && sec.items.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {sec.items.map((item, ii) => renderItem(item, ii, '•', '#3B82F6'))}
+              </div>
+            )}
+          </div>
+        ))}
+
+        {/* Flat requirements list (legacy shape 1 or canonical) */}
+        {!isCanonical && requirementsList.length > 0 && (
+          <div>
+            {sectionLabel('Requirements', '#1E40AF')}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {requirementsList.map((r, i) => renderItem(r, i, '•', '#3B82F6'))}
+            </div>
+          </div>
+        )}
+        {isCanonical && requirementsList.length > 0 && (
+          <div>
+            {sectionLabel('Requirements', '#1E40AF')}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {requirementsList.map((r, i) => renderItem(r, i, '•', '#3B82F6'))}
+            </div>
+          </div>
+        )}
+
+        {/* Workflow steps */}
+        {workflowSteps.length > 0 && (
+          <div>
+            {sectionLabel('Recommended Workflow', '#047857')}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {workflowSteps.map((w: any) => (
+                <div key={w.step} style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                  <div style={{ minWidth: 26, height: 26, borderRadius: '50%', background: '#D1FAE5', color: '#065F46', fontWeight: 700, fontSize: '0.78rem', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    {w.step}
+                  </div>
+                  <div>
+                    <span style={{ fontWeight: 600, color: '#0F172A' }}>{w.name}</span>
+                    {w.description && <div style={{ color: '#64748B', marginTop: 2, lineHeight: 1.5 }}>{w.description}</div>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Questions for the user */}
+        {questions.length > 0 && (
+          <div style={{ background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 8, padding: '12px 16px' }}>
+            {sectionLabel('To proceed, I need the following information', '#92400E')}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {questions.map((q: any, i) => renderItem({ ...q, label: q.label || q.question || '' }, i, '?', '#D97706'))}
+            </div>
+          </div>
+        )}
+
+        {/* Next steps */}
+        {nextSteps.length > 0 && (
+          <div style={{ borderTop: '1px solid #E2E8F0', paddingTop: 12 }}>
+            {sectionLabel('Next Steps', '#475569')}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {nextSteps.map((ns, i) => (
+                <div key={i} style={{ display: 'flex', gap: 8, color: '#475569', lineHeight: 1.6 }}>
+                  <span style={{ color: '#94A3B8' }}>→</span>
+                  <span>{ns}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const renderOutput = (item: HistoryItem) => {
     const { output, type } = item;
+
+    // ── Async Nextflow pipeline job card ──────────────────────────────────
+    const pj = output?._pipelineJob;
+    if (pj) {
+      const statusColors: Record<string, string> = {
+        submitted: '#6366f1',
+        running:   '#f59e0b',
+        completed: '#10b981',
+        failed:    '#ef4444',
+      };
+      const color = statusColors[pj.status] ?? '#6b7280';
+
+      const statusIcon: Record<string, string> = {
+        submitted: '⏳',
+        running:   '⚙️',
+        completed: '✅',
+        failed:    '❌',
+      };
+      const icon = statusIcon[pj.status] ?? '🔄';
+
+      const steps: Array<{ type: string; process?: string }> = pj.steps ?? [];
+
+      return (
+        <div style={{
+          border: `1.5px solid ${color}`,
+          borderRadius: '8px',
+          padding: '14px 18px',
+          background: '#fafafa',
+          maxWidth: '640px',
+        }}>
+          {/* Header */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
+            <span style={{ fontSize: '20px' }}>{icon}</span>
+            <div>
+              <div style={{ fontWeight: 600, color: '#111' }}>
+                Pipeline: {pj.pipeline || output?.tool || 'Nextflow'}
+              </div>
+              <div style={{ fontSize: '12px', color: '#6b7280' }}>
+                Job <code style={{ background: '#f3f4f6', padding: '1px 4px', borderRadius: '3px' }}>
+                  {(pj.jobId ?? '').slice(0, 8)}…
+                </code>
+                {' · '}
+                <span style={{ color, fontWeight: 500, textTransform: 'capitalize' }}>{pj.status}</span>
+              </div>
+            </div>
+            {pj.status === 'running' && (
+              <div style={{
+                marginLeft: 'auto',
+                width: '18px', height: '18px',
+                border: '2px solid #f59e0b',
+                borderTopColor: 'transparent',
+                borderRadius: '50%',
+                animation: 'spin 0.8s linear infinite',
+              }} />
+            )}
+          </div>
+
+          {/* Step timeline */}
+          {steps.length > 0 && (
+            <div style={{ marginTop: '8px', borderTop: '1px solid #e5e7eb', paddingTop: '8px' }}>
+              <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: '4px' }}>Steps</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                {steps.map((s, i) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px' }}>
+                    <span style={{ color: s.type === 'process_completed' ? '#10b981' : '#6b7280' }}>
+                      {s.type === 'process_completed' ? '✓' : s.type === 'failed' ? '✗' : '·'}
+                    </span>
+                    <span style={{ color: '#374151' }}>{s.process || s.type}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Result files */}
+          {pj.resultFiles && pj.resultFiles.length > 0 && (
+            <div style={{ marginTop: '8px', borderTop: '1px solid #e5e7eb', paddingTop: '8px' }}>
+              <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: '4px' }}>Output files</div>
+              {pj.resultFiles.map((f: string, i: number) => (
+                <div key={i} style={{ fontSize: '12px', color: '#374151', fontFamily: 'monospace' }}>
+                  📄 {f}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Error detail */}
+          {pj.error && (
+            <div style={{
+              marginTop: '8px', padding: '8px', borderRadius: '4px',
+              background: '#fef2f2', color: '#dc2626', fontSize: '12px',
+              fontFamily: 'monospace', whiteSpace: 'pre-wrap', maxHeight: '120px', overflow: 'auto',
+            }}>
+              {pj.error}
+            </div>
+          )}
+
+          {/* Stream URL hint while running */}
+          {pj.status === 'submitted' || pj.status === 'running' ? (
+            <div style={{ marginTop: '8px', fontSize: '11px', color: '#9ca3af' }}>
+              Live stream: {pj.streamUrl}
+            </div>
+          ) : null}
+        </div>
+      );
+    }
+    // ── end pipeline job card ─────────────────────────────────────────────
 
     if (type === 'agent_error') {
       const message = output?.error || 'Agent encountered an error while processing the request.';
@@ -2724,7 +3174,7 @@ function App() {
       return (
         <section className="mt-4">
           <h2 className="h5 mb-3">Conversation</h2>
-          <div className="text-muted">Run a command to see your prompts and responses here.</div>
+          <CapabilityGrid onSelectPrompt={(prompt) => { setCommand(prompt); }} />
         </section>
       );
     }
@@ -2735,6 +3185,44 @@ function App() {
         <div ref={historyTopRef} className="d-flex flex-column gap-4">
           {history.map((item, index) => {
             const timestamp = item.timestamp instanceof Date ? item.timestamp : new Date(item.timestamp);
+
+            // ── Pending placeholder while backend is processing ──────────
+            if (item.type === 'pending') {
+              return (
+                <div key={item.pendingId || index} className="d-flex flex-column gap-3">
+                  <div
+                    className="align-self-end bg-blue-subtle border border-brand-blue rounded-4 shadow-sm px-3 py-2"
+                    style={{ maxWidth: '50%', wordBreak: 'break-word', overflowWrap: 'anywhere' }}
+                  >
+                    <div className="text-muted small text-uppercase fw-semibold mb-1">Prompt</div>
+                    <div className="prompt-bubble-text">{item.input}</div>
+                    <div className="text-muted small mt-1">{timestamp.toLocaleTimeString()}</div>
+                  </div>
+                  <Card className="border-0 shadow-sm">
+                    <Card.Body>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '6px 0' }}>
+                        <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
+                          {[0, 1, 2].map(i => (
+                            <div
+                              key={i}
+                              style={{
+                                width: 9, height: 9, borderRadius: '50%',
+                                background: '#3B82F6',
+                                animation: `helix-bounce 1.2s ease-in-out ${i * 0.2}s infinite`,
+                              }}
+                            />
+                          ))}
+                        </div>
+                        <span style={{ fontSize: '0.88rem', color: '#64748B', fontStyle: 'italic' }}>
+                          {loadingMsg}
+                        </span>
+                      </div>
+                    </Card.Body>
+                  </Card>
+                </div>
+              );
+            }
+
             return (
               <div key={index} className="d-flex flex-column gap-3">
                 <div
@@ -2742,7 +3230,7 @@ function App() {
                   style={{ maxWidth: '50%', wordBreak: 'break-word', overflowWrap: 'anywhere' }}
                 >
                   <div className="text-muted small text-uppercase fw-semibold mb-1">Prompt</div>
-                  <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{item.input}</div>
+                  <div className="prompt-bubble-text">{item.input}</div>
                   <div className="text-muted small mt-1">{timestamp.toLocaleTimeString()} • {item.type}</div>
                 </div>
                 <Card className="border-0 shadow-sm">
@@ -2778,6 +3266,13 @@ function App() {
                           </>
                         )}
                       </div>
+                    )}
+                    {/* Contextual follow-up chips — only on the most recent item */}
+                    {index === 0 && (
+                      <FollowUpChips
+                        tool={item.type}
+                        onSelect={(prompt) => executeCommand(prompt)}
+                      />
                     )}
                   </Card.Body>
                 </Card>
@@ -2823,7 +3318,7 @@ function App() {
     loading,
     agentLoading,
     onAgentSubmit: handleAgentSubmit,
-    placeholder: 'Ask anything or upload a FASTA file...',
+    placeholder: getContextualPlaceholder(history[0]?.type),
     dragActive,
     uploadedFiles,
     onFileRemove: handleFileRemove,
@@ -3182,7 +3677,7 @@ function App() {
               handleSubmit();
             }
           }}
-          placeholder="Ask anything or upload a FASTA file..."
+          placeholder={getContextualPlaceholder(history[0]?.type)}
         />
         <div className="text-center">
           <button 

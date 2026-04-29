@@ -120,12 +120,13 @@ def test_restricted_upload_requires_approval_and_can_be_approved(client: TestCli
 
     execute_response = client.post(
         "/execute",
-        json={"session_id": session_id, "command": "run this plan", "execute_plan": True},
+        # Use a non-approval command so the approval-bypass path is not triggered
+        json={"session_id": session_id, "command": "run analysis", "execute_plan": True},
     )
-    assert execute_response.status_code == 200, execute_response.text
-    body = execute_response.json()
-    assert body.get("success") is False
-    assert "require policy approval" in str(body.get("error", "")).lower()
+    # The endpoint raises HTTPException(409) when execute_plan=True with pending policy uploads
+    assert execute_response.status_code == 409, execute_response.text
+    detail = execute_response.json().get("detail", "")
+    assert "policy approval" in detail.lower()
 
     approve_response = client.post(f"/session/{session_id}/uploads/approve")
     assert approve_response.status_code == 200, approve_response.text

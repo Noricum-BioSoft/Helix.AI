@@ -30,6 +30,8 @@ READ_ONLY_ROUTER_TOOLS = {
     "lookup_go_term",
     "unsupported_tool",
     "bio_diff_runs",
+    # Q&A tools — read-only, never need approval
+    "tabular_qa",
 }
 
 HIGH_IMPACT_ACTION_TYPES = {
@@ -76,10 +78,18 @@ Given a user command, decide three things:
    immediately? Examples: "run it", "execute the analysis", "rerun with these
    parameters", "go ahead and run", "now do X".
 
-3. "is_planning_request": Is this a vague, open-ended analysis request where the
-   system should first propose a plan for the user to review? Examples:
-   "analyze this", "design the workflow", "what would you do with this data",
-   "propose a plan for this".
+3. "is_planning_request": Is this a request to design or propose a concrete
+   analytical workflow that should be staged for the user to review before
+   anything runs? This is ONLY true when the user asks the system to plan a
+   specific pipeline or workflow. Examples that ARE planning requests:
+   "design a workflow for my RNA-seq data", "propose a plan for this analysis",
+   "what would a full scRNA-seq pipeline look like for this dataset".
+
+   IMPORTANT — these are NOT planning requests (set false):
+   - Advisory or meta questions: "what should I do next?", "what are my options?",
+     "what do you recommend?", "can you help me?", "where do I go from here?"
+   - Conceptual/educational questions: "what is BLAST?", "explain this result"
+   - Simple follow-up questions after a completed analysis step
 
 Respond with ONLY a JSON object on a single line:
 {"requires_approval": bool, "has_execute_intent": bool, "is_planning_request": bool}

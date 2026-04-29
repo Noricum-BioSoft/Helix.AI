@@ -132,6 +132,22 @@ def serialize_langchain_messages(result: Any) -> Any:
                         serialized_msg["additional_kwargs"] = msg.additional_kwargs
                     if hasattr(msg, 'response_metadata'):
                         serialized_msg["response_metadata"] = msg.response_metadata
+                        # Log prompt-caching stats when available (OpenAI gpt-4.1 / gpt-5+)
+                        meta = msg.response_metadata or {}
+                        token_usage = meta.get("token_usage") or meta.get("usage", {})
+                        if token_usage:
+                            prompt_tokens = token_usage.get("prompt_tokens", 0)
+                            completion_tokens = token_usage.get("completion_tokens", 0)
+                            cached = (
+                                (token_usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
+                            )
+                            logger.info(
+                                "[token-usage] prompt=%d  cached=%d (%.0f%%)  completion=%d",
+                                prompt_tokens,
+                                cached,
+                                100 * cached / prompt_tokens if prompt_tokens else 0,
+                                completion_tokens,
+                            )
                     serialized_messages.append(serialized_msg)
                 else:
                     # Fallback for non-message objects

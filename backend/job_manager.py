@@ -2591,6 +2591,95 @@ echo "Bootstrap script completed successfully"
             return f"Error fetching logs: {str(e)}"
 
 
+    # ------------------------------------------------------------------
+    # Nextflow job lifecycle (Tier 3a / 3b)
+    # ------------------------------------------------------------------
+
+    def create_nextflow_job(
+        self,
+        job_id: str,
+        tool_name: str,
+        pipeline: str,
+        session_id: str,
+        work_dir: str,
+        result_dir: str,
+    ) -> str:
+        """Register a new Nextflow pipeline job and persist it.
+
+        Returns *job_id* for convenience.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        self.jobs[job_id] = {
+            "id": job_id,
+            "type": "nextflow",
+            "status": STATUS_SUBMITTED,
+            "tool_name": tool_name,
+            "pipeline": pipeline,
+            "session_id": session_id,
+            "infra": {
+                "provider": "local_docker",
+                "work_dir": work_dir,
+                "result_dir": result_dir,
+            },
+            "submitted_at": now,
+            "started_at": None,
+            "completed_at": None,
+            "pid": None,
+            "result_files": [],
+            "result": None,
+            "error": None,
+        }
+        self._save_jobs()
+        logger.info("Nextflow job created: %s pipeline=%s", job_id, pipeline)
+        return job_id
+
+    def set_nextflow_job_running(self, job_id: str, pid: int) -> None:
+        """Transition a Nextflow job to RUNNING and record the subprocess PID."""
+        job = self.jobs.get(job_id)
+        if job is None:
+            logger.warning("set_nextflow_job_running: unknown job %s", job_id)
+            return
+        job["status"] = STATUS_RUNNING
+        job["started_at"] = datetime.now(timezone.utc).isoformat()
+        if pid:
+            job["pid"] = pid
+        self._save_jobs()
+
+    def set_nextflow_job_completed(
+        self,
+        job_id: str,
+        result_dir: str,
+        result_files: Optional[List[str]] = None,
+    ) -> None:
+        """Transition a Nextflow job to COMPLETED and store output file list."""
+        job = self.jobs.get(job_id)
+        if job is None:
+            logger.warning("set_nextflow_job_completed: unknown job %s", job_id)
+            return
+        job["status"] = STATUS_COMPLETED
+        job["completed_at"] = datetime.now(timezone.utc).isoformat()
+        job["infra"]["result_dir"] = result_dir
+        job["result_files"] = result_files or []
+        job["result"] = {
+            "result_dir": result_dir,
+            "files": result_files or [],
+        }
+        self._save_jobs()
+        logger.info("Nextflow job completed: %s files=%d", job_id, len(result_files or []))
+
+    def set_nextflow_job_failed(self, job_id: str, error: str) -> None:
+        """Transition a Nextflow job to FAILED and record the error message."""
+        job = self.jobs.get(job_id)
+        if job is None:
+            logger.warning("set_nextflow_job_failed: unknown job %s", job_id)
+            return
+        job["status"] = STATUS_FAILED
+        job["completed_at"] = datetime.now(timezone.utc).isoformat()
+        job["error"] = error
+        self._save_jobs()
+        logger.warning("Nextflow job failed: %s error=%s", job_id, error[:200])
+
+
 # Global singleton instance
 _job_manager_instance: Optional[JobManager] = None
 

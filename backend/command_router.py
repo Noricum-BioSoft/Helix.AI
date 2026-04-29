@@ -13,7 +13,7 @@ ROUTER_TOOLS = [
     ("read_merging", "Merge paired-end reads"),
     ("read_trimming", "Trim reads by quality or adapter"),
     ("fastqc_quality_analysis", "Run FastQC quality control on reads"),
-    ("sequence_alignment", "Align DNA/RNA sequences (MSA)"),
+    ("sequence_alignment", "Align DNA/RNA/protein sequences (MSA). Choose this tool whenever the user says 'align', 'compare sequences', 'check conservation', or 'find orthologs' — even when NCBI accession IDs are provided instead of raw sequences. Do NOT route to fetch_ncbi_sequence for alignment requests."),
     ("mutate_sequence", "Create sequence variants / mutations"),
     ("plasmid_visualization", "Visualize plasmid/vector constructs"),
     ("phylogenetic_tree", "Build phylogenetic/evolutionary tree"),
@@ -24,15 +24,23 @@ ROUTER_TOOLS = [
     ("lookup_go_term", "Look up Gene Ontology terms"),
     ("go_enrichment_analysis", "Run GO/pathway enrichment from gene lists"),
     ("bulk_rnaseq_analysis", "Bulk RNA-seq / DESeq2 differential expression"),
-    ("single_cell_analysis", "Single-cell RNA-seq (scPipeline, Seurat)"),
-    ("patch_and_rerun", "Change result/parameters and re-run"),
+    ("single_cell_analysis", "Single-cell RNA-seq (scPipeline, Seurat, cell-type annotation, UMAP)"),
+    ("chip_seq_analysis", "ChIP-seq or CUT&RUN peak calling, motif enrichment, differential binding (H3K27ac, CTCF, etc.)"),
+    ("atac_seq_analysis", "ATAC-seq open-chromatin peak calling, footprinting, differential accessibility"),
+    ("genome_assembly", "Genome or transcriptome assembly from long reads (Nanopore/PacBio) or short reads; completeness assessment (BUSCO)"),
+    ("variant_calling", "Germline SNP/indel/SV calling from WGS or WES; rare-disease phenotype prioritization; somatic tumor-normal mutation calling"),
+    ("metagenomics_16s", "16S rRNA amplicon sequencing — OTU/ASV clustering, alpha/beta diversity, taxonomic composition"),
+    ("metagenomics_shotgun", "Shotgun metagenomics — taxonomic profiling, functional annotation, pathway enrichment"),
+    ("rna_splicing_isoform", "Alternative splicing (rMATS, LeafCutter), novel isoform discovery from long-read RNA-seq (PacBio IsoSeq)"),
+    ("crispr_screen_analysis", "CRISPR KO/CRISPRa/Perturb-seq screen analysis — MAGeCK hit calling, enrichment scoring"),
+    ("patch_and_rerun", "Edit/patch an existing plot or script and re-run (e.g. change colors, labels, highlight genes, axis scale)"),
     ("bio_rerun", "Re-run analysis with parameter changes"),
     ("bio_diff_runs", "Compare two runs or iterations"),
     ("local_edit_visualization", "Edit plot title or axis labels"),
     ("local_update_scatter_x_scale", "Change plot axis scale (log/linear)"),
     ("visualize_job_results", "Visualize results for an existing job ID"),
-    ("tabular_analysis", "Run tabular operations (rank/sort/filter/aggregate) on CSV/Excel files"),
-    ("tabular_qa", "Answer conversational questions about an uploaded tabular file"),
+    ("tabular_analysis", "Run explicit tabular operations on CSV/Excel files: rank, sort, filter, aggregate, sum, mean, pivot"),
+    ("tabular_qa", "Answer a conversational question about a tabular file without a predefined operation (e.g. 'what is the average X?', 'how many rows have Y?')"),
     ("ds_run_analysis", "Run data science / EDA pipeline on an uploaded file"),
     ("session_run_io_summary", "Summarize inputs and outputs of a specific session run"),
     ("local_demo_plot_script", "Generate a quick local scatter/demo plot (development/testing)"),
@@ -302,10 +310,10 @@ class CommandRouter:
                 # Try multiple patterns to extract sequences
                 sequences = None
                 
-                # Pattern 1: Extract FASTA format sequences (handles blank lines)
-                # Match from first > to end, including blank lines and DNA sequences
-                # Try to find FASTA content anywhere in the command
-                fasta_match = re.search(r'(>[\w\s\n>ATCGUatcgu]+)', command, re.DOTALL)
+                # Pattern 1: Extract FASTA format sequences (handles blank lines).
+                # Allow all alpha characters so protein sequences (all 20 aa) are captured
+                # as well as nucleotide sequences (ATCGU).
+                fasta_match = re.search(r'(>[A-Za-z0-9_\-\s\n>]+)', command, re.DOTALL)
                 if fasta_match:
                     sequences = fasta_match.group(1).strip()
                     # Clean up blank lines - remove blank lines between headers and sequences
@@ -318,9 +326,9 @@ class CommandRouter:
                     sequences = '\n'.join(cleaned_lines)
                     print(f"🔧 Extracted FASTA sequences: {len(sequences)} chars, {sequences.count('>')} sequences")
                 
-                # Pattern 2: Extract simple sequences without headers
+                # Pattern 2: Extract simple sequences without headers (nucleotide or protein)
                 if not sequences:
-                    simple_match = re.search(r'sequences?[:\s]+([ATCG\s\n]+)', command, re.IGNORECASE)
+                    simple_match = re.search(r'sequences?[:\s]+([A-Za-z\s\n]+)', command, re.IGNORECASE)
                     if simple_match:
                         sequences = simple_match.group(1).strip()
                         # Convert to FASTA format
@@ -332,7 +340,7 @@ class CommandRouter:
                 # Pattern 3: Extract sequences after "align" or "perform" keywords
                 if not sequences:
                     # Try pattern for "perform multiple sequence alignment" followed by sequences
-                    perform_match = re.search(r'perform[^>]*(>[\w\s\n>ATCGUatcgu]+)', command, re.IGNORECASE | re.DOTALL)
+                    perform_match = re.search(r'perform[^>]*(>[A-Za-z0-9_\-\s\n>]+)', command, re.IGNORECASE | re.DOTALL)
                     if perform_match:
                         sequences = perform_match.group(1).strip()
                         # Clean up blank lines
@@ -340,10 +348,10 @@ class CommandRouter:
                         cleaned_lines = [line.strip() for line in lines if line.strip()]
                         sequences = '\n'.join(cleaned_lines)
                         print(f"🔧 Extracted sequences after 'perform': {len(sequences)} chars, {sequences.count('>')} sequences")
-                    
+
                     # Also try pattern for "align" keyword
                     if not sequences:
-                        align_match = re.search(r'align[^:]*[:\s]+([ATCG\s\n>]+)', command, re.IGNORECASE | re.DOTALL)
+                        align_match = re.search(r'align[^:]*[:\s]+([A-Za-z\s\n>]+)', command, re.IGNORECASE | re.DOTALL)
                         if align_match:
                             sequences = align_match.group(1).strip()
                             # If not in FASTA format, convert it
@@ -388,9 +396,25 @@ class CommandRouter:
                 
                 if sequences:
                     return {"sequences": sequences}
-                else:
-                    # Use longer default sequences for better demo
-                    return {"sequences": ">seq1\nATGCGATCGATCGATCG\n>seq2\nATGCGATCGATCGATCG"}
+
+                # Pattern 6: Accession IDs in command with no inline FASTA
+                # Detect NM_/NP_/NC_/XM_/XP_ patterns and pass them so the tool
+                # can fetch them from NCBI before aligning.
+                accession_hits = re.findall(r'\b([A-Z]{1,2}_\d+(?:\.\d+)?)\b', command)
+                # Also pull the last-fetched sequence from session context if the
+                # command says "this sequence" / "this CCR7 sequence" / etc.
+                ctx_seq: str = (
+                    session_context.get("aligned_sequences") or
+                    session_context.get("last_fetched_fasta") or
+                    ""
+                )
+                if accession_hits or ctx_seq:
+                    return {
+                        "sequences": ctx_seq or "",          # may be empty; tool will fill in
+                        "accessions_to_fetch": accession_hits,
+                    }
+                # Last resort: demo data so the tool always has something to align
+                return {"sequences": ">seq1\nATGCGATCGATCGATCG\n>seq2\nATGCGATCGATCGATCG"}
         
         elif tool_name == "select_variants":
             # Extract selection parameters
