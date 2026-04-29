@@ -8,6 +8,7 @@ import type { UploadedFileResponse } from './services/helixApi';
 import { SchemaPreviewPanel } from './components/SchemaPreviewPanel';
 import { AnalysisPlanCard } from './components/AnalysisPlanCard';
 import { WorkflowPlanCard } from './components/WorkflowPlanCard';
+import { NeedsInputsCard } from './components/NeedsInputsCard';
 import { CapabilityGrid } from './components/CapabilityGrid';
 import { FollowUpChips } from './components/FollowUpChips';
 import { getContextualPlaceholder } from './utils/followUpSuggestions';
@@ -3062,10 +3063,17 @@ function App() {
 
     // needs_inputs only (no workflow plan, or scenario forces needs_inputs): show Load & run only.
     if (isNeedsInputs) {
+      const hasStructuredInputs =
+        Array.isArray((output?.data as any)?.results?.required_inputs) &&
+        ((output?.data as any)?.results?.required_inputs as unknown[]).length > 0;
+
       if (scenario?.followUpPrompt) {
+        // Demo scenario: show NeedsInputsCard + "Load & run" shortcut
         return (
           <div>
-            {renderedResponse}
+            <NeedsInputsCard
+              output={output as Record<string, unknown>}
+            />
             <div
               className="mt-3 p-3 rounded-3 d-flex align-items-start gap-3"
               style={{
@@ -3114,6 +3122,17 @@ function App() {
               </div>
             </div>
           </div>
+        );
+      }
+
+      // Non-demo path: show NeedsInputsCard with upload CTA when structured data present,
+      // otherwise fall through to plain markdown.
+      if (hasStructuredInputs) {
+        return (
+          <NeedsInputsCard
+            output={output as Record<string, unknown>}
+            onUpload={() => fileInputRef.current?.click()}
+          />
         );
       }
     }

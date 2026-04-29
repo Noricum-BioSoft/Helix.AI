@@ -4610,6 +4610,7 @@ def _build_needs_inputs_response(tool_name: str, arguments: Dict[str, Any]) -> D
     _INTERNAL_KEYS = {
         "needs_inputs", "command", "original_command",
         "session_context", "session_id", "_from_broker",
+        "router_reasoning",   # internal routing artifact — not meaningful to users
     }
     extracted = {
         k: v for k, v in arguments.items()
