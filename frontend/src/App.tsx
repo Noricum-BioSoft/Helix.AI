@@ -7,6 +7,7 @@ import { API_BASE_URL, helixApi } from './services/helixApi';
 import type { UploadedFileResponse } from './services/helixApi';
 import { SchemaPreviewPanel } from './components/SchemaPreviewPanel';
 import { AnalysisPlanCard } from './components/AnalysisPlanCard';
+import { WorkflowPlanCard } from './components/WorkflowPlanCard';
 import { CapabilityGrid } from './components/CapabilityGrid';
 import { FollowUpChips } from './components/FollowUpChips';
 import { getContextualPlaceholder } from './utils/followUpSuggestions';
@@ -2947,51 +2948,65 @@ function App() {
       );
     }
 
-    // Workflow plan: show plan + Execute Pipeline; if scenario has example data, also show Load & run.
+    // Workflow plan: __plan__ tool → rich WorkflowPlanCard; other plans → generic renderer.
     if (isWorkflowPlan && !scenarioForcesNeedsInputs) {
       const alreadyExecuted = executedPipelineCommands.has(item.input);
+      const isRouterPlan = output?.tool === '__plan__' || output?.result?.tool === '__plan__';
       return (
         <div>
-          {renderedResponse}
-          <div className="mt-3 d-flex align-items-center gap-3">
-            {alreadyExecuted ? (
-              <Button variant="outline-success" disabled className="px-4">
-                ✓ Submitted
-              </Button>
-            ) : (
-              <>
-                {planAction === 'approve' && (
-                  <Button
-                    variant="primary"
-                    onClick={() => executeCommand('Approve.', item.scenarioId, false)}
-                    disabled={loading}
-                    className="px-4"
-                  >
-                    {loading ? 'Approving…' : '✅ I approve'}
+          {isRouterPlan ? (
+            <WorkflowPlanCard
+              output={output as Record<string, unknown>}
+              planAction={planAction}
+              alreadyApproved={alreadyExecuted}
+              loading={loading}
+              onApprove={() => executeCommand('Approve.', item.scenarioId, false)}
+              onExecute={() => handleExecutePipeline(item.input)}
+            />
+          ) : (
+            <>
+              {renderedResponse}
+              <div className="mt-3 d-flex align-items-center gap-3">
+                {alreadyExecuted ? (
+                  <Button variant="outline-success" disabled className="px-4">
+                    ✓ Submitted
                   </Button>
+                ) : (
+                  <>
+                    {planAction === 'approve' && (
+                      <Button
+                        variant="primary"
+                        onClick={() => executeCommand('Approve.', item.scenarioId, false)}
+                        disabled={loading}
+                        className="px-4"
+                      >
+                        {loading ? 'Approving…' : '✅ I approve'}
+                      </Button>
+                    )}
+                    {showExecutePipeline && (
+                      <Button
+                        variant="success"
+                        onClick={() => handleExecutePipeline(item.input)}
+                        disabled={loading}
+                        className="px-4"
+                      >
+                        {loading ? 'Submitting…' : '▶ Execute Pipeline'}
+                      </Button>
+                    )}
+                  </>
                 )}
-                {showExecutePipeline && (
-                  <Button
-                    variant="success"
-                    onClick={() => handleExecutePipeline(item.input)}
-                    disabled={loading}
-                    className="px-4"
-                  >
-                    {loading ? 'Submitting…' : '▶ Execute Pipeline'}
-                  </Button>
-                )}
-              </>
-            )}
-            <span className="text-muted small">
-              {alreadyExecuted
-                ? 'Pipeline submitted — see results above.'
-                : planAction === 'approve'
-                  ? 'Approval confirms execution of the pending reviewed plan.'
-                  : planAction === 'execute'
-                    ? 'Confirms the plan above and queues all steps for execution.'
-                    : 'This is a design/preview plan. Provide inputs or approval context to continue.'}
-            </span>
-          </div>
+                <span className="text-muted small">
+                  {alreadyExecuted
+                    ? 'Pipeline submitted — see results above.'
+                    : planAction === 'approve'
+                      ? 'Approval confirms execution of the pending reviewed plan.'
+                      : planAction === 'execute'
+                        ? 'Confirms the plan above and queues all steps for execution.'
+                        : 'This is a design/preview plan. Provide inputs or approval context to continue.'}
+                </span>
+              </div>
+            </>
+          )}
           {scenario?.followUpPrompt && (
             <div
               className="mt-3 p-3 rounded-3 d-flex align-items-start gap-3"
