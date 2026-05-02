@@ -424,16 +424,16 @@ pnpm-lock.yaml
 # Bioinformatics specific (ignore *data*, not filetypes globally)
 # =============================================================================
 
-# Common data / result folders
-data/
-datasets/
-dataset/
-inputs/
-input/
-outputs/
-output/
-results/
-result/
+# Common data / result folders (root-level only — don't block frontend/src/data/)
+/data/
+/datasets/
+/dataset/
+/inputs/
+/input/
+/outputs/
+/output/
+/results/
+/result/
 
 # Common generated artifact folders
 workflow_results/
