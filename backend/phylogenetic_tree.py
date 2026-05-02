@@ -269,17 +269,47 @@ def _build_summary_text(stats: Dict, names: List[str], newick: str) -> str:
 # Public API
 # ---------------------------------------------------------------------------
 
+def _resolve_fasta_input(raw: str) -> str:
+    """Resolve ``raw`` to FASTA text.
+
+    If ``raw`` is an S3 URI (s3://...) or a local file path that exists,
+    fetch / read its contents first.  Otherwise return ``raw`` unchanged.
+    """
+    s = raw.strip()
+    if s.startswith("s3://"):
+        try:
+            import boto3, re as _re
+            match = _re.match(r"s3://([^/]+)/(.+)", s)
+            if not match:
+                return s
+            bucket, key = match.group(1), match.group(2)
+            body = boto3.client("s3").get_object(Bucket=bucket, Key=key)["Body"].read()
+            return body.decode("utf-8", errors="replace")
+        except Exception as exc:
+            logger.warning("Could not fetch S3 FASTA %s: %s", s, exc)
+            return s
+    import os
+    if os.path.isfile(s):
+        try:
+            with open(s) as fh:
+                return fh.read()
+        except Exception as exc:
+            logger.warning("Could not read FASTA file %s: %s", s, exc)
+    return s
+
+
 def run_phylogenetic_tree_raw(aligned_sequences: str) -> Dict[str, Any]:
     """
     Build a phylogenetic tree from the provided FASTA sequences.
 
     If ``aligned_sequences`` is empty or None, the canonical SARS-CoV-2
-    spike protein dataset (5 VOCs) is used.
+    spike protein dataset (8 VOCs) is used.  S3 URIs and local file paths
+    are resolved automatically.
 
     Returns a result dict matching the shape expected by dispatch_tool and
     agent_tools.phylogenetic_tree.
     """
-    fasta_text = (aligned_sequences or "").strip()
+    fasta_text = _resolve_fasta_input(aligned_sequences or "")
     if not fasta_text:
         logger.info("No sequences provided; using built-in SARS-CoV-2 dataset.")
         fasta_text = SARS_COV2_SPIKE_FASTA
@@ -315,7 +345,7 @@ def run_clustering_from_tree(aligned_sequences: str, num_clusters: int = 3) -> D
     Cluster sequences based on pairwise distance (hierarchical clustering).
     Returns cluster assignments and a dendrogram plot.
     """
-    fasta_text = (aligned_sequences or "").strip() or SARS_COV2_SPIKE_FASTA
+    fasta_text = _resolve_fasta_input(aligned_sequences or "") or SARS_COV2_SPIKE_FASTA
     seqs = _parse_fasta(fasta_text)
     if len(seqs) < 2:
         return {"status": "error", "text": "At least 2 sequences required."}
