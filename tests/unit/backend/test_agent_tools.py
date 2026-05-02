@@ -271,23 +271,14 @@ class TestSingleCellAnalysis:
         assert "output" in result
         assert "capabilities" in result["output"]
     
-    def test_single_cell_analysis_with_mock_data(self):
-        """Test single-cell analysis with mock data file."""
-        # In mock mode or without Rscript, this may fail gracefully
-        # We'll just verify it doesn't crash
-        try:
-            result = single_cell_analysis.invoke({
-                "data_file": "/mock/path/data.h5",
-                "data_format": "h5",
-                "steps": "all"
-            })
-            assert isinstance(result, dict)
-            assert "text" in result
-        except (FileNotFoundError, Exception):
-            # Rscript not available is expected in some test environments
-            # The tool should handle this gracefully, but if it doesn't,
-            # we'll just skip this test
-            pytest.skip("Rscript not available or tool doesn't handle missing Rscript gracefully")
+    def test_single_cell_analysis_no_data_file(self):
+        """Test informational path (no data_file) — no R runtime needed."""
+        result = single_cell_analysis.invoke({
+            "question": "What steps are involved in a standard scRNA-seq workflow?"
+        })
+        assert isinstance(result, dict)
+        assert "text" in result
+        assert "output" in result
 
 
 class TestFetchNCBISequence:
