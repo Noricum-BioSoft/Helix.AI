@@ -42,6 +42,24 @@ if [[ "${HELIX_SKIP_FRONTEND:-}" != "1" ]] && [[ -d "${ROOT}/frontend" ]]; then
   )
 fi
 
+
+# ---------------------------------------------------------------------------
+# Pre-deploy gate: data integrity checks (fast, no backend required)
+# ---------------------------------------------------------------------------
+echo "[helix] running pre-deploy data integrity checks..."
+if [[ -d "${ROOT}/.venv" ]]; then
+  source "${ROOT}/.venv/bin/activate"
+fi
+if python -m pytest tests/unit/backend/test_demo_data_integrity.py \
+    -m "not s3" \
+    -q --tb=short 2>&1; then
+  echo "[helix] data integrity checks passed."
+else
+  echo "ERROR: data integrity checks failed — aborting deploy." >&2
+  echo "Run:  pytest tests/unit/backend/test_demo_data_integrity.py -v  for details." >&2
+  exit 1
+fi
+
 echo "[helix] restart systemd service..."
 if systemctl is-active --quiet helix-backend 2>/dev/null; then
   sudo systemctl restart helix-backend
