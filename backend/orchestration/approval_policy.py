@@ -163,6 +163,12 @@ def _classify_staging_intent(command: str) -> StagingDecision:
 # Public API
 # ---------------------------------------------------------------------------
 
+def has_explicit_execute_intent(command: str) -> bool:
+    """Return True if the user's command explicitly signals they want to execute now."""
+    decision = _classify_staging_intent(command)
+    return decision.has_execute_intent
+
+
 def requires_approval_semantics(command: str, action_type: Optional[str] = None) -> bool:
     """Return True if this command requires user approval before execution.
 
