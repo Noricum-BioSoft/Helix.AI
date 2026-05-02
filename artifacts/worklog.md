@@ -76,3 +76,18 @@ and canonical JSON schema across all 50 bioinformatics workflow types.
 **SSE streaming**: shipped, TTFB ~5ms.
 **Unit tests**: 724 passed, 3 skipped (optional deps), 0 failed.
 **Release readiness**: artifacts/release_readiness.json updated — PASS.
+- Autoloop stopped after max iterations: blockers: [{'id': 'unit-skip-optional-deps', 'severity': 'low', 'description': '3 unit tests skipped because anndata/h5py are not installed in the dev venv. These are optional bioinformatics libraries for single-cell profilers.', 'resolution': 'pip install anndata h5py in CI environment, or mark as optional in release gate'}]
+- Autoloop stopped after max iterations: blockers: [{'id': 'unit-skip-optional-deps', 'severity': 'low', 'description': '3 unit tests skipped because anndata/h5py are not installed in the dev venv. These are optional bioinformatics libraries for single-cell profilers.', 'resolution': 'pip install anndata h5py in CI environment, or mark as optional in release gate'}]
+- Autoloop stopped after max iterations: blockers: [{'id': 'unit-skip-optional-deps', 'severity': 'low', 'description': '3 unit tests skipped because anndata/h5py are not installed in the dev venv. These are optional bioinformatics libraries for single-cell profilers.', 'resolution': 'pip install anndata h5py in CI environment, or mark as optional in release gate'}]
+- Autoloop stopped after max iterations: blockers: [{'id': 'unit-skip-optional-deps', 'severity': 'low', 'description': '3 unit tests skipped because anndata/h5py are not installed in the dev venv. These are optional bioinformatics libraries for single-cell profilers.', 'resolution': 'pip install anndata h5py in CI environment, or mark as optional in release gate'}]
+- Autoloop stopped after max iterations: blockers: [{'id': 'unit-skip-optional-deps', 'severity': 'low', 'description': '3 unit tests skipped because anndata/h5py are not installed in the dev venv. These are optional bioinformatics libraries for single-cell profilers.', 'resolution': 'pip install anndata h5py in CI environment, or mark as optional in release gate'}]
+
+---
+## 2026-05-02 — Benchmark re-run + deps fix (commit 724c774)
+
+**Unit tests**: 742 passed, 2 skipped (Rscript runtime), 0 failed.
+anndata + h5py added to requirements.txt; 18 previously-skipped profiler tests now pass.
+**Pass rate**: 50/50 (100%) — second consecutive perfect run.
+**Advisory rendering**: 25/50 canonical advisory; 25/50 text (all with rich frontend cards).
+**Latency p50**: 14.3s (−13% since Apr 28), p95: 19.6s (−38%).
+**Release readiness**: readiness=true. Only blocker: Rscript not installed (low severity).
