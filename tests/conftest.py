@@ -28,6 +28,13 @@ if tests_dir_str in sys.path:
 # This prevents optional LLM / cloud dependencies from being imported/executed.
 os.environ.setdefault("HELIX_MOCK_MODE", "1")
 
+# Redirect all tool and agent output files to tmp/test-results/ so they never
+# land in the repo root or pollute the working tree.
+_TEST_OUTPUT_DIR = PROJECT_ROOT / "tmp" / "test-results"
+_TEST_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+os.environ.setdefault("HELIX_OUTPUT_DIR", str(_TEST_OUTPUT_DIR))
+os.environ.setdefault("OUTPUT_DIR", str(_TEST_OUTPUT_DIR))
+
 # Also add tools directory explicitly for tests that import tool modules directly.
 TOOLS_PATH = PROJECT_ROOT / "tools"
 if str(TOOLS_PATH) not in sys.path:

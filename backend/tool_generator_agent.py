@@ -12,6 +12,7 @@ This agent follows the workflow defined in agents/tool-generator-agent.md:
 
 import os
 import sys
+import uuid
 import asyncio
 import logging
 import tempfile
@@ -1140,7 +1141,16 @@ async def _execute_generated_code(
 
         # Indicate that Python-based solutions should be preferred
         env['HELIX_PREFER_PYTHON'] = '1'
-        
+
+        # Create an isolated per-execution working directory so generated scripts
+        # write their output files there instead of polluting the repo root.
+        run_tmp = Path(tempfile.gettempdir()) / "helix-tool-runs" / uuid.uuid4().hex[:16]
+        run_tmp.mkdir(parents=True, exist_ok=True)
+
+        # Expose the run directory so generated scripts can reference it explicitly.
+        env.setdefault("HELIX_OUTPUT_DIR", str(run_tmp))
+        env.setdefault("OUTPUT_DIR", str(run_tmp))
+
         # Execute the code
         result = subprocess.run(
             [sys.executable, temp_file],
@@ -1148,7 +1158,7 @@ async def _execute_generated_code(
             text=True,
             timeout=300,  # 5 minute timeout
             env=env,
-            cwd=str(PROJECT_ROOT)
+            cwd=str(run_tmp)
         )
         
         stdout = result.stdout

@@ -397,11 +397,14 @@ async def _run_nextflow(
         # with a digit, so we prefix with "helix-" and truncate to 80 chars.
         nf_run_name = f"helix-{job_id}"[:80]
 
+        job_dir = work_dir.parent
         cmd = [
             NEXTFLOW_BIN, "run", pipeline_arg,
             "-w", str(work_dir),
             "-name", nf_run_name,            # run name used for weblog correlation
             "-with-weblog", weblog_url,
+            "-with-report", str(job_dir / "report.html"),
+            "-with-timeline", str(job_dir / "timeline.html"),
             "--helix_job_id", job_id,        # param-level job_id for double-lookup
         ]
         # Use custom nextflow.config when present (enables Docker globally without a profile)
@@ -427,7 +430,7 @@ async def _run_nextflow(
                 *cmd,
                 stdout=log_fh,
                 stderr=asyncio.subprocess.STDOUT,
-                cwd=str(project_root),
+                cwd=str(work_dir.parent),
             )
             jm.set_nextflow_job_running(job_id, pid=proc.pid)
             await proc.wait()

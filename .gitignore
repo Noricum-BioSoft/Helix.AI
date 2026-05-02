@@ -493,6 +493,17 @@ tests/workflows/*.md
 # Local scratch scripts
 test_complete_workflow.py
 
+# =============================================================================
+# Local run outputs (tmp/)
+# All agent tool runs, generated code output, and test artifacts go here.
+# =============================================================================
+tmp/
+
+# Pipeline result directories not yet listed above
+GSE123456_reanalyze_out/
+demo_fastq_merge/
+out/
+
 # Benchmark run artifacts (only baseline.json is tracked source)
 benchmarks/runs/iteration_*.json
 benchmarks/runs/iteration_*.md
