@@ -37,3 +37,8 @@ pytest
 pytest-asyncio
 playwright>=1.40.0
 pytest-playwright>=0.4.3
+
+# Optional bioinformatics profilers (single-cell + alignment file intelligence)
+# Required to run tests/unit/backend/test_zero_coverage_profilers.py
+anndata>=0.10
+h5py>=3.9
