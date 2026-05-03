@@ -228,6 +228,12 @@ def should_stage_for_approval(
         return False
     if decision.requires_approval:
         return True
+    # Router-level fallbacks always need a plan card before execution.
+    # ``multi_step_workflow`` always represents a composite request that needs
+    # the approval-then-agent re-route path; ``handle_natural_command`` only
+    # stages when the LLM has flagged it as planning.
+    if tool_name == "multi_step_workflow":
+        return True
     if tool_name == "handle_natural_command" and decision.is_planning_request:
         return True
     return False

@@ -1,10 +1,57 @@
 import json
+import logging
 import os
 import re
+from pathlib import Path
+from threading import Lock
 from typing import Dict, Any, Optional, Tuple
 
 # Import directed evolution handler
 from backend.directed_evolution_handler import DirectedEvolutionHandler
+
+logger = logging.getLogger(__name__)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lightweight metrics — counters for routing health, written to a JSON sidecar
+# so dashboards can read them without a metrics server.  Disabled by default;
+# enable with HELIX_ROUTER_METRICS=1.
+# ─────────────────────────────────────────────────────────────────────────────
+_METRICS_LOCK = Lock()
+_METRICS_PATH_DEFAULT = Path(os.getenv("HELIX_ROUTER_METRICS_PATH", "tmp/router-metrics.json"))
+
+
+def _record_metric(name: str, **labels: Any) -> None:
+    """Increment a named counter in the metrics sidecar JSON file."""
+    if os.getenv("HELIX_ROUTER_METRICS", "1").lower() not in ("1", "true", "yes"):
+        return
+    try:
+        with _METRICS_LOCK:
+            path = _METRICS_PATH_DEFAULT
+            path.parent.mkdir(parents=True, exist_ok=True)
+            data: Dict[str, Any] = {}
+            if path.exists():
+                try:
+                    data = json.loads(path.read_text() or "{}")
+                except Exception:
+                    data = {}
+            counters = data.setdefault("counters", {})
+            key = name if not labels else f"{name}::" + ",".join(f"{k}={v}" for k, v in sorted(labels.items()))
+            counters[key] = int(counters.get(key, 0)) + 1
+            path.write_text(json.dumps(data, indent=2, sort_keys=True))
+    except Exception as exc:
+        logger.debug("router metrics write failed: %s", exc)
+
+# Tool buckets for the router's "no-match" cases.
+#
+# - MULTI_STEP_WORKFLOW: router recognised a real bioinformatics request that
+#   composes more than one tool (e.g. fetch sequences → align → build tree).
+#   Approval-time logic re-routes through the agent so the right concrete tools
+#   are dispatched.
+# - UNKNOWN_INTENT: router could not match the request to any known tool —
+#   surfaced to the user as a clarification request rather than executed blindly.
+ROUTER_FALLBACK_MULTI_STEP = "multi_step_workflow"
+ROUTER_FALLBACK_UNKNOWN = "unknown_intent"
 
 # Tools the router may return; must match agent's safe_tools + handle_natural_command.
 # Used by LLM-based routing. Order does not matter.
@@ -45,6 +92,11 @@ ROUTER_TOOLS = [
     ("session_run_io_summary", "Summarize inputs and outputs of a specific session run"),
     ("local_demo_plot_script", "Generate a quick local scatter/demo plot (development/testing)"),
     ("handle_natural_command", "No specific tool; use general assistant/tool generator"),
+    # Router-only outcomes — never executed directly; handled at the approval
+    # layer (multi_step_workflow re-routes through the agent; unknown_intent
+    # surfaces a clarification card to the user).
+    (ROUTER_FALLBACK_MULTI_STEP, "Composite/multi-step bioinformatics workflow that needs the full agent (e.g. 'fetch sequences then align then build tree')"),
+    (ROUTER_FALLBACK_UNKNOWN, "Request cannot be matched to any known tool — ask the user to clarify"),
 ]
 
 # JSON schema for the LLM router response (for planning and debugging).
@@ -74,13 +126,103 @@ class CommandRouter:
     def __init__(self):
         self.de_handler = DirectedEvolutionHandler()
 
+    # ────────────────────────────────────────────────────────────────────
+    # Deterministic pre-router
+    # ────────────────────────────────────────────────────────────────────
+    def _route_deterministic(
+        self, command: str, session_context: Dict[str, Any]
+    ) -> Optional[Tuple[str, Dict[str, Any]]]:
+        """Match unambiguous patterns without an LLM call.
+
+        Returns (tool, params) when a high-confidence pattern matches, else
+        None.  Conservative by design — only canonical, low-ambiguity patterns
+        belong here; everything else falls through to the LLM router.
+
+        Patterns currently covered:
+          1. Explicit ``tool: <name>`` directive at start of line.
+          2. Bulk RNA-seq inputs block (count_matrix + sample_metadata + design_formula).
+          3. Single-cell 10x inputs block (data_file *.h5 + data_format: 10x).
+          4. Phylogenetic tree request with ``sequences:`` line containing FASTA / S3 / file path.
+          5. ``visualize_job_results`` requests with a UUID and an explicit
+             "show" / "visualize job" verb.
+        """
+        cmd = (command or "").strip()
+        if not cmd:
+            return None
+        cmd_lower = cmd.lower()
+
+        def _wrap(tool: str, params: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+            base = {"session_id": session_context.get("session_id", "")}
+            base.update(params)
+            base["router_reasoning"] = {
+                "problem_description": "deterministic match",
+                "intent": "single-tool",
+                "suggested_steps": [],
+                "deterministic_path": tool,
+            }
+            return (tool, base)
+
+        # 1) Explicit tool directive: "tool: phylogenetic_tree"
+        m = re.match(r"^\s*tool\s*[:=]\s*([a-z_]+)\b", cmd_lower)
+        if m:
+            tool = m.group(1)
+            if tool in {t[0] for t in ROUTER_TOOLS}:
+                _record_metric("router.deterministic_match", pattern="explicit_tool", tool=tool)
+                return _wrap(tool, {})
+
+        # 2) Bulk RNA-seq inputs block
+        if (
+            re.search(r"\bcount_matrix\s*:", cmd_lower)
+            and re.search(r"\b(sample_metadata|metadata)\s*:", cmd_lower)
+            and re.search(r"\bdesign_formula\s*:", cmd_lower)
+        ):
+            _record_metric("router.deterministic_match", pattern="bulk_rnaseq_inputs", tool="bulk_rnaseq_analysis")
+            return _wrap("bulk_rnaseq_analysis", {})
+
+        # 3) Single-cell 10x inputs block
+        if (
+            re.search(r"\bdata_file\s*:.*\.h5\b", cmd_lower)
+            and re.search(r"\bdata_format\s*:\s*10x\b", cmd_lower)
+        ):
+            _record_metric("router.deterministic_match", pattern="scrna_10x_inputs", tool="single_cell_analysis")
+            return _wrap("single_cell_analysis", {})
+
+        # 4) Phylogenetic tree request with explicit sequences source
+        if (
+            ("phylogen" in cmd_lower or "tree" in cmd_lower and "build" in cmd_lower)
+            and re.search(r"\bsequences\s*:\s*(s3://|/|>|[A-Z]+_?\d{4,})", cmd, re.MULTILINE)
+        ):
+            _record_metric("router.deterministic_match", pattern="phylo_explicit_sequences", tool="phylogenetic_tree")
+            return _wrap("phylogenetic_tree", {})
+
+        # 5) Visualize job results by UUID
+        uuid_match = re.search(
+            r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+            cmd_lower,
+        )
+        if uuid_match and any(v in cmd_lower for v in ("visualize job", "show job", "show results")):
+            _record_metric("router.deterministic_match", pattern="visualize_job", tool="visualize_job_results")
+            return _wrap("visualize_job_results", {"job_id": uuid_match.group(0)})
+
+        return None
+
+    # ────────────────────────────────────────────────────────────────────
+    # LLM router with strict schema validation
+    # ────────────────────────────────────────────────────────────────────
     def _route_with_llm(
         self, command: str, session_context: Dict[str, Any]
     ) -> Optional[Tuple[str, Dict[str, Any]]]:
         """
         Use the same LLM as the intent classifier to pick the best tool for the command.
         Returns (tool_name, base_params) or None if LLM is disabled/unavailable or on error.
-        Only returns tool names from ROUTER_TOOLS; otherwise returns handle_natural_command.
+
+        Strict schema validation:
+          - Response MUST be parseable JSON with keys: tool, problem-description,
+            intent, suggested-steps.
+          - ``tool`` MUST be one of ROUTER_TOOLS (including the new
+            ``multi_step_workflow`` / ``unknown_intent`` outcomes).  Anything
+            else is rejected and recorded as a schema violation.
+          - ``suggested-steps`` MUST be a list (or coercible to one).
         """
         if os.getenv("HELIX_USE_LLM_ROUTER", "1").lower() not in ("1", "true", "yes"):
             return None
@@ -89,7 +231,9 @@ class CommandRouter:
         try:
             from backend.intent_classifier import _get_llm
             llm = _get_llm()
-        except Exception:
+        except Exception as exc:
+            logger.warning("router._route_with_llm: LLM init failed: %s", exc)
+            _record_metric("router.llm_unavailable", reason="init_failed")
             return None
 
         allowed = {t[0] for t in ROUTER_TOOLS}
@@ -98,44 +242,73 @@ class CommandRouter:
         system = (
             "You are a router. Given a user command and a list of tools, respond with a single JSON object "
             "with these keys: " + schema_desc + ". "
-            "For \"tool\", use exactly one of the tool names from the list, or \"handle_natural_command\" "
-            "if no single tool fits (e.g. multi-step or composite requests). Use only the exact tool names given."
+            "For \"tool\", use exactly one of the tool names from the list. "
+            "Use \"" + ROUTER_FALLBACK_MULTI_STEP + "\" when the request composes "
+            "two or more concrete bioinformatics tools (e.g. fetch sequences → align → build tree). "
+            "Use \"" + ROUTER_FALLBACK_UNKNOWN + "\" only when no tool can plausibly handle the request. "
+            "Use \"handle_natural_command\" only for free-form Q&A / informational requests. "
+            "Use only the exact tool names given."
         )
         user = f"User command:\n{command.strip()}\n\nTools:\n{tools_text}"
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
         try:
             response = llm.invoke(messages)
             content = (response.content or "").strip()
-        except Exception:
+        except Exception as exc:
+            logger.warning("router._route_with_llm: LLM invoke failed: %s", exc)
+            _record_metric("router.llm_unavailable", reason="invoke_failed")
             return None
-        # Parse JSON
+
+        # Strict JSON extraction
         start = content.find("{")
         end = content.rfind("}") + 1
         if start < 0 or end <= start:
+            logger.warning("router._route_with_llm: response had no JSON object: %r", content[:200])
+            _record_metric("router.schema_violation", reason="no_json")
             return None
         try:
             out = json.loads(content[start:end])
-            tool = (out.get("tool") or "").strip()
-        except (json.JSONDecodeError, TypeError):
+        except (json.JSONDecodeError, TypeError) as exc:
+            logger.warning("router._route_with_llm: JSON parse failed: %s — content: %r", exc, content[:200])
+            _record_metric("router.schema_violation", reason="json_parse")
             return None
-        if not tool or tool not in allowed:
-            tool = "handle_natural_command"
-        base = {"session_id": session_context.get("session_id", "")}
-        if tool == "handle_natural_command":
-            base["command"] = command
-        # Attach parsed schema fields for planning/debugging (keys may have hyphens -> use safe keys)
-        raw_steps = out.get("suggested-steps")
+        if not isinstance(out, dict):
+            _record_metric("router.schema_violation", reason="not_object")
+            return None
+
+        tool = (out.get("tool") or "").strip()
+        if not tool:
+            _record_metric("router.schema_violation", reason="missing_tool")
+            return None
+        if tool not in allowed:
+            logger.warning(
+                "router._route_with_llm: LLM returned unknown tool %r — falling back to %s",
+                tool, ROUTER_FALLBACK_UNKNOWN,
+            )
+            _record_metric("router.schema_violation", reason="unknown_tool", tool=tool)
+            tool = ROUTER_FALLBACK_UNKNOWN
+
+        # Required schema fields — coerce if provided in any reasonable form
+        problem_description = out.get("problem-description") or out.get("problem_description") or ""
+        intent = out.get("intent") or ""
+        raw_steps = out.get("suggested-steps") or out.get("suggested_steps")
         if isinstance(raw_steps, list):
-            suggested_steps = [str(s).strip() for s in raw_steps if s]
+            suggested_steps = [str(s).strip() for s in raw_steps if str(s).strip()]
         elif isinstance(raw_steps, str) and raw_steps.strip():
             suggested_steps = [raw_steps.strip()]
         else:
             suggested_steps = []
+
+        base: Dict[str, Any] = {"session_id": session_context.get("session_id", "")}
+        if tool in ("handle_natural_command", ROUTER_FALLBACK_MULTI_STEP, ROUTER_FALLBACK_UNKNOWN):
+            base["command"] = command
         base["router_reasoning"] = {
-            "problem_description": out.get("problem-description") or "",
-            "intent": out.get("intent") or "",
+            "problem_description": str(problem_description),
+            "intent": str(intent),
             "suggested_steps": suggested_steps,
+            "deterministic_path": None,
         }
+        _record_metric("router.llm_routed", tool=tool)
         return (tool, base)
 
     def route_command_with_shadow(
@@ -148,6 +321,8 @@ class CommandRouter:
 
         In LLM-only mode, shadow routing makes a second independent call to
         ``_route_with_llm`` and records whether the two LLM calls agreed.
+        Disagreements are counted in the metrics sidecar so dashboards can
+        track router stability over time.
         """
         tool_name, params = self.route_command(command, session_context)
         if os.getenv("HELIX_ROUTER_SHADOW_MODE", "0").lower() not in ("1", "true", "yes"):
@@ -165,33 +340,61 @@ class CommandRouter:
         llm_shadow = self._route_with_llm(command, session_context)
         if llm_shadow is None:
             shadow_payload["skipped_reason"] = "llm_router_unavailable"
+            _record_metric("router.shadow_skipped", reason="llm_unavailable")
             safe_params["router_shadow"] = shadow_payload
             return tool_name, safe_params
 
         shadow_tool, _shadow_params = llm_shadow
+        disagrees = bool(shadow_tool and shadow_tool != tool_name)
         shadow_payload["shadow_tool"] = shadow_tool
-        shadow_payload["disagrees"] = bool(shadow_tool and shadow_tool != tool_name)
+        shadow_payload["disagrees"] = disagrees
         safe_params["router_shadow"] = shadow_payload
+        _record_metric(
+            "router.shadow_disagreement" if disagrees else "router.shadow_agreement",
+            primary=tool_name,
+            shadow=shadow_tool,
+        )
+        if disagrees:
+            logger.info(
+                "router.shadow disagreement: primary=%s shadow=%s command=%r",
+                tool_name, shadow_tool, command[:120],
+            )
         return tool_name, safe_params
-    
+
     def route_command(self, command: str, session_context: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
-        """Route a command to the appropriate tool using LLM classification.
+        """Route a command to the appropriate tool.
+
+        Resolution order:
+          1. Deterministic pre-router for canonical patterns (no network call).
+          2. LLM router with strict JSON schema validation.
 
         Returns (tool_name, parameters).  Raises RoutingError when the LLM is
-        unavailable.  In tests, mock ``_route_with_llm`` to return deterministic
-        results without a live API.
+        unavailable AND no deterministic match was found.  In tests, mock
+        ``_route_with_llm`` to return deterministic results without a live API.
         """
+        deterministic = self._route_deterministic(command, session_context)
+        if deterministic is not None:
+            tool_name, base_params = deterministic
+            params = self._extract_parameters(command, tool_name, session_context)
+            for k, v in base_params.items():
+                params.setdefault(k, v)
+            logger.info("router: deterministic -> %s", tool_name)
+            return tool_name, params
+
         llm_result = self._route_with_llm(command, session_context)
         if llm_result is not None:
             tool_name, base_params = llm_result
             params = self._extract_parameters(command, tool_name, session_context)
             for k, v in base_params.items():
                 params.setdefault(k, v)
-            print(f"🔧 Command router: LLM routed -> {tool_name}")
+            logger.info("router: llm -> %s", tool_name)
             return tool_name, params
+
+        _record_metric("router.failed", reason="llm_unavailable_no_deterministic")
         raise RoutingError(
-            "LLM router unavailable. Ensure LLM is configured (set OPENAI_API_KEY or "
-            "DEEPSEEK_API_KEY). For offline testing, mock CommandRouter._route_with_llm."
+            "LLM router unavailable and no deterministic pattern matched. Ensure LLM is "
+            "configured (set OPENAI_API_KEY or DEEPSEEK_API_KEY). For offline testing, mock "
+            "CommandRouter._route_with_llm."
         )
 
     def route_plan(self, command: str, session_context: Dict[str, Any]) -> Dict[str, Any]:

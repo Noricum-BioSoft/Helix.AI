@@ -22,7 +22,21 @@ def test_router_tool_mapping_bio_eval(case):
         return
 
     tool_name, params = router.route_command(command, session_context)
-    assert tool_name == case.expect["tool_name"]
+
+    # Tests can accept either a single expected tool or any-of-N for cases
+    # where multiple routings are semantically reasonable (e.g. a phylogenetic
+    # request with raw accessions could go to phylogenetic_tree OR
+    # fetch_ncbi_sequence-first multi-step).
+    expected_tool = case.expect.get("tool_name")
+    expected_oneof = case.expect.get("tool_name_oneof")
+    if expected_oneof:
+        assert tool_name in expected_oneof, (
+            f"Expected tool in {expected_oneof}, got {tool_name!r}"
+        )
+    else:
+        assert tool_name == expected_tool, (
+            f"Expected tool {expected_tool!r}, got {tool_name!r}"
+        )
 
     expected_subset = case.expect.get("parameters_subset") or {}
     if expected_subset:

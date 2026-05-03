@@ -2948,16 +2948,15 @@ async def execute(req: CommandRequest, request: Request):
                 _exec_cp = WorkflowCheckpoint(state=WorkflowState.EXECUTING)
                 history_manager.save_checkpoint(req.session_id, _exec_cp)
 
-                # Detect plans whose ALL steps are `handle_natural_command` —
-                # these are placeholder plans created when the router couldn't pick a
-                # specific bioinformatics tool (e.g. multi-step composite requests).
-                # Executing `handle_natural_command` directly only returns a text
-                # description; re-route through the full agent so it can dispatch the
-                # right tools (phylogenetic_tree, alignment, bulk_rnaseq_analysis, …).
+                # Detect plans whose ALL steps are router-level placeholders
+                # (handle_natural_command / multi_step_workflow).  These are not
+                # directly executable — re-route through the full agent so it
+                # can dispatch the right concrete tools.
                 _plan_steps = plan.get("steps") or []
+                _PLACEHOLDER_TOOLS = {"handle_natural_command", "multi_step_workflow"}
                 _is_handle_natural_plan = bool(_plan_steps) and all(
-                    (s.get("tool") == "handle_natural_command"
-                     or s.get("tool_name") == "handle_natural_command")
+                    (s.get("tool") in _PLACEHOLDER_TOOLS
+                     or s.get("tool_name") in _PLACEHOLDER_TOOLS)
                     for s in _plan_steps
                 )
                 if _is_handle_natural_plan:
@@ -3153,6 +3152,34 @@ async def execute(req: CommandRequest, request: Request):
                 except asyncio.TimeoutError:
                     logger.warning("Approval gate routing timed out after %ss — skipping gate", _gate_timeout_s)
                     _approval_tool, _approval_params = "handle_natural_command", {}
+
+                # Unknown intent → return a clarification card immediately rather
+                # than executing a placeholder tool that can't satisfy the request.
+                if _approval_tool == "unknown_intent":
+                    _suggestions = []
+                    rr = (_approval_params or {}).get("router_reasoning") or {}
+                    if isinstance(rr.get("suggested_steps"), list):
+                        _suggestions = rr["suggested_steps"][:5]
+                    _clarify_text = (
+                        "I couldn't confidently match your request to a specific tool. "
+                        "Could you clarify what you'd like to do? "
+                    )
+                    if _suggestions:
+                        _clarify_text += "Possibilities I considered:\n- " + "\n- ".join(_suggestions)
+                    return await _dispatch_result(
+                        req,
+                        "unknown_intent",
+                        {
+                            "status": "needs_clarification",
+                            "success": True,
+                            "text": _clarify_text,
+                            "router_reasoning": rr,
+                            "workflow_state": WorkflowState.IDLE.value,
+                        },
+                        tool_args={},
+                        execution_path="router_unknown_intent",
+                    )
+
                 _ready_hist_recreate = _historical_recreation_ready_for_execution(
                     req.command,
                     _approval_tool,
@@ -7058,6 +7085,105 @@ async def health_check():
         "agent_disabled": _agent_disabled(),
         "mock_mode": _agent_disabled(),  # backward compatibility
     }
+
+
+@app.post("/debug/route")
+async def debug_route(req: CommandRequest):
+    """Diagnose how the router would handle a command — without executing it.
+
+    Returns the deterministic match (if any), the LLM router result (if any),
+    and the final tool the system would dispatch to.  Use this to debug
+    "wrong fallback" issues without running the full pipeline.
+
+    Request body: ``{"command": "<text>", "session_id": "<optional>"}``
+    """
+    from backend.command_router import CommandRouter, ROUTER_FALLBACK_UNKNOWN, ROUTER_FALLBACK_MULTI_STEP
+
+    router = CommandRouter()
+    sc = {"session_id": req.session_id or ""}
+
+    # Stage 1: deterministic
+    det = router._route_deterministic(req.command, sc)
+    deterministic_match = None
+    if det is not None:
+        det_tool, det_params = det
+        deterministic_match = {
+            "tool": det_tool,
+            "pattern": (det_params.get("router_reasoning") or {}).get("deterministic_path"),
+        }
+
+    # Stage 2: LLM router (only when deterministic didn't match — same order as runtime)
+    llm_match = None
+    if det is None:
+        try:
+            llm_res = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: router._route_with_llm(req.command, sc)
+            )
+            if llm_res is not None:
+                llm_tool, llm_params = llm_res
+                llm_match = {
+                    "tool": llm_tool,
+                    "router_reasoning": llm_params.get("router_reasoning"),
+                }
+        except Exception as exc:
+            llm_match = {"error": str(exc)}
+
+    # Stage 3: full route_command (deterministic OR llm — same as production)
+    final_tool: Optional[str] = None
+    final_params: Optional[Dict[str, Any]] = None
+    final_error: Optional[str] = None
+    try:
+        final_tool, final_params = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: router.route_command(req.command, sc)
+        )
+    except Exception as exc:
+        final_error = str(exc)
+
+    # Stage 4: would-stage-for-approval check
+    from backend.orchestration.approval_policy import should_stage_for_approval
+    from backend.action_plan import infer_action_type
+    would_stage = None
+    if final_tool:
+        try:
+            would_stage = should_stage_for_approval(
+                final_tool,
+                req.command,
+                final_params or {},
+                action_type=infer_action_type(req.command, final_tool),
+            )
+        except Exception:
+            would_stage = None
+
+    return {
+        "command": req.command,
+        "deterministic_match": deterministic_match,
+        "llm_match": llm_match,
+        "final": {
+            "tool": final_tool,
+            "params": final_params,
+            "error": final_error,
+        },
+        "would_stage_for_approval": would_stage,
+        "is_router_fallback": final_tool in (
+            "handle_natural_command",
+            ROUTER_FALLBACK_MULTI_STEP,
+            ROUTER_FALLBACK_UNKNOWN,
+        ),
+    }
+
+
+@app.get("/debug/router-metrics")
+async def debug_router_metrics():
+    """Read the router metrics sidecar (counters for routing health)."""
+    from pathlib import Path as _Path
+    metrics_path = _Path(os.getenv("HELIX_ROUTER_METRICS_PATH", "tmp/router-metrics.json"))
+    if not metrics_path.exists():
+        return {"counters": {}, "path": str(metrics_path), "note": "no metrics recorded yet"}
+    try:
+        import json as _json
+        return _json.loads(metrics_path.read_text() or "{}")
+    except Exception as exc:
+        return {"error": str(exc), "path": str(metrics_path)}
 
 @app.get("/api-docs")
 async def api_docs_info(request: Request):
