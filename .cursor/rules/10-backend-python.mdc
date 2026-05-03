@@ -29,7 +29,7 @@ If configured in this repo, also run:
 # Backend architecture focus
 The most important backend modules are:
 - runtime/routing:
-  - `backend/main_with_mcp.py`
+  - `backend/main.py`
   - `backend/agent.py`
   - `backend/command_router.py`
   - `backend/execution_broker.py`

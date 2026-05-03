@@ -54,7 +54,7 @@ When unsure, prioritize these subsystems:
 
 # Canonical entry points
 Key backend entry points:
-- `backend/main_with_mcp.py`
+- `backend/main.py`
 - `backend/agent.py`
 - `backend/command_router.py`
 - `backend/execution_broker.py`
