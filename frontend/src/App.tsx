@@ -122,6 +122,8 @@ function App() {
   // on the original plan card turns into "Submitted ✓" after the user clicks it.
   const [executedPipelineCommands, setExecutedPipelineCommands] = useState<Set<string>>(new Set());
   const historyTopRef = useRef<HTMLDivElement>(null);
+  /** Scrolled-to ref for the pending loading card so it stays in view regardless of scroll position. */
+  const pendingItemRef = useRef<HTMLDivElement>(null);
   const [selectedDesign, setSelectedDesign] = useState<DesignOptionId>('integrated');
   const [examplesOpen, setExamplesOpen] = useState(false);
   const [jobsOpen, setJobsOpen] = useState(false);
@@ -235,10 +237,22 @@ function App() {
     return Array.from(s);
   }, [history]);
   // On mount: restore session from storage if valid (and restore history), otherwise create new; check server health
-  // Reset loading message when loading finishes.  While loading, SSE progress
-  // events drive setLoadingMsg() directly so no timer is needed.
+  // While loading: cycle through BIOINF_LOADING_MESSAGES client-side so the
+  // user always sees activity even when the backend responds faster than the
+  // 2.5 s SSE heartbeat interval.  SSE progress events can still override the
+  // message with server-provided text via setLoadingMsg().
+  // When loading ends: reset to the first message for the next request.
   useEffect(() => {
-    if (!loading) setLoadingMsg(BIOINF_LOADING_MESSAGES[0]);
+    if (!loading) {
+      setLoadingMsg(BIOINF_LOADING_MESSAGES[0]);
+      return;
+    }
+    let idx = 0;
+    const timer = setInterval(() => {
+      idx = (idx + 1) % BIOINF_LOADING_MESSAGES.length;
+      setLoadingMsg(BIOINF_LOADING_MESSAGES[idx]);
+    }, 1800);
+    return () => clearInterval(timer);
   }, [loading]);
 
   useEffect(() => {
@@ -439,7 +453,9 @@ function App() {
       pendingId,
     };
     setHistory(prev => [pendingItem, ...prev]);
-    setTimeout(() => historyTopRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+    // Scroll to the pending card so the loading dots are always visible,
+    // regardless of where the user was in the conversation.
+    setTimeout(() => pendingItemRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
 
     setLoading(true);
     const activityId = addActivity('Processing your request...');
@@ -3223,7 +3239,7 @@ function App() {
             // ── Pending placeholder while backend is processing ──────────
             if (item.type === 'pending') {
               return (
-                <div key={item.pendingId || index} className="d-flex flex-column gap-3">
+                <div key={item.pendingId || index} ref={pendingItemRef} className="d-flex flex-column gap-3">
                   <div
                     className="align-self-end bg-blue-subtle border border-brand-blue rounded-4 shadow-sm px-3 py-2"
                     style={{ maxWidth: '50%', wordBreak: 'break-word', overflowWrap: 'anywhere' }}
