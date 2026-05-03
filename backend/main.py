@@ -2948,6 +2948,49 @@ async def execute(req: CommandRequest, request: Request):
                 _exec_cp = WorkflowCheckpoint(state=WorkflowState.EXECUTING)
                 history_manager.save_checkpoint(req.session_id, _exec_cp)
 
+                # Detect plans whose ALL steps are `handle_natural_command` —
+                # these are placeholder plans created when the router couldn't pick a
+                # specific bioinformatics tool (e.g. multi-step composite requests).
+                # Executing `handle_natural_command` directly only returns a text
+                # description; re-route through the full agent so it can dispatch the
+                # right tools (phylogenetic_tree, alignment, bulk_rnaseq_analysis, …).
+                _plan_steps = plan.get("steps") or []
+                _is_handle_natural_plan = bool(_plan_steps) and all(
+                    (s.get("tool") == "handle_natural_command"
+                     or s.get("tool_name") == "handle_natural_command")
+                    for s in _plan_steps
+                )
+                if _is_handle_natural_plan:
+                    logger.info(
+                        "[approval_execute] single handle_natural_command plan detected — "
+                        "re-routing through agent for proper tool dispatch"
+                    )
+                    _original_cmd = pending_plan.get("command") or req.command
+                    from backend.agent import handle_command
+                    _agent_timeout_s = int(os.getenv("HELIX_AGENT_TIMEOUT_S", "90"))
+                    agent_result, agent_diag = await _run_agent_with_retry(
+                        lambda: handle_command(
+                            _original_cmd,
+                            session_id=req.session_id,
+                            session_context=session_context,
+                            execute_plan=True,
+                        ),
+                        timeout_s=_agent_timeout_s,
+                        retries=int(os.getenv("HELIX_AGENT_RETRIES", "1")),
+                        backoff_s=float(os.getenv("HELIX_AGENT_BACKOFF_S", "0.5")),
+                    )
+                    if isinstance(agent_result, dict):
+                        agent_result.setdefault("diagnostics", agent_diag)
+                    _clear_pending_plan(req.session_id)
+                    history_manager.save_checkpoint(req.session_id, WorkflowCheckpoint.completed())
+                    return await _dispatch_result(
+                        req,
+                        agent_result.get("tool", "handle_natural_command") if isinstance(agent_result, dict) else "handle_natural_command",
+                        agent_result,
+                        tool_args={},
+                        execution_path="approval_agent_rerouteed_from_handle_natural",
+                    )
+
                 broker = _get_execution_broker()
                 result = await broker.execute_tool(
                     ExecutionRequest(
