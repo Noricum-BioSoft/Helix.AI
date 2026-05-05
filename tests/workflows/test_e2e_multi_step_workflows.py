@@ -57,17 +57,25 @@ class TestMultiStepWorkflowE2E:
     async def test_handle_command_routes_to_workflow_handler(self):
         """Test that handle_command routes multi-step commands to workflow handler."""
         command = "Execute complete RNA-seq workflow: FastQC then STAR alignment"
-        
-        with patch('backend.agent.CommandProcessor._handle_multi_step_workflow', new_callable=AsyncMock) as mock_handler:
+
+        # In HELIX_MOCK_MODE the live LLM-based intent classifier is disabled
+        # (raises by design — see backend/intent_classifier.py). This test only
+        # verifies the multi-step routing branch, so stub classify_intent to
+        # return a deterministic "execute" decision.
+        from backend.intent_classifier import IntentDecision
+
+        with patch('backend.agent.CommandProcessor._handle_multi_step_workflow', new_callable=AsyncMock) as mock_handler, \
+             patch('backend.intent_classifier.classify_intent',
+                   return_value=IntentDecision(intent="execute", reason="test_mock")), \
+             patch('backend.agent._get_agent', return_value=Mock()):
             mock_handler.return_value = {
                 "status": "workflow_executed",
                 "success": True,
                 "workflow_id": "test_wf_123"
             }
-            
-            with patch('backend.agent._get_agent', return_value=Mock()):
-                result = await handle_command(command, session_id="test_e2e")
-            
+
+            result = await handle_command(command, session_id="test_e2e")
+
             # Should have called the multi-step workflow handler
             assert mock_handler.called or "workflow" in str(result)
     

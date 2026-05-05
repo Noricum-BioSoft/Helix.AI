@@ -150,7 +150,10 @@ def test_execute_demo1_bulk_iterative_approval_and_rerun(client: TestClient, fak
         assert "all inputs are available" not in first["text"].lower()
 
     approved = _post_execute(client, "Approve.", sid)
-    assert approved["status"] in {"success", "pipeline_submitted"}
+    # `pipeline_executed` is the synchronous success status returned when
+    # the planned pipeline has no remaining executable steps (see
+    # CommandProcessor.execute_pipeline() in backend/agent.py).
+    assert approved["status"] in {"success", "pipeline_submitted", "pipeline_executed"}
     assert "executed" in approved["text"].lower() or "submitted" in approved["text"].lower()
 
     rerun = _post_execute(client, "The PCA suggests 2 outlier samples. Exclude them and rerun.", sid)

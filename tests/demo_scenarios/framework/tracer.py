@@ -7,6 +7,8 @@ This module provides observability into the multi-agent system by recording:
 - Timestamps and durations
 """
 
+from __future__ import annotations
+
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional

@@ -34,8 +34,11 @@ test.describe("Visual regression", () => {
     });
     await page.waitForTimeout(300);
 
+    // The empty-state conversation pane is anchored by the CapabilityGrid
+    // component (see frontend/src/components/CapabilityGrid.tsx) which
+    // replaced the legacy "Run a command to see your prompts here" placeholder.
     const pane = page.getByText(
-      /run a command to see your prompts/i,
+      /here's what helix\.ai can do/i,
     ).locator("..");
     await expect(pane).toHaveScreenshot("empty-conversation-pane.png", {
       maxDiffPixelRatio: 0.01,
