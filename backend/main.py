@@ -470,7 +470,12 @@ def _should_clear_pending_plan_after_execution(result: Any) -> bool:
         or result.get("status")
         or ""
     ).lower()
-    return status in {"success", "completed", "pipeline_submitted", "submitted"}
+    # Note: "pipeline_executed" is the synchronous-execution success status
+    # returned by CommandProcessor.execute_pipeline() when the planned pipeline
+    # has zero remaining steps (early-return case). It must be treated as a
+    # terminal success here so the session's pending plan is cleared instead of
+    # being left dangling for the next request.
+    return status in {"success", "completed", "pipeline_submitted", "pipeline_executed", "submitted"}
 
 
 app = FastAPI(

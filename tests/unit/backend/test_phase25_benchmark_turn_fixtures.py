@@ -154,6 +154,23 @@ def test_approval_execution_marks_plan_as_executed_and_clearable():
     assert _should_clear_pending_plan_after_execution(result) is True
 
 
+def test_pipeline_executed_status_clears_pending_plan():
+    """Regression: ``CommandProcessor.execute_pipeline`` returns
+    ``status="pipeline_executed"`` for the synchronous zero-step early-return
+    case. That must be treated as a terminal success so the session's pending
+    plan is cleared. Previously the status normalizer's allow-list omitted this
+    value, leaving the pending plan dangling for the next request and breaking
+    follow-up turns in the demo1 / approve→rerun flow.
+    """
+    result = {
+        "status": "pipeline_executed",
+        "success": True,
+        "execute_ready": False,
+        "text": "## Pipeline Executed\n\nAll steps completed.",
+    }
+    assert _should_clear_pending_plan_after_execution(result) is True
+
+
 def test_approval_needs_inputs_keeps_pending_plan_for_retry():
     result = {
         "status": "success",
