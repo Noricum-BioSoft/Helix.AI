@@ -2923,13 +2923,23 @@ function App() {
       /please provide|required information|required inputs|before .* can .* proceed/i.test(agentText) &&
       /count matrix|sample metadata|design formula/i.test(agentText);
 
-    // Some demo scenarios are explicitly authored as "needs_inputs". If backend
-    // emits workflow_planned for these, keep the demo UX consistent and prefer
-    // the scenario's follow-up data path.
+    // Some demo scenarios are explicitly authored as "needs_inputs". Historically
+    // we forced the needs-inputs UX whenever the backend emitted workflow_planned
+    // for these demos, because the router used to produce only thin/empty plans.
+    // Now the router emits rich `router_reasoning.suggested_steps`; when those
+    // exist we trust the backend and render the WorkflowPlanCard so the user can
+    // see the proposed pipeline (still alongside the "Load & run" shortcut).
+    const planSuggestedSteps =
+      ((output?.data as any)?.results?.steps?.[0]?.arguments?.router_reasoning?.suggested_steps as
+        | string[]
+        | undefined) ?? [];
+    const hasRichPlan = Array.isArray(planSuggestedSteps) && planSuggestedSteps.length > 0;
+
     const scenarioForcesNeedsInputs =
       isWorkflowPlan &&
       !!scenario?.followUpPrompt &&
-      scenario?.expectedBehavior === 'needs_inputs';
+      scenario?.expectedBehavior === 'needs_inputs' &&
+      !hasRichPlan;
 
     const isNeedsInputs = explicitNeedsInputs || looksLikeNeedsInputsFromAgent || scenarioForcesNeedsInputs;
 
