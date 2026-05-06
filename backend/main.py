@@ -808,6 +808,59 @@ def _is_success(result: Any) -> bool:
     return result.get("status", "success") not in ("error", "failed", "workflow_failed")
 
 
+def _sanitise_result_for_persistence(result: Any) -> Any:
+    """Return a copy of *result* safe to write to disk.
+
+    The LangGraph agent returns its full state under ``result["messages"]``,
+    which contains the complete LangChain message graph including:
+      - the entire BioAgent system prompt (SystemMessage),
+      - the verbatim user message (HumanMessage),
+      - OpenAI response metadata with model name, request id, and token counts
+        (AIMessage.response_metadata).
+
+    None of that should be persisted to per-session files on disk because:
+      1. The system prompt is IP — writing it to every session directory on a
+         shared host exposes our prompt-engineering work to anyone with read
+         access to /opt/helix/sessions/.
+      2. OpenAI request IDs and model fingerprints are operational metadata that
+         should stay in application logs, not user-readable session artifacts.
+      3. The raw message objects are serialised via ``default=str`` which
+         produces Python repr strings, not proper JSON — they are neither
+         human-readable nor machine-parseable.
+
+    What we keep in the snapshot:
+      - Every key except ``messages`` (the LangGraph state list).
+      - If ``messages`` is present, replace it with a compact summary list
+        containing only ``{role, content_length}`` so the snapshot still
+        records that an LLM exchange happened without leaking the content.
+    """
+    if not isinstance(result, dict):
+        return result
+
+    sanitised = {}
+    for key, value in result.items():
+        if key == "messages" and isinstance(value, list):
+            # Replace the full message list with a non-sensitive summary.
+            sanitised["messages_summary"] = [
+                {
+                    "role": (
+                        getattr(msg, "type", None)
+                        or (msg.get("type") if isinstance(msg, dict) else "unknown")
+                    ),
+                    "content_length": len(
+                        getattr(msg, "content", None)
+                        or (msg.get("content", "") if isinstance(msg, dict) else "")
+                        or ""
+                    ),
+                }
+                for msg in value
+            ]
+        else:
+            sanitised[key] = value
+
+    return sanitised
+
+
 def _extract_metadata(result: Any, tool_args: Optional[dict] = None) -> dict:
     """
     Extract run-linkage fields from a tool result dict.
@@ -964,9 +1017,11 @@ def _materialize_run_artifacts(
             logger.debug("Could not persist Newick tree: %s", exc)
 
     # Persist raw result snapshot for reproducibility.
+    # Strip the LangGraph message graph (system prompt + full LLM exchange)
+    # before writing — see _sanitise_result_for_persistence for rationale.
     try:
         snapshot_path = tables_dir / "result.json"
-        snapshot_path.write_text(json.dumps(result, indent=2, default=str))
+        snapshot_path.write_text(json.dumps(_sanitise_result_for_persistence(result), indent=2, default=str))
         artifacts.append(
             {
                 "type": "table",
@@ -998,7 +1053,9 @@ def _materialize_run_artifacts(
             "tool_args": dict(tool_args or {}),
         }
         (plan_dir / "request.json").write_text(json.dumps(request_payload, indent=2, default=str))
-        (execute_dir / "stage2.json").write_text(json.dumps(result, indent=2, default=str))
+        (execute_dir / "stage2.json").write_text(
+            json.dumps(_sanitise_result_for_persistence(result), indent=2, default=str)
+        )
 
         discovered_jobs: List[Dict[str, Any]] = []
         data = result.get("data") if isinstance(result.get("data"), dict) else {}

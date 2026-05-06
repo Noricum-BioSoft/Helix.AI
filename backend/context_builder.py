@@ -302,9 +302,31 @@ def build_session_brief(session_context: Dict[str, Any], max_tokens: int = 800) 
         input_id = f"uploaded_{i+1}"
         filename = file_info.get("name") or file_info.get("filename", "unknown")
         content = file_info.get("content", "")
-        size = len(content) if isinstance(content, str) else file_info.get("size", 0)
-        content_hash = _compute_hash(content) if content else "no_content"
-        
+
+        # Prefer the explicitly stored size (set by _persist_upload_to_session).
+        # Only fall back to len(content) when content is a non-empty string AND
+        # no explicit size was recorded — prevents the empty-string default from
+        # masking the real file size for binary uploads (csv, xlsx, etc.).
+        recorded_size = file_info.get("size")
+        if recorded_size is not None:
+            size = int(recorded_size)
+        elif isinstance(content, (bytes, str)) and content:
+            size = len(content)
+        else:
+            size = 0
+
+        # Hash: prefer schema_preview.summary.size_bytes as a cross-check; fall
+        # back to hashing the inline content string when present.
+        if content:
+            content_hash = _compute_hash(content)
+        elif recorded_size:
+            # No inline content (normal for disk-backed uploads) — derive a
+            # stable pointer from filename + size so the agent can see that the
+            # file is real without needing the full bytes in the brief.
+            content_hash = _compute_hash(f"{filename}:{recorded_size}")
+        else:
+            content_hash = "no_content"
+
         inputs.append({
             "input_id": input_id,
             "filename": filename,

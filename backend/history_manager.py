@@ -114,53 +114,95 @@ def sanitize_command_for_storage(command: Any) -> Dict[str, Any]:
     }
 
 def serialize_langchain_messages(result: Any) -> Any:
-    """Convert LangChain message objects to serializable format."""
+    """Convert LangChain message objects to a serialisable format safe for
+    persistent storage (session JSON files on disk).
+
+    Security / IP notes
+    -------------------
+    The ``messages`` list returned by LangGraph's ``agent.invoke()`` contains:
+      - SystemMessage  — the full BioAgent system prompt (IP, never store)
+      - HumanMessage   — the verbatim user command (store summary only)
+      - AIMessage      — the model's reply; ``response_metadata`` includes the
+                         OpenAI request id, model fingerprint, and per-call
+                         token counts (store summary, strip metadata)
+
+    We therefore:
+      1. Skip SystemMessage entries entirely — the prompt must not be
+         persisted to the per-session JSON file.
+      2. Keep HumanMessage only as ``{role, content_length}`` — the full
+         command is already stored under the separate ``command`` history key.
+      3. For AIMessage, keep ``content`` (the actual response) and log
+         token-usage stats, but strip ``response_metadata`` (model id, request
+         id, fingerprint) which is operational data for logs, not user records.
+      4. Replace the full ``messages`` list in the result dict with this
+         sanitised form so the history entry stays compact.
+    """
     if isinstance(result, dict):
         if "messages" in result:
-            # Convert LangChain messages to simple dict format
-            serialized_messages = []
+            sanitised_messages = []
             for msg in result["messages"]:
-                if hasattr(msg, 'content'):
-                    serialized_msg = {
-                        "type": getattr(msg, 'type', 'unknown'),
-                        "content": getattr(msg, 'content', str(msg)),
-                        "name": getattr(msg, 'name', None),
-                        "id": getattr(msg, 'id', None)
-                    }
-                    # Add additional kwargs if they exist
-                    if hasattr(msg, 'additional_kwargs'):
-                        serialized_msg["additional_kwargs"] = msg.additional_kwargs
-                    if hasattr(msg, 'response_metadata'):
-                        serialized_msg["response_metadata"] = msg.response_metadata
-                        # Log prompt-caching stats when available (OpenAI gpt-4.1 / gpt-5+)
-                        meta = msg.response_metadata or {}
-                        token_usage = meta.get("token_usage") or meta.get("usage", {})
-                        if token_usage:
-                            prompt_tokens = token_usage.get("prompt_tokens", 0)
-                            completion_tokens = token_usage.get("completion_tokens", 0)
-                            cached = (
-                                (token_usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
-                            )
-                            logger.info(
-                                "[token-usage] prompt=%d  cached=%d (%.0f%%)  completion=%d",
-                                prompt_tokens,
-                                cached,
-                                100 * cached / prompt_tokens if prompt_tokens else 0,
-                                completion_tokens,
-                            )
-                    serialized_messages.append(serialized_msg)
+                msg_type = (
+                    getattr(msg, "type", None)
+                    or (msg.get("type") if isinstance(msg, dict) else None)
+                    or "unknown"
+                )
+
+                # --- SystemMessage: never persist ---
+                if msg_type == "system":
+                    continue
+
+                if hasattr(msg, "content"):
+                    content = getattr(msg, "content", "")
+                    response_metadata = getattr(msg, "response_metadata", None) or {}
+
+                    # Log token-usage stats (operational; goes to log, not disk).
+                    token_usage = (
+                        response_metadata.get("token_usage")
+                        or response_metadata.get("usage")
+                        or {}
+                    )
+                    if token_usage:
+                        prompt_tokens = token_usage.get("prompt_tokens", 0)
+                        completion_tokens = token_usage.get("completion_tokens", 0)
+                        cached = (
+                            (token_usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
+                        )
+                        logger.info(
+                            "[token-usage] prompt=%d  cached=%d (%.0f%%)  completion=%d",
+                            prompt_tokens,
+                            cached,
+                            100 * cached / prompt_tokens if prompt_tokens else 0,
+                            completion_tokens,
+                        )
+
+                    if msg_type == "human":
+                        # Store only a summary — the full command is persisted
+                        # separately under history_entry["command"].
+                        sanitised_messages.append({
+                            "type": "human",
+                            "content_length": len(content) if isinstance(content, str) else 0,
+                        })
+                    else:
+                        # AI / tool / other — keep content, drop metadata.
+                        serialized_msg: dict = {
+                            "type": msg_type,
+                            "content": content,
+                            "name": getattr(msg, "name", None),
+                            "id": getattr(msg, "id", None),
+                        }
+                        sanitised_messages.append(serialized_msg)
                 else:
-                    # Fallback for non-message objects
-                    serialized_messages.append(str(msg))
-            result["messages"] = serialized_messages
+                    sanitised_messages.append({"type": msg_type, "repr": str(msg)[:200]})
+
+            result["messages"] = sanitised_messages
         return result
-    elif hasattr(result, 'content'):
+    elif hasattr(result, "content"):
         # Single message object
         return {
-            "type": getattr(result, 'type', 'unknown'),
-            "content": getattr(result, 'content', str(result)),
-            "name": getattr(result, 'name', None),
-            "id": getattr(result, 'id', None)
+            "type": getattr(result, "type", "unknown"),
+            "content": getattr(result, "content", str(result)),
+            "name": getattr(result, "name", None),
+            "id": getattr(result, "id", None),
         }
     else:
         return result

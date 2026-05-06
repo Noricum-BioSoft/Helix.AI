@@ -10,6 +10,14 @@ requests>=2.31.0
 scikit-learn
 matplotlib
 
+# Data-science / tabular ingest pipeline (backend/ds_pipeline/*).
+# duckdb is imported by backend/ds_pipeline/pipelines/ingest.py at file-upload
+# time; openpyxl is required by pandas.read_excel for .xlsx files. Both must be
+# in this list (not just root requirements.txt) so that scripts/ec2/bootstrap-ec2.sh
+# and update-from-git.sh install them on the production box.
+duckdb>=1.0
+openpyxl>=3.1
+
 # Bioinformatics
 biopython>=1.81
 plotly

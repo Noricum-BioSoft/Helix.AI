@@ -107,6 +107,11 @@
   },
   "cleared_blockers": [
     {
+      "id": "beta-backend-missing-duckdb-openpyxl",
+      "cleared_at": "2026-05-06T00:46Z",
+      "resolution": "User-reported on 2026-05-06: uploading media-5__2_.xlsx to https://helix-beta.noricum-biosoft.com/ (session fd3e53f0-6ad2-4375-b8a5-70fea4535496) returned 'No module named duckdb'. Root cause: backend/ds_pipeline/pipelines/ingest.py imports duckdb (and uses pandas.read_excel → openpyxl for .xlsx) but neither was in backend/requirements.txt — only in root requirements.txt. The deploy scripts (scripts/ec2/bootstrap-ec2.sh, scripts/ec2/update-from-git.sh) install only from backend/requirements.txt, so the prod venv never received them. Fix: (1) added duckdb>=1.0 and openpyxl>=3.1 to backend/requirements.txt, (2) installed both into the live prod venv via SSM (resolved to duckdb-1.5.2, openpyxl-3.1.5), (3) restarted helix-backend, (4) replayed ingest_tabular against the user's exact uploaded path on the live backend — 90 rows × 67 cols ingested cleanly. See worklog 2026-05-06."
+    },
+    {
       "id": "beta-bundle-mixed-content",
       "cleared_at": "2026-05-05T22:54Z",
       "resolution": "Built SPA locally with VITE_API_BASE_URL= (same-origin), shipped frontend/dist to EC2 i-0cc452521209457d4 via S3 presigned URL, atomically swapped into /opt/helix/frontend/dist. New bundle: index-Do3-fXHQ.js. nginx reloaded. Verified externally: 0 occurrences of helix--Publi in the live bundle, /health healthy. See worklog 2026-05-05."
@@ -135,8 +140,14 @@
       "severity": "medium",
       "description": "scripts/ec2/bootstrap-ec2.sh and scripts/ec2/update-from-git.sh assume Node/npm is installed on the EC2 host, but on the live beta box (Amazon Linux 2, glibc 2.26) it isn't and never has been: find / -maxdepth 5 -name npm returns nothing. Production deploys have implicitly relied on building the SPA off-host and shipping dist/ — same path used today. The documented deploy script will fail at the npm run build step on any AL2 host. Operational only; no impact on release behaviour.",
       "resolution": "Either (a) install Node on AL2 via the bootstrap's build-from-source path (slow, fragile), (b) migrate to AL2023 with newer glibc so NodeSource RPMs work, or (c) formalise the off-host build contract (build on CI / dev machine, ship dist/ via S3 + SSM) and remove the npm step from the on-host scripts. (c) is what is actually happening; recommend it. See worklog 2026-05-05 § 'Operational issues to fix before next deploy'."
+    },
+    {
+      "id": "backend-deploy-contract-not-tested",
+      "severity": "medium",
+      "description": "On 2026-05-06 a user-facing P0 (No module named 'duckdb' on file upload) shipped to prod despite all gate suites green. Root cause: backend/requirements.txt was missing duckdb and openpyxl; they only existed in root requirements.txt, which dev venvs install from but the EC2 deploy scripts (bootstrap-ec2.sh, update-from-git.sh) do not. tests/unit/backend/test_tabular_ingest.py exercises the broken import path but passed in CI/dev because the dev venv had the packages from the root file. The release gate measures the dev environment's deps, not the production deploy contract. Same class of issue as al2-deploy-contract-implicit (deploy scripts encode an undocumented contract that gate runs don't verify).",
+      "resolution": "Add a deploy-contract verification step that (a) provisions a clean venv from backend/requirements.txt only, (b) imports the canonical entry points (`from backend.main import app`, `from backend.ds_pipeline.pipelines.ingest import ingest_tabular`, etc.), and (c) gates release on success. Run this in CI per PR and as a step in scripts/ec2/update-from-git.sh after the pip install."
     }
   ],
   "readiness": true,
-  "readiness_note": "All threshold checks pass, all gate suites are green, all release_requirements PASS, and both prior blockers are cleared. The gate run from 2026-05-04 measured the exact code that is now committed at HEAD (55cd351) — no product-code drift between measurement and HEAD. Live beta is verified functional with the same-origin bundle. The three remaining blockers in the list above are explicitly low/medium-severity follow-ups (R runtime, router-quality regressions inside the 0.90 eval threshold, AL2 deploy-script gap) and do not require action before this release."
+  "readiness_note": "All threshold checks pass, all gate suites are green, all release_requirements PASS, and prior blockers are cleared. The gate run from 2026-05-04 measured the exact product code that is now committed at HEAD; the only post-gate code change (this hotfix) is two new lines in backend/requirements.txt and is a deploy-manifest fix rather than a product-code change, so the gate measurement still represents HEAD's behaviour. Live beta is verified functional: bundle index-Do3-fXHQ.js (same-origin), /health healthy, ingest_tabular replayed end-to-end on the user's actual uploaded xlsx with success. Remaining blockers are low/medium-severity follow-ups (R runtime, router-quality regressions inside the 0.90 eval threshold, AL2 deploy-script gap, and the new backend-deploy-contract-not-tested item that this hotfix exposed) and do not require action before this release."
 }

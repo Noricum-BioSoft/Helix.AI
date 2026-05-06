@@ -1637,26 +1637,29 @@ class CommandProcessor:
         logger.info(f"[IntentDetector] Intent: {intent.intent}, confidence: {intent.confidence}")
         return intent
     
-    async def _run_guru(self, command: str, session_context: Dict) -> Dict:
+    async def _run_guru(self, command: str, session_context: Dict, session_id: str = "") -> Dict:
         """
         Stage 2a: Bioinformatics Guru (ask path).
-        
+
         Returns:
             Answer dict with text response
         """
         # Validate and register agent call
         self._validate_next_agent(AgentRole.GURU)
         self._register_agent_call(AgentRole.GURU)
-        
+
         # Prepare messages
         input_message, system_message, _ = self._prepare_messages(command, session_context)
-        
-        # Create session config
-        session_config = self._create_session_config("guru_session")
-        
+
+        # Use the real session_id so LangGraph thread isolation is per-session,
+        # not accidentally shared across all users via a hardcoded placeholder.
+        # _create_session_config appends a random UUID suffix so each individual
+        # invocation still gets a fresh thread slot in MemorySaver.
+        session_config = self._create_session_config(session_id or "guru")
+
         # Run guru (Q&A agent)
         result = await self._handle_qa_intent(input_message, system_message, session_config)
-        
+
         logger.info(f"[Guru] Completed Q&A response")
         return result
     
