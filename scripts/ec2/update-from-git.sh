@@ -74,8 +74,16 @@ fi
 
 echo "[helix] restart systemd service..."
 if systemctl is-active --quiet helix-backend 2>/dev/null; then
-  sudo systemctl restart helix-backend
-  echo "[helix] helix-backend restarted."
+  # Root can restart directly; deploy user (helix) typically needs passwordless sudo
+  # (see /etc/sudoers.d/helix-backend-restart on managed hosts).
+  if systemctl restart helix-backend 2>/dev/null; then
+    echo "[helix] helix-backend restarted."
+  elif sudo -n systemctl restart helix-backend 2>/dev/null; then
+    echo "[helix] helix-backend restarted (sudo -n)."
+  else
+    echo "Service helix-backend is active but restart failed. Run: sudo systemctl restart helix-backend" >&2
+    exit 1
+  fi
 else
   echo "Service helix-backend not active (install scripts/ec2/helix-backend.service first)." >&2
 fi

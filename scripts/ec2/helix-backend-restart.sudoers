@@ -1,0 +1,8 @@
+# Install on the EC2 host (once) so the `helix` user can restart the backend
+# after `./scripts/ec2/update-from-git.sh` without an interactive TTY:
+#
+#   sudo cp scripts/ec2/helix-backend-restart.sudoers /etc/sudoers.d/helix-backend-restart
+#   sudo chmod 440 /etc/sudoers.d/helix-backend-restart
+#   sudo visudo -cf /etc/sudoers.d/helix-backend-restart
+#
+helix ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart helix-backend, /usr/bin/systemctl reload helix-backend, /usr/bin/systemctl is-active helix-backend, /usr/bin/systemctl status helix-backend
