@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Update Helix.AI from GitHub and restart the backend.
-# Run from the repo root on the EC2 instance, e.g. /opt/helix/Helix.AI
+# Run from the repo root on the EC2 instance, e.g. /opt/helix (or /opt/helix/Helix.AI).
 #
 # Usage:
 #   ./scripts/ec2/update-from-git.sh
@@ -14,14 +14,26 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
+# Conda-created envs under .venv often have bin/python but no bin/activate.
+_helix_use_venv() {
+  if [[ -f "${ROOT}/.venv/bin/activate" ]]; then
+    # shellcheck source=/dev/null
+    source "${ROOT}/.venv/bin/activate"
+  elif [[ -x "${ROOT}/.venv/bin/python" ]]; then
+    export PATH="${ROOT}/.venv/bin:${PATH}"
+  else
+    echo "No usable Python under ${ROOT}/.venv (expected bin/activate or bin/python)." >&2
+    return 1
+  fi
+}
+
 echo "[helix] git pull..."
 git pull --ff-only
 
 if [[ "${HELIX_SKIP_PIP:-}" != "1" ]]; then
   echo "[helix] pip install..."
   if [[ -d "${ROOT}/.venv" ]]; then
-    # shellcheck source=/dev/null
-    source "${ROOT}/.venv/bin/activate"
+    _helix_use_venv
     pip install -r backend/requirements.txt
   else
     echo "No .venv found; run scripts/ec2/bootstrap-ec2.sh first." >&2
@@ -48,7 +60,7 @@ fi
 # ---------------------------------------------------------------------------
 echo "[helix] running pre-deploy data integrity checks..."
 if [[ -d "${ROOT}/.venv" ]]; then
-  source "${ROOT}/.venv/bin/activate"
+  _helix_use_venv
 fi
 if python -m pytest tests/unit/backend/test_demo_data_integrity.py \
     -m "not s3" \
