@@ -2979,6 +2979,26 @@ async def execute(req: CommandRequest, request: Request):
                             else "tabular_analysis_execute_error"
                         ),
                     )
+                    # Write history entry so the session always shows this turn
+                    # (success or failure). Without this the tabular execution
+                    # path bypasses _dispatch_result and the history stays empty.
+                    try:
+                        _ta_run_id = std.get("run_id") or std.get("data", {}).get("run_id")
+                        history_manager.add_history_entry(
+                            session_id=req.session_id,
+                            command=req.command,
+                            tool="tabular_analysis",
+                            result=_ta_result,
+                            metadata={"run_id": _ta_run_id, "execution_path": (
+                                "tabular_analysis_execute_success"
+                                if _ta_result["success"]
+                                else "tabular_analysis_execute_error"
+                            )},
+                        )
+                    except Exception as _hist_exc:
+                        logger.warning(
+                            "tabular_analysis: failed to write history entry: %s", _hist_exc
+                        )
                     return CustomJSONResponse(std)
                 # ── End tabular analysis execution path ──────────────────────────
 
@@ -4947,7 +4967,7 @@ async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
     if tool_name == "tabular_analysis":
         from backend.ds_pipeline.pipelines.ingest import ingest_tabular
         session_id = arguments.get("session_id", "")
-        data_path = arguments.get("data_path", "")
+        data_path = arguments.get("data_path", "") or arguments.get("file_path", "")
         sheet = arguments.get("sheet")
 
         if not data_path and session_id:

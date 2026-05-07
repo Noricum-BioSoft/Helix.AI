@@ -197,15 +197,28 @@ def execute_analysis_plan(
         except OSError:
             pass
 
-    # Code generation → execution (one retry on failure)
+    # Code generation → execution (one retry on failure).
+    # On retry the error is injected at the TOP of the user prompt (not appended
+    # at the end) so the model reads it before the task description — making it
+    # far more likely to correct the mistake rather than repeat it.
     last_error = ""
     exec_result: Dict[str, Any] = {}
     for attempt in range(2):
-        retry_suffix = (
-            f"\n\nThe previous attempt raised:\n{last_error}\nFix the error."
-            if attempt > 0 else ""
-        )
-        code = _strip_fences(_llm_call(llm, CODEGEN_SYSTEM_PROMPT, code_prompt + retry_suffix))
+        if attempt > 0:
+            # Place the error correction instruction before the analysis goal so
+            # the model addresses the constraint first.
+            error_preamble = (
+                f"CORRECTION REQUIRED — your previous code failed with:\n"
+                f"  {last_error}\n\n"
+                f"You MUST fix this before writing any analysis code.\n"
+                f"Reminder: do NOT write any import/from statements. "
+                f"Use df, pd, np, plt, sns, stats, scipy directly.\n\n"
+            )
+            prompt = error_preamble + code_prompt
+        else:
+            prompt = code_prompt
+
+        code = _strip_fences(_llm_call(llm, CODEGEN_SYSTEM_PROMPT, prompt))
         exec_result = execute_code(code, df)
 
         if exec_result.get("error"):

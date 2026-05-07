@@ -109,6 +109,20 @@ ROUTER_LLM_RESPONSE_SCHEMA = {
 }
 
 
+def _session_has_tabular_upload(session_context: Dict[str, Any]) -> bool:
+    """True when the session already has a CSV/TSV/Excel upload (or tabular profile)."""
+    for f in session_context.get("uploaded_files") or []:
+        if not isinstance(f, dict):
+            continue
+        sp = f.get("schema_preview") or {}
+        if sp.get("family") == "tabular":
+            return True
+        name = (f.get("filename") or f.get("name") or "").lower()
+        if any(name.endswith(ext) for ext in (".csv", ".tsv", ".xlsx", ".xls")):
+            return True
+    return False
+
+
 class RoutingError(RuntimeError):
     """Raised when routing cannot be determined (LLM unavailable)."""
 
@@ -145,6 +159,9 @@ class CommandRouter:
           4. Phylogenetic tree request with ``sequences:`` line containing FASTA / S3 / file path.
           5. ``visualize_job_results`` requests with a UUID and an explicit
              "show" / "visualize job" verb.
+          6. Tabular workbook profiling when a tabular file is already attached
+             to the session (fixes LLM returning ``unknown_intent`` for phrases
+             like "profile the Excel workbook now" that omit an explicit path).
         """
         cmd = (command or "").strip()
         if not cmd:
@@ -204,6 +221,31 @@ class CommandRouter:
             _record_metric("router.deterministic_match", pattern="visualize_job", tool="visualize_job_results")
             return _wrap("visualize_job_results", {"job_id": uuid_match.group(0)})
 
+        # 6) Profile / inspect / EDA on an in-session tabular upload (no path in text)
+        if _session_has_tabular_upload(session_context):
+            profile_verb = re.search(
+                r"\b(profile|profiling|inspect|describe|summarize|summarise|"
+                r"preview|explore|eda|audit|structure|overview)\b",
+                cmd_lower,
+            )
+            data_term = re.search(
+                r"\b(excel|workbook|spreadsheet|\.xlsx|\.xls|\.csv|\.tsv|file|"
+                r"sheet|table|dataset|tabular|upload|uploaded)\b",
+                cmd_lower,
+            )
+            pronoun_target = re.search(
+                r"\b(profile|inspect|describe|summarize|summarise|preview|explore)\s+"
+                r"(the\s+)?(it|this|that)\b",
+                cmd_lower,
+            )
+            if profile_verb and (data_term or pronoun_target):
+                _record_metric(
+                    "router.deterministic_match",
+                    pattern="tabular_profile_in_session",
+                    tool="tabular_analysis",
+                )
+                return _wrap("tabular_analysis", {})
+
         return None
 
     # ────────────────────────────────────────────────────────────────────
@@ -249,7 +291,26 @@ class CommandRouter:
             "Use \"handle_natural_command\" only for free-form Q&A / informational requests. "
             "Use only the exact tool names given."
         )
-        user = f"User command:\n{command.strip()}\n\nTools:\n{tools_text}"
+        upload_hint = ""
+        if _session_has_tabular_upload(session_context):
+            names: list[str] = []
+            for f in session_context.get("uploaded_files") or []:
+                if not isinstance(f, dict):
+                    continue
+                nm = f.get("name") or f.get("filename")
+                if nm:
+                    names.append(str(nm))
+            if names:
+                upload_hint = (
+                    "\n\nSession context: tabular file(s) already uploaded — "
+                    + ", ".join(names[:6])
+                    + (f" (+{len(names) - 6} more)" if len(names) > 6 else "")
+                    + ". If the user asks to profile, inspect, summarize, or explore "
+                    '"the workbook", "the Excel file", or "this file", route to '
+                    "`tabular_analysis` or `tabular_qa` (not "
+                    f"`{ROUTER_FALLBACK_UNKNOWN}`) because the data is already in-session."
+                )
+        user = f"User command:\n{command.strip()}\n\nTools:\n{tools_text}{upload_hint}"
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
         try:
             response = llm.invoke(messages)
@@ -1511,7 +1572,12 @@ class CommandRouter:
                 if isinstance(f, dict)
             ]
             if _session_files:
-                params["file_path"] = _session_files[-1].get("path") or _session_files[-1].get("filename", "")
+                _last = _session_files[-1]
+                params["file_path"] = (
+                    _last.get("local_path")
+                    or _last.get("path")
+                    or _last.get("filename", "")
+                )
             else:
                 _file_m = re.search(r"(?:in|from|on|file)\s+([\w./\\-]+\.(?:csv|tsv|xlsx?|xls))\b", command, re.IGNORECASE)
                 if _file_m:

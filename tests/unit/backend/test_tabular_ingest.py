@@ -229,3 +229,19 @@ class TestCommandRouterTabularAnalysis:
         cmd = "analyze my data"
         tool, _ = router.route_command(cmd, self._ctx())
         assert tool != "tabular_analysis"
+
+    def test_profile_workbook_with_session_xlsx_routes_tabular(self):
+        """Regression: LLM router returned unknown_intent for in-session profile requests."""
+        router = self._router()
+        ctx = self._ctx(
+            files=[
+                {
+                    "filename": "media-5__2_.xlsx",
+                    "local_path": "/tmp/media-5__2_.xlsx",
+                    "schema_preview": {"family": "tabular", "format": "excel"},
+                }
+            ]
+        )
+        tool, params = router.route_command("profile the Excel workbook now", ctx)
+        assert tool == "tabular_analysis"
+        assert params.get("session_id") == "test-session"

@@ -182,9 +182,21 @@ def execute_code(
         }
 
     if exc_holder:
+        raw_err = f"{type(exc_holder[0]).__name__}: {exc_holder[0]}"
+        # `import foo` inside the sandbox causes `KeyError: '__import__'` because
+        # __import__ is absent from the restricted builtins dict.  That message
+        # is opaque to an LLM retry — translate it into an actionable instruction.
+        if isinstance(exc_holder[0], KeyError) and "__import__" in str(exc_holder[0]):
+            raw_err = (
+                "SandboxImportError: import statements are not allowed in this sandbox. "
+                "Do NOT write any import or from...import lines. "
+                "The following names are already pre-bound and ready to use: "
+                "df, pd, np, plt, sns, stats (scipy.stats), scipy. "
+                "Remove all import statements from your code and use these names directly."
+            )
         return {
             "success": False,
-            "error": f"{type(exc_holder[0]).__name__}: {exc_holder[0]}",
+            "error": raw_err,
             "stdout": stdout,
             "code": code,
         }
