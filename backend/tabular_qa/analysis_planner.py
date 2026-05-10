@@ -170,8 +170,7 @@ def is_analytical_request(command: str, session_context: Dict[str, Any]) -> bool
         if cue in c:
             return True
 
-    # Long commands on tabular data almost always need planning
-    return len(c.split()) >= 8
+    return False
 
 
 # ---------------------------------------------------------------------------
