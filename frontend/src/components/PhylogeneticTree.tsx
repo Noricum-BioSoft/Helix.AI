@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import * as d3 from 'd3';
+import { debugLog } from '../utils/debugLog';
 
 interface PhylogeneticTreeProps {
   newick: string;
@@ -14,13 +15,13 @@ interface TreeNode {
 export const PhylogeneticTree: React.FC<PhylogeneticTreeProps> = ({ newick }) => {
   const svgRef = useRef<SVGSVGElement>(null);
 
-  console.log('PhylogeneticTree component rendered with newick:', newick);
-  console.log('Newick type:', typeof newick);
-  console.log('Newick length:', newick?.length);
-  console.log('Newick preview:', newick?.substring(0, 100));
+  debugLog('PhylogeneticTree component rendered with newick:', newick);
+  debugLog('Newick type:', typeof newick);
+  debugLog('Newick length:', newick?.length);
+  debugLog('Newick preview:', newick?.substring(0, 100));
   
   if (!newick) {
-    console.log('No newick data provided');
+    debugLog('No newick data provided');
     return <div className="alert alert-warning">No tree data provided.</div>;
   }
   
@@ -125,10 +126,10 @@ export const PhylogeneticTree: React.FC<PhylogeneticTreeProps> = ({ newick }) =>
       d3.select(svgRef.current).selectAll("*").remove();
       
       // Parse the Newick string
-      console.log('🔍 Parsing Newick string, length:', newick.length);
-      console.log('🔍 Newick string:', newick);
+      debugLog('🔍 Parsing Newick string, length:', newick.length);
+      debugLog('🔍 Newick string:', newick);
       const treeData = parseNewick(newick);
-      console.log('🔍 Parsed tree data:', JSON.stringify(treeData, null, 2));
+      debugLog('🔍 Parsed tree data:', JSON.stringify(treeData, null, 2));
       
       // Validate parsed tree
       if (!treeData || !treeData.children || treeData.children.length === 0) {
@@ -138,7 +139,7 @@ export const PhylogeneticTree: React.FC<PhylogeneticTreeProps> = ({ newick }) =>
       
       // Create hierarchy
       const hierarchy = d3.hierarchy(treeData);
-      console.log('🔍 Created hierarchy, nodes:', hierarchy.descendants().length);
+      debugLog('🔍 Created hierarchy, nodes:', hierarchy.descendants().length);
       
       // Validate hierarchy
       if (!hierarchy || hierarchy.descendants().length === 0) {
@@ -157,27 +158,27 @@ export const PhylogeneticTree: React.FC<PhylogeneticTreeProps> = ({ newick }) =>
       };
       const allNames = getAllNames(hierarchy);
       const maxLabelLength = Math.max(...allNames.map(name => name.length), 10);
-      console.log('🔍 Max label length:', maxLabelLength);
+      debugLog('🔍 Max label length:', maxLabelLength);
       
       // Set up the tree layout with dynamic dimensions based on label length
       const baseWidth = 600;
       const labelWidth = Math.max(maxLabelLength * 8, 200); // 8px per character, minimum 200px
       const width = baseWidth + labelWidth;
       const height = Math.max(400, hierarchy.leaves().length * 50); // Dynamic height based on number of leaves
-      console.log('🔍 Tree dimensions:', { width, height, labelWidth });
+      debugLog('🔍 Tree dimensions:', { width, height, labelWidth });
       
       const treeLayout = d3.tree()
         .size([height - 100, width - labelWidth - 50]); // Leave room for labels on the right
       
       const tree = treeLayout(hierarchy as any);
-      console.log('🔍 Tree layout computed, links:', tree.links().length, 'nodes:', tree.descendants().length);
+      debugLog('🔍 Tree layout computed, links:', tree.links().length, 'nodes:', tree.descendants().length);
       
       // Update SVG width to accommodate labels
       const svgWidth = width + 100;
       const svgHeight = height + 100;
       svgRef.current!.setAttribute('width', String(svgWidth));
       svgRef.current!.setAttribute('height', String(svgHeight));
-      console.log('🔍 SVG dimensions set:', { svgWidth, svgHeight });
+      debugLog('🔍 SVG dimensions set:', { svgWidth, svgHeight });
       
       // Create SVG - ensure it's cleared first
       const svg = d3.select(svgRef.current);
@@ -187,18 +188,18 @@ export const PhylogeneticTree: React.FC<PhylogeneticTreeProps> = ({ newick }) =>
       
       // Clear any existing content
       svg.selectAll("*").remove();
-      console.log('🔍 SVG cleared');
+      debugLog('🔍 SVG cleared');
       
       // Set SVG background
       svg.attr('style', 'background-color: #fff; display: block;');
       
       const g = svg.append('g')
         .attr('transform', 'translate(50, 50)');
-      console.log('🔍 SVG group created');
+      debugLog('🔍 SVG group created');
       
       // Add links with error checking
       const links = tree.links();
-      console.log('🔍 Adding', links.length, 'links');
+      debugLog('🔍 Adding', links.length, 'links');
       const linkSelection = g.selectAll('.link')
         .data(links)
         .enter()
@@ -218,14 +219,14 @@ export const PhylogeneticTree: React.FC<PhylogeneticTreeProps> = ({ newick }) =>
           .x((d: any) => d.y)
           .y((d: any) => d.x);
         const path = linkGenerator(d as any);
-        console.log('🔍 Link path:', path, 'from', d.source.data.name, 'to', d.target.data.name);
+        debugLog('🔍 Link path:', path, 'from', d.source.data.name, 'to', d.target.data.name);
         return path;
       });
-      console.log('🔍 Links added');
+      debugLog('🔍 Links added');
       
       // Add nodes with error checking
       const nodes = tree.descendants();
-      console.log('🔍 Adding', nodes.length, 'nodes');
+      debugLog('🔍 Adding', nodes.length, 'nodes');
       const nodeSelection = g.selectAll('.node')
         .data(nodes)
         .enter()
@@ -238,7 +239,7 @@ export const PhylogeneticTree: React.FC<PhylogeneticTreeProps> = ({ newick }) =>
             return 'translate(0,0)';
           }
           const transform = `translate(${d.y},${d.x})`;
-          console.log('🔍 Node transform:', transform, 'for', d.data.name);
+          debugLog('🔍 Node transform:', transform, 'for', d.data.name);
           return transform;
         });
       
@@ -247,7 +248,7 @@ export const PhylogeneticTree: React.FC<PhylogeneticTreeProps> = ({ newick }) =>
         .attr('r', 4)
         .attr('fill', (d: any) => {
           const color = d.children ? '#555' : '#69b3a2';
-          console.log('🔍 Node color:', color, 'for', d.data.name, 'has children:', !!d.children);
+          debugLog('🔍 Node color:', color, 'for', d.data.name, 'has children:', !!d.children);
           return color;
         })
         .attr('stroke', '#fff')
@@ -258,13 +259,13 @@ export const PhylogeneticTree: React.FC<PhylogeneticTreeProps> = ({ newick }) =>
         .attr('dy', '.31em')
         .attr('x', (d: any) => {
           const offset = d.children ? -10 : 10;
-          console.log('🔍 Label offset:', offset, 'for', d.data.name);
+          debugLog('🔍 Label offset:', offset, 'for', d.data.name);
           return offset;
         })
         .attr('text-anchor', (d: any) => d.children ? 'end' : 'start')
         .text((d: any) => {
           const name = d.data.name || '';
-          console.log('🔍 Label text:', name);
+          debugLog('🔍 Label text:', name);
           return name;
         })
         .style('font-size', '12px')
@@ -276,7 +277,7 @@ export const PhylogeneticTree: React.FC<PhylogeneticTreeProps> = ({ newick }) =>
       labels.append('title')
         .text((d: any) => d.data.name || '');
       
-      console.log('✅ Tree rendering complete');
+      debugLog('✅ Tree rendering complete');
         
           } catch (error) {
         console.error('Error rendering phylogenetic tree:', error);

@@ -30,6 +30,7 @@ import { ExamplesPanel } from './components/ExamplesPanel';
 import { DemoScenariosPanel } from './components/DemoScenariosPanel';
 import { getDemoScenarioById, getDemoScenarioByTool, getDemoScenarioByCommandAndTool, getDemoScenarioByCommand, DataPreviewTable } from './data/demoScenarios';
 import { ThinkingIndicator, ActivityIndicator } from './components/ThinkingIndicator';
+import { debugLog, debugWarn } from './utils/debugLog';
 
 const SESSION_STORAGE_KEY = 'helix_session_id';
 import {
@@ -270,7 +271,7 @@ function App() {
             const info = await helixApi.getSessionInfo(stored) as { session?: { history?: unknown[] } };
             id = stored;
             sessionData = info;
-            console.log('Session restored from storage:', stored);
+            debugLog('Session restored from storage:', stored);
           }
         } catch {
           try {
@@ -283,7 +284,7 @@ function App() {
           try {
             sessionStorage.setItem(SESSION_STORAGE_KEY, id);
           } catch {}
-          console.log('Session created:', id);
+          debugLog('Session created:', id);
         }
         setSessionId(id);
         // Restore conversation history when we re-open the same session (e.g. after refresh)
@@ -291,7 +292,7 @@ function App() {
           const restored = sessionHistoryToItems(sessionData.session as Parameters<typeof sessionHistoryToItems>[0]);
           if (restored.length > 0) {
             setHistory(restored);
-            console.log('Restored', restored.length, 'history items from session');
+            debugLog('Restored', restored.length, 'history items from session');
           }
         }
       } catch (err) {
@@ -406,13 +407,13 @@ function App() {
   const enhanceCommandWithContext = (command: string): string => {
     const lowerCommand = command.toLowerCase();
     
-    console.log('Enhancing command:', command);
-    console.log('Current workflow context:', workflowContext);
+    debugLog('Enhancing command:', command);
+    debugLog('Current workflow context:', workflowContext);
     
     // If command mentions "aligned sequences" and we have them in context
     if ((lowerCommand.includes('aligned sequences') || lowerCommand.includes('select sequence')) && workflowContext.alignedSequences) {
       const enhancedCommand = `${command}\n\nAligned sequences from previous step:\n${workflowContext.alignedSequences}`;
-      console.log('Enhanced command with aligned sequences:', enhancedCommand);
+      debugLog('Enhanced command with aligned sequences:', enhancedCommand);
       return enhancedCommand;
     }
     
@@ -420,7 +421,7 @@ function App() {
     if (lowerCommand.includes('selected sequences') && workflowContext.selectedSequences) {
       const sequencesText = workflowContext.selectedSequences.map((seq, i) => `>selected_sequence_${i+1}\n${seq}`).join('\n');
       const enhancedCommand = `${command}\n\nSelected sequences from previous step:\n${sequencesText}`;
-      console.log('Enhanced command with selected sequences:', enhancedCommand);
+      debugLog('Enhanced command with selected sequences:', enhancedCommand);
       return enhancedCommand;
     }
     
@@ -428,11 +429,11 @@ function App() {
     if (lowerCommand.includes('mutated sequences') && workflowContext.mutatedSequences) {
       const sequencesText = workflowContext.mutatedSequences.map((seq, i) => `>mutant_${i+1}\n${seq}`).join('\n');
       const enhancedCommand = `${command}\n\nMutated sequences from previous step:\n${sequencesText}`;
-      console.log('Enhanced command with mutated sequences:', enhancedCommand);
+      debugLog('Enhanced command with mutated sequences:', enhancedCommand);
       return enhancedCommand;
     }
     
-    console.log('No context enhancement applied');
+    debugLog('No context enhancement applied');
     return command;
   };
 
@@ -464,17 +465,17 @@ function App() {
       let response;
       let parsedCommand: ParsedCommand | undefined;
       
-      console.log('Command mode:', commandMode);
-      console.log('Session ID:', sessionId);
-      console.log('Command:', commandText);
-      console.log('Workflow context:', workflowContext);
+      debugLog('Command mode:', commandMode);
+      debugLog('Session ID:', sessionId);
+      debugLog('Command:', commandText);
+      debugLog('Workflow context:', workflowContext);
       
       // Enhance command with workflow context
       let finalCommand = enhanceCommandWithContext(commandText);
       
-      console.log('Original command:', commandText);
-      console.log('Enhanced command:', finalCommand);
-      console.log('Workflow context before sending:', workflowContext);
+      debugLog('Original command:', commandText);
+      debugLog('Enhanced command:', finalCommand);
+      debugLog('Workflow context before sending:', workflowContext);
       
       // Uploaded files are now persisted server-side under the session directory.
       // Commands should reference session context rather than embedding file contents.
@@ -482,7 +483,7 @@ function App() {
       // Use SSE streaming endpoint for improved perceived latency.
       // Progress events update the loading message; the final "result" event
       // resolves this promise with the same payload as the REST endpoint.
-      console.log('Calling agent via /execute/stream endpoint…');
+      debugLog('Calling agent via /execute/stream endpoint…');
       response = await new Promise<unknown>((resolve, reject) => {
         const cleanup = helixApi.executeCommandStream(
           finalCommand,
@@ -501,7 +502,7 @@ function App() {
           },
         );
       });
-      console.log('Agent response:', response);
+      debugLog('Agent response:', response);
 
       // ── Async pipeline job — switch to SSE mode ────────────────────────
       // When a pipeline tool (chip_seq_analysis, etc.) is dispatched, the
@@ -606,14 +607,14 @@ function App() {
         try {
           sessionStorage.setItem(SESSION_STORAGE_KEY, sid);
         } catch {}
-        console.log('Session created automatically by backend:', sid);
+        debugLog('Session created automatically by backend:', sid);
       }
       
       // Update workflow context based on the response
       if ((response as any).success && (response as any).result) {
         const result = (response as any).result.result || (response as any).result;
         
-        console.log('Processing response result:', result);
+        debugLog('Processing response result:', result);
         
         // Extract aligned sequences from alignment response
         // Check for the tool response structure
@@ -627,12 +628,12 @@ function App() {
                   const alignedSequences = toolResult.output.map((seq: any) => 
                     `>${seq.name}\n${seq.sequence}`
                   ).join('\n');
-                  console.log('Updating workflow context with aligned sequences:', alignedSequences);
+                  debugLog('Updating workflow context with aligned sequences:', alignedSequences);
                   updateWorkflowContext('sequence_alignment', alignedSequences);
                   break;
                 }
               } catch (e) {
-                console.log('Could not parse tool result:', e);
+                debugLog('Could not parse tool result:', e);
               }
             }
             
@@ -642,12 +643,12 @@ function App() {
                 const toolResult = JSON.parse(message.content);
                 if (toolResult.output && Array.isArray(toolResult.output)) {
                   const selectedSequences = toolResult.output.map((seq: any) => seq.sequence);
-                  console.log('Updating workflow context with selected sequences:', selectedSequences);
+                  debugLog('Updating workflow context with selected sequences:', selectedSequences);
                   updateWorkflowContext('sequence_selection', selectedSequences);
                   break;
                 }
               } catch (e) {
-                console.log('Could not parse tool result:', e);
+                debugLog('Could not parse tool result:', e);
               }
             }
           }
@@ -658,26 +659,26 @@ function App() {
           const alignedSequences = result.output.map((seq: any) => 
             `>${seq.name}\n${seq.sequence}`
           ).join('\n');
-          console.log('Updating workflow context with aligned sequences (fallback):', alignedSequences);
+          debugLog('Updating workflow context with aligned sequences (fallback):', alignedSequences);
           updateWorkflowContext('sequence_alignment', alignedSequences);
         }
         
         // Extract selected sequences from selection response (fallback)
         if (result.output && Array.isArray(result.output) && result.output.length > 0 && result.output[0].sequence) {
           const selectedSequences = result.output.map((seq: any) => seq.sequence);
-          console.log('Updating workflow context with selected sequences (fallback):', selectedSequences);
+          debugLog('Updating workflow context with selected sequences (fallback):', selectedSequences);
           updateWorkflowContext('sequence_selection', selectedSequences);
         }
         
         // Extract mutated sequences from mutation response
         if (result.output && result.output.variants && Array.isArray(result.output.variants)) {
-          console.log('Updating workflow context with mutated sequences:', result.output.variants);
+          debugLog('Updating workflow context with mutated sequences:', result.output.variants);
           updateWorkflowContext('mutate_sequence', result.output.variants);
         }
         
         // Extract plasmid data from plasmid visualization response
         if (result.output && result.output.features) {
-          console.log('Updating workflow context with plasmid data:', result.output);
+          debugLog('Updating workflow context with plasmid data:', result.output);
           updateWorkflowContext('plasmid_visualization', result.output);
         }
       }
@@ -695,10 +696,10 @@ function App() {
         parent_run_id: _r?.parent_run_id || _r?.result?.parent_run_id,
       };
       
-      console.log('🔍 Adding to history:', historyItem);
-      console.log('🔍 Response structure:', JSON.stringify(response, null, 2));
-      console.log('🔍 Response success:', (response as any).success);
-      console.log('🔍 Response result keys:', (response as any).result ? Object.keys((response as any).result) : 'No result');
+      debugLog('🔍 Adding to history:', historyItem);
+      debugLog('🔍 Response structure:', JSON.stringify(response, null, 2));
+      debugLog('🔍 Response success:', (response as any).success);
+      debugLog('🔍 Response result keys:', (response as any).result ? Object.keys((response as any).result) : 'No result');
       
       setPendingScenarioId(undefined);
       // Replace the pending placeholder with the resolved item
@@ -987,9 +988,9 @@ function App() {
   const renderAgentResponse = (agentOutput: any) => {
     const agentResult = agentOutput?.result ?? agentOutput;
     
-    console.log('🔍 renderAgentResponse called');
-    console.log('🔍 agentOutput keys:', Object.keys(agentOutput || {}));
-    console.log('🔍 agentResult keys:', agentResult && typeof agentResult === 'object' ? Object.keys(agentResult) : 'not an object');
+    debugLog('🔍 renderAgentResponse called');
+    debugLog('🔍 agentOutput keys:', Object.keys(agentOutput || {}));
+    debugLog('🔍 agentResult keys:', agentResult && typeof agentResult === 'object' ? Object.keys(agentResult) : 'not an object');
     
     // Extract data from multiple possible locations (matching renderOutput logic)
     const rawResult = agentOutput?.raw_result || agentResult?.raw_result || (agentOutput?.result && agentOutput.result.raw_result);
@@ -998,17 +999,17 @@ function App() {
       : (agentOutput?.result || agentOutput?.raw_result || agentOutput || agentResult);
     
     // Debug: Log the structure to find tree_newick
-    console.log('🔍 ========== RESPONSE STRUCTURE DEBUG ==========');
-    console.log('🔍 agentOutput.raw_result keys:', rawResult && typeof rawResult === 'object' ? Object.keys(rawResult) : 'not an object');
-    console.log('🔍 agentOutput.raw_result.result keys:', rawResult?.result && typeof rawResult.result === 'object' ? Object.keys(rawResult.result) : 'not an object');
-    console.log('🔍 agentOutput.raw_result.tree_newick:', rawResult?.tree_newick ? `FOUND (${rawResult.tree_newick.length} chars)` : 'NOT FOUND');
-    console.log('🔍 agentOutput.raw_result.result.tree_newick:', rawResult?.result?.tree_newick ? `FOUND (${rawResult.result.tree_newick.length} chars)` : 'NOT FOUND');
-    console.log('🔍 agentOutput.tree_newick:', agentOutput?.tree_newick ? `FOUND (${agentOutput.tree_newick.length} chars)` : 'NOT FOUND');
-    console.log('🔍 agentOutput.data:', agentOutput?.data ? 'EXISTS' : 'NOT FOUND');
-    console.log('🔍 agentOutput.data keys:', agentOutput?.data && typeof agentOutput.data === 'object' ? Object.keys(agentOutput.data) : 'N/A');
-    console.log('🔍 agentOutput.visualization_type:', agentOutput?.visualization_type);
-    console.log('🔍 agentOutput.tool:', agentOutput?.tool);
-    console.log('🔍 ==============================================');
+    debugLog('🔍 ========== RESPONSE STRUCTURE DEBUG ==========');
+    debugLog('🔍 agentOutput.raw_result keys:', rawResult && typeof rawResult === 'object' ? Object.keys(rawResult) : 'not an object');
+    debugLog('🔍 agentOutput.raw_result.result keys:', rawResult?.result && typeof rawResult.result === 'object' ? Object.keys(rawResult.result) : 'not an object');
+    debugLog('🔍 agentOutput.raw_result.tree_newick:', rawResult?.tree_newick ? `FOUND (${rawResult.tree_newick.length} chars)` : 'NOT FOUND');
+    debugLog('🔍 agentOutput.raw_result.result.tree_newick:', rawResult?.result?.tree_newick ? `FOUND (${rawResult.result.tree_newick.length} chars)` : 'NOT FOUND');
+    debugLog('🔍 agentOutput.tree_newick:', agentOutput?.tree_newick ? `FOUND (${agentOutput.tree_newick.length} chars)` : 'NOT FOUND');
+    debugLog('🔍 agentOutput.data:', agentOutput?.data ? 'EXISTS' : 'NOT FOUND');
+    debugLog('🔍 agentOutput.data keys:', agentOutput?.data && typeof agentOutput.data === 'object' ? Object.keys(agentOutput.data) : 'N/A');
+    debugLog('🔍 agentOutput.visualization_type:', agentOutput?.visualization_type);
+    debugLog('🔍 agentOutput.tool:', agentOutput?.tool);
+    debugLog('🔍 ==============================================');
     
     // Defined here (before any specialized renderers) so downloadLinksSection can use it.
     const normalizeAssetUrl = (url?: string) => {
@@ -1193,10 +1194,10 @@ function App() {
                                    (agentOutput?.result && agentOutput.result.clustered_visualization) ||
                                    (agentOutput?.raw_result?.result && agentOutput.raw_result.result.clustered_visualization);
     
-    console.log('🔍 Final treeNewick check:', treeNewick ? `FOUND (${treeNewick.length} chars)` : 'NOT FOUND');
+    debugLog('🔍 Final treeNewick check:', treeNewick ? `FOUND (${treeNewick.length} chars)` : 'NOT FOUND');
     
     if (treeNewick) {
-      console.log('🔍 Rendering phylogenetic tree visualization');
+      debugLog('🔍 Rendering phylogenetic tree visualization');
       const parseStatsFromText = (text?: string): Record<string, string> => {
         if (!text || typeof text !== 'string') return {};
         const stats: Record<string, string> = {};
@@ -1438,10 +1439,10 @@ function App() {
                            (agentOutput?.raw_result?.result && agentOutput.raw_result.result.plasmid_results);
     
     if (plasmidData) {
-      console.log('🔍 Rendering plasmid visualization');
-      console.log('🔍 plasmidData:', plasmidData);
-      console.log('🔍 plasmidData.sequence:', plasmidData?.sequence);
-      console.log('🔍 plasmidData type:', typeof plasmidData);
+      debugLog('🔍 Rendering plasmid visualization');
+      debugLog('🔍 plasmidData:', plasmidData);
+      debugLog('🔍 plasmidData.sequence:', plasmidData?.sequence);
+      debugLog('🔍 plasmidData type:', typeof plasmidData);
       
       // Validate plasmid data before rendering
       if (!plasmidData.sequence || typeof plasmidData.sequence !== 'string') {
@@ -1483,8 +1484,8 @@ function App() {
     }
     
     if (plasmidResults) {
-      console.log('🔍 Rendering plasmid representatives visualization');
-      console.log('🔍 plasmidResults:', plasmidResults);
+      debugLog('🔍 Rendering plasmid representatives visualization');
+      debugLog('🔍 plasmidResults:', plasmidResults);
       
       // Validate plasmid results
       if (!Array.isArray(plasmidResults) || plasmidResults.length === 0) {
@@ -1546,7 +1547,7 @@ function App() {
     // modern `results_viewer` path (which handles FastQC via BioOrchestrator).
     const isResultsViewer = agentOutput?.visualization_type === 'results_viewer';
     if (!isResultsViewer && (qualityMetrics || qualityPlotData || qualitySummary)) {
-      console.log('🔍 Rendering quality assessment visualization');
+      debugLog('🔍 Rendering quality assessment visualization');
       return (
         <div>
           {actualResult?.text && (
@@ -1660,7 +1661,7 @@ function App() {
                             (agentOutput?.raw_result?.result && agentOutput.raw_result.result.aligned_sequences);
     
     if (alignedSequences && Array.isArray(alignedSequences)) {
-      console.log('🔍 Rendering sequence alignment visualization');
+      debugLog('🔍 Rendering sequence alignment visualization');
       return (
         <div>
           {actualResult?.text && (
@@ -1714,7 +1715,7 @@ function App() {
                     (agentOutput?.raw_result?.result && agentOutput.raw_result.result.plot);
     
     if (plotData && plotData.data) {
-      console.log('🔍 Rendering Plotly visualization');
+      debugLog('🔍 Rendering Plotly visualization');
       return (
         <div>
           {actualResult?.text && (
@@ -1749,7 +1750,7 @@ function App() {
                           [];
     
     if (vendors) {
-      console.log('🔍 Rendering vendor research results');
+      debugLog('🔍 Rendering vendor research results');
       return (
         <div>
           {actualResult?.text && (
@@ -1822,9 +1823,9 @@ function App() {
 
     // Debug logging for questions
     if (agentOutput?.tool === 'agent' || agentOutput?.raw_result?.task_type === 'qa') {
-      console.log('🔍 [Question Detection] Detected question response');
-      console.log('🔍 [Question Detection] Messages count:', messages.length);
-      console.log('🔍 [Question Detection] Raw result keys:', agentOutput?.raw_result ? Object.keys(agentOutput.raw_result) : 'none');
+      debugLog('🔍 [Question Detection] Detected question response');
+      debugLog('🔍 [Question Detection] Messages count:', messages.length);
+      debugLog('🔍 [Question Detection] Raw result keys:', agentOutput?.raw_result ? Object.keys(agentOutput.raw_result) : 'none');
     }
 
     // Filter for assistant messages only (skip system messages)
@@ -1848,39 +1849,39 @@ function App() {
         const jsonMatch = finalText.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
         if (jsonMatch && jsonMatch[1]) {
           const jsonString = jsonMatch[1].trim();
-          console.log('🔍 [Question Detection] Extracted JSON string length:', jsonString.length);
-          console.log('🔍 [Question Detection] JSON string preview:', jsonString.substring(0, 200));
+          debugLog('🔍 [Question Detection] Extracted JSON string length:', jsonString.length);
+          debugLog('🔍 [Question Detection] JSON string preview:', jsonString.substring(0, 200));
           
           const jsonContent = JSON.parse(jsonString);
-          console.log('🔍 [Question Detection] Parsed JSON keys:', Object.keys(jsonContent));
+          debugLog('🔍 [Question Detection] Parsed JSON keys:', Object.keys(jsonContent));
           
           // Extract the answer field - check for details_markdown first (full answer), then user_friendly_summary
           // The backend returns details_markdown (full markdown answer) and user_friendly_summary (brief summary)
           if (jsonContent.details_markdown && typeof jsonContent.details_markdown === 'string') {
             finalText = jsonContent.details_markdown;
-            console.log('✅ [Question Detection] Extracted details_markdown from JSON, length:', finalText.length);
+            debugLog('✅ [Question Detection] Extracted details_markdown from JSON, length:', finalText.length);
           } else if (jsonContent.user_friendly_summary && typeof jsonContent.user_friendly_summary === 'string') {
             finalText = jsonContent.user_friendly_summary;
-            console.log('✅ [Question Detection] Extracted user_friendly_summary from JSON, length:', finalText.length);
+            debugLog('✅ [Question Detection] Extracted user_friendly_summary from JSON, length:', finalText.length);
           } else if (jsonContent.user_friendly && typeof jsonContent.user_friendly === 'string') {
             finalText = jsonContent.user_friendly;
-            console.log('✅ [Question Detection] Extracted user_friendly from JSON, length:', finalText.length);
+            debugLog('✅ [Question Detection] Extracted user_friendly from JSON, length:', finalText.length);
           } else if (jsonContent.answer && typeof jsonContent.answer === 'string') {
             finalText = jsonContent.answer;
-            console.log('✅ [Question Detection] Extracted answer from JSON, length:', finalText.length);
+            debugLog('✅ [Question Detection] Extracted answer from JSON, length:', finalText.length);
           } else if (jsonContent.text && typeof jsonContent.text === 'string') {
             finalText = jsonContent.text;
-            console.log('✅ [Question Detection] Extracted text from JSON, length:', finalText.length);
+            debugLog('✅ [Question Detection] Extracted text from JSON, length:', finalText.length);
           } else if (jsonContent.response && typeof jsonContent.response === 'string') {
             finalText = jsonContent.response;
-            console.log('✅ [Question Detection] Extracted response from JSON, length:', finalText.length);
+            debugLog('✅ [Question Detection] Extracted response from JSON, length:', finalText.length);
           } else if (jsonContent.content && typeof jsonContent.content === 'string') {
             finalText = jsonContent.content;
-            console.log('✅ [Question Detection] Extracted content from JSON, length:', finalText.length);
+            debugLog('✅ [Question Detection] Extracted content from JSON, length:', finalText.length);
           } else {
-            console.warn('🔍 [Question Detection] JSON found but no details_markdown/user_friendly_summary/user_friendly/answer/text/response/content field');
-            console.warn('🔍 [Question Detection] Available fields:', Object.keys(jsonContent));
-            console.warn('🔍 [Question Detection] Full JSON content:', JSON.stringify(jsonContent, null, 2).substring(0, 500));
+            debugWarn('🔍 [Question Detection] JSON found but no details_markdown/user_friendly_summary/user_friendly/answer/text/response/content field');
+            debugWarn('🔍 [Question Detection] Available fields:', Object.keys(jsonContent));
+            debugWarn('🔍 [Question Detection] Full JSON content:', JSON.stringify(jsonContent, null, 2).substring(0, 500));
             // If JSON parsing worked but no text field found, try regex fallback on original text
             // Try details_markdown first, then user_friendly_summary, then user_friendly
             let regexMatch = null;
@@ -1901,14 +1902,14 @@ function App() {
                 .replace(/\\t/g, '\t')
                 .replace(/\\r/g, '\r')
                 .replace(/\\\\/g, '\\');
-              console.log('✅ [Question Detection] Extracted text via regex fallback, length:', finalText.length);
+              debugLog('✅ [Question Detection] Extracted text via regex fallback, length:', finalText.length);
             } else {
-              console.warn('🔍 [Question Detection] Regex fallback also found no match');
+              debugWarn('🔍 [Question Detection] Regex fallback also found no match');
             }
           }
         }
       } catch (e) {
-        console.warn('🔍 [Question Detection] Failed to parse JSON from assistant message:', e);
+        debugWarn('🔍 [Question Detection] Failed to parse JSON from assistant message:', e);
         // Try to extract the answer value directly from the string as fallback
         try {
           // Try details_markdown first, then user_friendly_summary, then user_friendly
@@ -1930,12 +1931,12 @@ function App() {
               .replace(/\\t/g, '\t')
               .replace(/\\r/g, '\r')
               .replace(/\\\\/g, '\\');
-            console.log('✅ [Question Detection] Extracted text via regex fallback, length:', finalText.length);
+            debugLog('✅ [Question Detection] Extracted text via regex fallback, length:', finalText.length);
           } else {
-            console.warn('🔍 [Question Detection] Regex fallback found no match');
+            debugWarn('🔍 [Question Detection] Regex fallback found no match');
           }
         } catch (regexError) {
-          console.warn('🔍 [Question Detection] Regex fallback also failed:', regexError);
+          debugWarn('🔍 [Question Detection] Regex fallback also failed:', regexError);
         }
       }
     }
@@ -1953,9 +1954,9 @@ function App() {
     
     // Debug logging
     if (agentOutput?.tool === 'agent' || agentOutput?.raw_result?.task_type === 'qa') {
-      console.log('🔍 [Question Detection] Assistant messages count:', assistantMessages.length);
-      console.log('🔍 [Question Detection] Final text length:', finalText?.length || 0);
-      console.log('🔍 [Question Detection] Final text preview:', finalText?.substring(0, 100) || 'empty');
+      debugLog('🔍 [Question Detection] Assistant messages count:', assistantMessages.length);
+      debugLog('🔍 [Question Detection] Final text length:', finalText?.length || 0);
+      debugLog('🔍 [Question Detection] Final text preview:', finalText?.substring(0, 100) || 'empty');
     }
 
     if (!finalText && typeof agentResult?.final_output === 'string') {
@@ -2027,14 +2028,14 @@ function App() {
         if (jsonMatch && jsonMatch[1]) {
           const jsonContent = JSON.parse(jsonMatch[1]);
           taskType = jsonContent.task_type;
-          console.log('✅ [Question Detection] Extracted task_type from JSON:', taskType);
+          debugLog('✅ [Question Detection] Extracted task_type from JSON:', taskType);
         }
       } catch (e) {
         // Try regex fallback
         const taskTypeMatch = finalText.match(/"task_type"\s*:\s*"([^"]+)"/);
         if (taskTypeMatch && taskTypeMatch[1]) {
           taskType = taskTypeMatch[1];
-          console.log('✅ [Question Detection] Extracted task_type via regex:', taskType);
+          debugLog('✅ [Question Detection] Extracted task_type via regex:', taskType);
         }
       }
     }
@@ -2047,14 +2048,14 @@ function App() {
         if (jsonMatch && jsonMatch[1]) {
           const jsonContent = JSON.parse(jsonMatch[1]);
           taskType = jsonContent.task_type;
-          console.log('✅ [Question Detection] Extracted task_type from JSON:', taskType);
+          debugLog('✅ [Question Detection] Extracted task_type from JSON:', taskType);
         }
       } catch (e) {
         // Try regex fallback
         const taskTypeMatch = finalText.match(/"task_type"\s*:\s*"([^"]+)"/);
         if (taskTypeMatch && taskTypeMatch[1]) {
           taskType = taskTypeMatch[1];
-          console.log('✅ [Question Detection] Extracted task_type via regex:', taskType);
+          debugLog('✅ [Question Detection] Extracted task_type via regex:', taskType);
         }
       }
     }
@@ -2074,11 +2075,11 @@ function App() {
     
     // Debug logging for question detection
     if (agentOutput?.tool === 'agent' || looksLikeQuestion) {
-      console.log('🔍 [Question Detection] taskType:', taskType);
-      console.log('🔍 [Question Detection] isQuestion:', isQuestion);
-      console.log('🔍 [Question Detection] tool:', agentOutput?.tool);
-      console.log('🔍 [Question Detection] visualization_type:', agentOutput?.visualization_type);
-      console.log('🔍 [Question Detection] hasSpecialVisualizations:', hasSpecialVisualizations);
+      debugLog('🔍 [Question Detection] taskType:', taskType);
+      debugLog('🔍 [Question Detection] isQuestion:', isQuestion);
+      debugLog('🔍 [Question Detection] tool:', agentOutput?.tool);
+      debugLog('🔍 [Question Detection] visualization_type:', agentOutput?.visualization_type);
+      debugLog('🔍 [Question Detection] hasSpecialVisualizations:', hasSpecialVisualizations);
     }
 
     // ── Tabular analysis execution result ────────────────────────────────────
@@ -2465,7 +2466,7 @@ function App() {
                             (agentOutput?.tool === 'agent' && !hasSpecialVisualizations && looksLikeQuestion);
     
     if (finalIsQuestion && !hasSpecialVisualizations) {
-      console.log('🔍 [Question Detection] Final check: This is a question, preventing structured data render');
+      debugLog('🔍 [Question Detection] Final check: This is a question, preventing structured data render');
       // Return a simple message instead of structured data
       return (
         <div>

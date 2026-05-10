@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { debugWarn } from '../utils/debugLog';
 
 export const normalizeBaseUrl = (value?: string): string | undefined => {
   const trimmed = value?.trim();
@@ -236,21 +237,21 @@ export const helixApi = {
   
   // Sequence alignment (DEPRECATED - use executeCommand instead)
   sequenceAlignment: async (params: { sequences: string; algorithm?: string }, sessionId?: string) => {
-    console.warn('⚠️ sequenceAlignment is deprecated. Use executeCommand() instead.');
+    debugWarn('⚠️ sequenceAlignment is deprecated. Use executeCommand() instead.');
     const response = await axios.post(`${API_BASE_URL}/tools/sequence-alignment`, { ...params, session_id: sessionId });
     return response.data;
   },
 
   // Mutate sequence (DEPRECATED - use executeCommand instead)
   mutateSequence: async (params: { sequence: string; num_variants?: number; mutation_rate?: number }, sessionId?: string) => {
-    console.warn('⚠️ mutateSequence is deprecated. Use executeCommand() instead.');
+    debugWarn('⚠️ mutateSequence is deprecated. Use executeCommand() instead.');
     const response = await axios.post(`${API_BASE_URL}/tools/mutate-sequence`, { ...params, session_id: sessionId });
     return response.data;
   },
 
   // Analyze sequence data (DEPRECATED - use executeCommand instead)
   analyzeSequenceData: async (params: { data: string; analysis_type?: string }, sessionId?: string) => {
-    console.warn('⚠️ analyzeSequenceData is deprecated. Use executeCommand() instead.');
+    debugWarn('⚠️ analyzeSequenceData is deprecated. Use executeCommand() instead.');
     const response = await axios.post(`${API_BASE_URL}/tools/analyze-sequence-data`, { ...params, session_id: sessionId });
     return response.data;
   },
@@ -262,14 +263,14 @@ export const helixApi = {
     num_variants?: number; 
     custom_filters?: any 
   }) => {
-    console.warn('⚠️ selectVariants is deprecated. Use executeCommand() instead.');
+    debugWarn('⚠️ selectVariants is deprecated. Use executeCommand() instead.');
     const response = await axios.post(`${API_BASE_URL}/tools/select-variants`, params);
     return response.data;
   },
 
   // Visualize alignment (DEPRECATED - use executeCommand instead)
   visualizeAlignment: async (params: { alignment_file: string; output_format?: string }, sessionId?: string) => {
-    console.warn('⚠️ visualizeAlignment is deprecated. Use executeCommand() instead.');
+    debugWarn('⚠️ visualizeAlignment is deprecated. Use executeCommand() instead.');
     const response = await axios.post(`${API_BASE_URL}/tools/visualize-alignment`, { ...params, session_id: sessionId });
     return response.data;
   },
@@ -280,7 +281,7 @@ export const helixApi = {
     cloning_sites: string; 
     insert_sequence: string 
   }, sessionId?: string) => {
-    console.warn('⚠️ plasmidVisualization is deprecated. Use executeCommand() instead.');
+    debugWarn('⚠️ plasmidVisualization is deprecated. Use executeCommand() instead.');
     const response = await axios.post(`${API_BASE_URL}/tools/plasmid-visualization`, {
       ...params,
       session_id: sessionId
@@ -295,7 +296,7 @@ export const helixApi = {
     vector_name?: string; 
     cloning_sites?: string 
   }, sessionId?: string) => {
-    console.warn('⚠️ plasmidForRepresentatives is deprecated. Use executeCommand() instead.');
+    debugWarn('⚠️ plasmidForRepresentatives is deprecated. Use executeCommand() instead.');
     const response = await axios.post(`${API_BASE_URL}/tools/plasmid-for-representatives`, {
       ...params,
       session_id: sessionId
@@ -305,21 +306,21 @@ export const helixApi = {
 
   // Read trimming (DEPRECATED - use executeCommand instead)
   readTrimming: async (params: { reads: string; adapter?: string; quality_threshold?: number }, sessionId?: string) => {
-    console.warn('⚠️ readTrimming is deprecated. Use executeCommand() instead.');
+    debugWarn('⚠️ readTrimming is deprecated. Use executeCommand() instead.');
     const response = await axios.post(`${API_BASE_URL}/tools/read-trimming`, { ...params, session_id: sessionId });
     return response.data;
   },
 
   // Read merging (DEPRECATED - use executeCommand instead)
   readMerging: async (params: { forward_reads: string; reverse_reads: string; min_overlap?: number }, sessionId?: string) => {
-    console.warn('⚠️ readMerging is deprecated. Use executeCommand() instead.');
+    debugWarn('⚠️ readMerging is deprecated. Use executeCommand() instead.');
     const response = await axios.post(`${API_BASE_URL}/tools/read-merging`, { ...params, session_id: sessionId });
     return response.data;
   },
 
   // Phylogenetic tree (DEPRECATED - use executeCommand instead)
   phylogeneticTree: async (params: { aligned_sequences: string }) => {
-    console.warn('⚠️ phylogeneticTree is deprecated. Use executeCommand() instead.');
+    debugWarn('⚠️ phylogeneticTree is deprecated. Use executeCommand() instead.');
     const response = await axios.post(`${API_BASE_URL}/tools/phylogenetic-tree`, params);
     return response.data;
   },
@@ -330,7 +331,7 @@ export const helixApi = {
     selection_type?: string; 
     num_sequences?: number 
   }) => {
-    console.warn('⚠️ sequenceSelection is deprecated. Use executeCommand() instead.');
+    debugWarn('⚠️ sequenceSelection is deprecated. Use executeCommand() instead.');
     const response = await axios.post(`${API_BASE_URL}/tools/sequence-selection`, params);
     return response.data;
   },
@@ -342,7 +343,7 @@ export const helixApi = {
     quantity?: string; 
     delivery_time?: string 
   }) => {
-    console.warn('⚠️ synthesisSubmission is deprecated. Use executeCommand() instead.');
+    debugWarn('⚠️ synthesisSubmission is deprecated. Use executeCommand() instead.');
     const response = await axios.post(`${API_BASE_URL}/tools/synthesis-submission`, params);
     return response.data;
   },
