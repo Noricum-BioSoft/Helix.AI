@@ -139,6 +139,11 @@ def execute_analysis_plan(
         "error":         str  — (on error only)
     }
     """
+    from backend.tabular_qa.codegen_attempts import (
+        classify_tabular_execution_error,
+        get_tabular_codegen_max_attempts,
+        truncate_code_preview,
+    )
     from backend.tabular_qa.executor import execute_code
 
     # Resolve file(s) — prefer metadata embedded in the plan
@@ -197,13 +202,15 @@ def execute_analysis_plan(
         except OSError:
             pass
 
-    # Code generation → execution (one retry on failure).
+    # Code generation → execution (up to HELIX_TABULAR_CODEGEN_MAX_ATTEMPTS tries).
     # On retry the error is injected at the TOP of the user prompt (not appended
     # at the end) so the model reads it before the task description — making it
     # far more likely to correct the mistake rather than repeat it.
+    max_attempts = get_tabular_codegen_max_attempts()
     last_error = ""
+    last_code = ""
     exec_result: Dict[str, Any] = {}
-    for attempt in range(2):
+    for attempt in range(max_attempts):
         if attempt > 0:
             # Place the error correction instruction before the analysis goal so
             # the model addresses the constraint first.
@@ -219,6 +226,7 @@ def execute_analysis_plan(
             prompt = code_prompt
 
         code = _strip_fences(_llm_call(llm, CODEGEN_SYSTEM_PROMPT, prompt))
+        last_code = code
         exec_result = execute_code(code, df)
 
         if exec_result.get("error"):
@@ -231,7 +239,12 @@ def execute_analysis_plan(
     else:
         return {
             "status": "error",
-            "error": f"Analysis execution failed after 2 attempts: {last_error}",
+            "error": f"Analysis execution failed after {max_attempts} attempts: {last_error}",
+            "attempts_used": max_attempts,
+            "attempts_max": max_attempts,
+            "error_class": classify_tabular_execution_error(last_error),
+            "last_code_preview": truncate_code_preview(last_code),
+            "tabular_retry_available": True,
         }
 
     # Persist plot and encode as base64 for inline display in the frontend
@@ -276,4 +289,6 @@ def execute_analysis_plan(
         "plot_base64": plot_base64,
         "plan_title": plan.get("title"),
         "plan_goal": plan.get("goal"),
+        "attempts_used": attempt + 1,
+        "attempts_max": max_attempts,
     }

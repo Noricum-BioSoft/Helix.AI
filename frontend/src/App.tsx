@@ -2199,6 +2199,66 @@ function App() {
       );
     }
 
+    const isTaError =
+      (agentOutput?.tool === 'tabular_analysis' || agentOutput?.result?.tool === 'tabular_analysis') &&
+      taResult?.status === 'error';
+
+    if (isTaError) {
+      const errText: string = taResult?.text ?? 'Analysis failed.';
+      const aused = taResult?.attempts_used;
+      const amax = taResult?.attempts_max;
+      const attemptStr =
+        typeof aused === 'number' && typeof amax === 'number' ? ` (${aused}/${amax} attempts)` : '';
+      const preview = typeof taResult?.last_code_preview === 'string' ? taResult.last_code_preview : '';
+      const canRetry = taResult?.tabular_retry_available === true;
+      const errClass =
+        typeof taResult?.error_class === 'string' ? taResult.error_class : undefined;
+
+      return (
+        <div>
+          <div style={{ color: '#b91c1c', fontWeight: 600, marginBottom: 8 }}>
+            Tabular analysis failed{attemptStr}
+          </div>
+          {errClass && (
+            <div style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: 8 }}>Error type: {errClass}</div>
+          )}
+          <div className="agent-response-markdown" style={{ marginBottom: 12 }}>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{errText}</ReactMarkdown>
+          </div>
+          {preview ? (
+            <details style={{ marginBottom: 14 }}>
+              <summary style={{ cursor: 'pointer', fontWeight: 600, color: '#334155' }}>
+                Generated code preview
+              </summary>
+              <pre
+                style={{
+                  marginTop: 8,
+                  padding: 12,
+                  background: '#f8fafc',
+                  border: '1px solid #e2e8f0',
+                  borderRadius: 6,
+                  fontSize: '0.75rem',
+                  overflow: 'auto',
+                  maxHeight: 280,
+                }}
+              >
+                {preview}
+              </pre>
+            </details>
+          ) : null}
+          {canRetry && (
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => void executeCommand('Approve.', undefined, false)}
+            >
+              Try again (re-run approval)
+            </button>
+          )}
+        </div>
+      );
+    }
+
     if (finalText) {
       // ── Advisory JSON detection ──────────────────────────────────────────
       // The backend normalises advisory responses to { helix_type: "advisory", ... }.

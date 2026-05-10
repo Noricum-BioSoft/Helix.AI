@@ -2942,10 +2942,24 @@ async def execute(req: CommandRequest, request: Request):
                         )
                     except Exception as _exc:
                         exec_result = {"status": "error", "error": str(_exc)}
-                    _clear_pending_plan(req.session_id)
-                    history_manager.save_checkpoint(
-                        req.session_id, WorkflowCheckpoint.completed()
-                    )
+                    if exec_result.get("status") == "success":
+                        _clear_pending_plan(req.session_id)
+                        history_manager.save_checkpoint(
+                            req.session_id, WorkflowCheckpoint.completed()
+                        )
+                    else:
+                        # Keep the staged plan so the user can Approve again (fresh codegen attempts).
+                        _cmd_for_pending = pending_plan.get("command") or req.command
+                        _store_pending_plan(req.session_id, _cmd_for_pending, pending_plan["plan"])
+                        history_manager.save_checkpoint(
+                            req.session_id,
+                            WorkflowCheckpoint.waiting_for_approval(
+                                pending_plan={
+                                    "plan": pending_plan["plan"],
+                                    "command": _cmd_for_pending,
+                                },
+                            ),
+                        )
                     _ta_result = (
                         {
                             "status": "success",
@@ -2957,13 +2971,22 @@ async def execute(req: CommandRequest, request: Request):
                             "plan_title": exec_result.get("plan_title"),
                             "plan_goal": exec_result.get("plan_goal"),
                             "workflow_state": WorkflowState.IDLE.value,
+                            "attempts_used": exec_result.get("attempts_used"),
+                            "attempts_max": exec_result.get("attempts_max"),
                         }
                         if exec_result.get("status") == "success"
                         else {
                             "status": "error",
                             "success": False,
                             "text": exec_result.get("error", "Analysis execution failed."),
-                            "workflow_state": WorkflowState.IDLE.value,
+                            "workflow_state": WorkflowState.WAITING_FOR_APPROVAL.value,
+                            "attempts_used": exec_result.get("attempts_used"),
+                            "attempts_max": exec_result.get("attempts_max"),
+                            "error_class": exec_result.get("error_class"),
+                            "last_code_preview": exec_result.get("last_code_preview"),
+                            "tabular_retry_available": bool(
+                                exec_result.get("tabular_retry_available", False)
+                            ),
                         }
                     )
                     std = build_standard_response(
@@ -4961,6 +4984,10 @@ async def dispatch_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, 
             "result": qa_result.get("result"),
             "code": qa_result.get("code"),
             "attempts": qa_result.get("attempts"),
+            "attempts_max": qa_result.get("attempts_max"),
+            "error_class": qa_result.get("error_class"),
+            "last_code_preview": qa_result.get("last_code_preview"),
+            "tabular_retry_available": qa_result.get("tabular_retry_available"),
         }
 
     # ── Tabular analysis (deterministic operations) ───────────────────────────

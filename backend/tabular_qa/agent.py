@@ -20,7 +20,6 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-MAX_RETRIES = 2
 _QA_MODEL_ENV = "HELIX_TABULAR_QA_MODEL"
 _DEFAULT_MODEL = "openai:gpt-5.5"
 
@@ -213,7 +212,14 @@ def run_tabular_qa(
         error        str  — set only on final failure
     """
     from backend.ds_pipeline.pipelines.ingest import ingest_tabular
+    from backend.tabular_qa.codegen_attempts import (
+        classify_tabular_execution_error,
+        get_tabular_codegen_max_attempts,
+        truncate_code_preview,
+    )
     from backend.tabular_qa.executor import execute_code
+
+    max_attempts = get_tabular_codegen_max_attempts()
 
     # --- Load DataFrame ---
     try:
@@ -247,7 +253,7 @@ def run_tabular_qa(
     code = ""
     attempt = 0  # guard: keeps attempt defined if the loop range is ever empty
 
-    for attempt in range(1, MAX_RETRIES + 2):  # 1 initial try + MAX_RETRIES retries
+    for attempt in range(1, max_attempts + 1):
         prompt = _build_code_prompt(question, profile, error_context=last_error)
         try:
             raw = _llm_invoke(llm, prompt)
@@ -279,7 +285,11 @@ def run_tabular_qa(
             "result": last_exec.get("result") if last_exec else None,
             "code": code,
             "attempts": attempt,
+            "attempts_max": max_attempts,
             "error": last_error,
+            "error_class": classify_tabular_execution_error(last_error),
+            "last_code_preview": truncate_code_preview(code),
+            "tabular_retry_available": False,
         }
 
     # --- Narration ---
@@ -296,5 +306,6 @@ def run_tabular_qa(
         "result": last_exec.get("result"),
         "code": code,
         "attempts": attempt,
+        "attempts_max": max_attempts,
         "error": None,
     }
