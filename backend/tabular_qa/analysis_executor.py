@@ -291,4 +291,7 @@ def execute_analysis_plan(
         "plan_goal": plan.get("goal"),
         "attempts_used": attempt + 1,
         "attempts_max": max_attempts,
+        # Successful codegen path — persisted under sessions/.../runs/<run_id>/ for bundles.
+        "code_used": last_code,
+        "input_local_path": local_path,
     }

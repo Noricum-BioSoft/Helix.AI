@@ -1851,10 +1851,10 @@ def build_standard_response(
         or None
     )
     if not _script_path_str and _run_id_hint and session_id:
-        # BioOrchestrator saves scripts under sessions/<sid>/runs/<run_id>/
+        # BioOrchestrator / tabular persist scripts under storage_dir/<sid>/runs/<run_id>/
         _candidate = (
-            Path(__file__).parent.parent
-            / "sessions" / session_id / "runs" / _run_id_hint / "analysis.py"
+            history_manager.storage_dir.resolve()
+            / session_id / "runs" / _run_id_hint / "analysis.py"
         )
         if _candidate.exists():
             _script_path_str = str(_candidate)
@@ -2942,11 +2942,73 @@ async def execute(req: CommandRequest, request: Request):
                         )
                     except Exception as _exc:
                         exec_result = {"status": "error", "error": str(_exc)}
+                    _tabular_run_id: Optional[str] = None
+                    _tabular_produced_artifacts: Optional[List[Dict[str, Any]]] = None
+                    _tabular_script_path: Optional[str] = None
                     if exec_result.get("status") == "success":
                         _clear_pending_plan(req.session_id)
                         history_manager.save_checkpoint(
                             req.session_id, WorkflowCheckpoint.completed()
                         )
+                        try:
+                            _tabular_run_id = f"run_{uuid.uuid4().hex[:12]}"
+                            _storage = history_manager.storage_dir.resolve()
+                            _run_dir = _storage / req.session_id / "runs" / _tabular_run_id
+                            (_run_dir / "plots").mkdir(parents=True, exist_ok=True)
+                            (_run_dir / "tables").mkdir(parents=True, exist_ok=True)
+                            _produced: List[Dict[str, Any]] = []
+                            _code_used = (exec_result.get("code_used") or "").strip()
+                            _script_file = _run_dir / "analysis.py"
+                            if _code_used:
+                                _script_file.write_text(_code_used, encoding="utf-8")
+                                _produced.append(
+                                    {
+                                        "type": "script",
+                                        "title": "analysis.py",
+                                        "uri": str(_script_file.resolve()),
+                                        "format": "python",
+                                    }
+                                )
+                            _plot_src = exec_result.get("plot_path")
+                            if _plot_src and Path(_plot_src).exists():
+                                _plot_dest = _run_dir / "plots" / Path(_plot_src).name
+                                shutil.copy2(_plot_src, _plot_dest)
+                                _produced.append(
+                                    {
+                                        "type": "plot",
+                                        "title": _plot_dest.name,
+                                        "uri": str(_plot_dest.resolve()),
+                                        "format": "png",
+                                    }
+                                )
+                            _rd = exec_result.get("result_data")
+                            if _rd is not None:
+                                try:
+                                    _tb = json.dumps(_rd, default=str, indent=2).encode("utf-8")
+                                    if len(_tb) <= 10 * 1024 * 1024:
+                                        _tbl_path = _run_dir / "tables" / "tabular_result.json"
+                                        _tbl_path.write_bytes(_tb)
+                                        _produced.append(
+                                            {
+                                                "type": "table",
+                                                "title": "tabular_result.json",
+                                                "uri": str(_tbl_path.resolve()),
+                                                "format": "json",
+                                            }
+                                        )
+                                except (TypeError, ValueError, OSError):
+                                    pass
+                            _tabular_produced_artifacts = _produced or None
+                            if _script_file.exists():
+                                _tabular_script_path = str(_script_file.resolve())
+                        except Exception as _persist_exc:
+                            logger.warning(
+                                "tabular_analysis: failed to persist run artifacts: %s",
+                                _persist_exc,
+                            )
+                            _tabular_run_id = None
+                            _tabular_produced_artifacts = None
+                            _tabular_script_path = None
                     else:
                         # Keep the staged plan so the user can Approve again (fresh codegen attempts).
                         _cmd_for_pending = pending_plan.get("command") or req.command
@@ -2973,6 +3035,8 @@ async def execute(req: CommandRequest, request: Request):
                             "workflow_state": WorkflowState.IDLE.value,
                             "attempts_used": exec_result.get("attempts_used"),
                             "attempts_max": exec_result.get("attempts_max"),
+                            "run_id": _tabular_run_id,
+                            "script_path": _tabular_script_path,
                         }
                         if exec_result.get("status") == "success"
                         else {
@@ -2989,6 +3053,41 @@ async def execute(req: CommandRequest, request: Request):
                             ),
                         }
                     )
+                    # Persist ledger (and inject artifact links into _ta_result) before
+                    # build_standard_response so get_run / bundle links resolve.
+                    _ta_meta: Dict[str, Any] = {
+                        "run_id": _tabular_run_id
+                        if exec_result.get("status") == "success"
+                        else None,
+                        "execution_path": (
+                            "tabular_analysis_execute_success"
+                            if _ta_result["success"]
+                            else "tabular_analysis_execute_error"
+                        ),
+                    }
+                    if _ta_result["success"] and _tabular_produced_artifacts:
+                        _ta_meta["produced_artifacts"] = _tabular_produced_artifacts
+                        _ta_meta["tool_args"] = {
+                            "plan_title": exec_result.get("plan_title"),
+                            "plan_goal": exec_result.get("plan_goal"),
+                        }
+                    try:
+                        history_manager.add_history_entry(
+                            session_id=req.session_id,
+                            command=req.command,
+                            tool="tabular_analysis",
+                            result=_ta_result,
+                            metadata=_ta_meta,
+                        )
+                    except Exception as _hist_exc:
+                        logger.warning(
+                            "tabular_analysis: failed to write history entry: %s", _hist_exc
+                        )
+                    if _ta_result.get("success") and not _ta_result.get("run_id"):
+                        _runs_after = history_manager.list_runs(req.session_id) or []
+                        if _runs_after:
+                            _ta_result["run_id"] = _runs_after[-1].get("run_id")
+
                     std = build_standard_response(
                         prompt=req.command,
                         tool="tabular_analysis",
@@ -3002,26 +3101,6 @@ async def execute(req: CommandRequest, request: Request):
                             else "tabular_analysis_execute_error"
                         ),
                     )
-                    # Write history entry so the session always shows this turn
-                    # (success or failure). Without this the tabular execution
-                    # path bypasses _dispatch_result and the history stays empty.
-                    try:
-                        _ta_run_id = std.get("run_id") or std.get("data", {}).get("run_id")
-                        history_manager.add_history_entry(
-                            session_id=req.session_id,
-                            command=req.command,
-                            tool="tabular_analysis",
-                            result=_ta_result,
-                            metadata={"run_id": _ta_run_id, "execution_path": (
-                                "tabular_analysis_execute_success"
-                                if _ta_result["success"]
-                                else "tabular_analysis_execute_error"
-                            )},
-                        )
-                    except Exception as _hist_exc:
-                        logger.warning(
-                            "tabular_analysis: failed to write history entry: %s", _hist_exc
-                        )
                     return CustomJSONResponse(std)
                 # ── End tabular analysis execution path ──────────────────────────
 

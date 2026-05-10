@@ -9,6 +9,7 @@ Bundle layout
 ├── analysis.py             Re-runnable script for the target run
 ├── plots/                  PNG plots (skipped if > LARGE_FILE_BYTES)
 ├── tables/                 JSON / CSV tables (skipped if > LARGE_FILE_BYTES)
+├── inputs/                 (tabular_analysis) copies of session uploads/raw/*
 ├── iteration_history/      One sub-folder per ancestor run in the chain
 │   └── <run_id_short>/
 │       ├── analysis.py
@@ -30,10 +31,6 @@ from typing import Any, Dict, List, Optional
 
 # Files larger than this are referenced in large_files.txt rather than embedded.
 LARGE_FILE_BYTES = 5 * 1024 * 1024  # 5 MB
-
-_PROJECT_ROOT = Path(__file__).parent.parent.resolve()
-_SESSIONS_ROOT = _PROJECT_ROOT / "sessions"
-
 
 # ── public entry point ────────────────────────────────────────────────────────
 
@@ -58,6 +55,7 @@ def build_bundle(
     """
     from backend.history_manager import history_manager
 
+    sessions_root: Path = history_manager.storage_dir.resolve()
     all_runs: List[Dict[str, Any]] = history_manager.list_runs(session_id) or []
 
     # Resolve target run
@@ -82,10 +80,21 @@ def build_bundle(
         large_refs: List[str] = []
 
         # ── analysis.py for the target run ───────────────────────────────────
-        _add_script(zf, target, dir_name, "analysis.py", large_refs)
+        _add_script(
+            zf, target, dir_name, "analysis.py", large_refs,
+            sessions_root, session_id,
+        )
 
         # ── plots & tables from the target run ───────────────────────────────
-        _add_artifacts(zf, target, dir_name, large_refs, session_id, target_run_id)
+        _add_artifacts(
+            zf, target, dir_name, large_refs, session_id, target_run_id, sessions_root,
+        )
+
+        # ── tabular: session upload inputs (raw files used for analysis) ──────
+        if tool_name == "tabular_analysis":
+            _add_tabular_session_raw_inputs(
+                zf, dir_name, large_refs, sessions_root, session_id,
+            )
 
         # ── iteration history ─────────────────────────────────────────────────
         if len(chain) > 1:
@@ -93,7 +102,10 @@ def build_bundle(
                 a_run_id = ancestor.get("run_id", "")
                 a_short = a_run_id[:8]
                 sub = f"{dir_name}/iteration_history/{a_short}"
-                _add_script(zf, ancestor, sub, "analysis.py", large_refs)
+                _add_script(
+                    zf, ancestor, sub, "analysis.py", large_refs,
+                    sessions_root, session_id,
+                )
                 # params.json
                 params_bytes = json.dumps(
                     ancestor.get("tool_args") or {}, indent=2
@@ -173,6 +185,8 @@ def _add_script(
     dest_dir: str,
     filename: str,
     large_refs: List[str],
+    sessions_root: Path,
+    session_id: str,
 ) -> None:
     arts = run.get("produced_artifacts") or []
     for a in arts:
@@ -188,13 +202,21 @@ def _add_script(
                     zf.writestr(f"{dest_dir}/{filename}", p.read_bytes())
             return
 
-    # Fallback: try to locate analysis.py from sessions/ tree
+    # Fallback: canonical run layout, then broad search under storage root
     run_id = run.get("run_id", "")
     if run_id:
-        sid = run.get("session_id", "")
-        for candidate in _SESSIONS_ROOT.rglob(f"*{run_id[:8]}*/analysis.py"):
-            zf.writestr(f"{dest_dir}/{filename}", candidate.read_bytes())
+        direct = sessions_root / session_id / "runs" / run_id / "analysis.py"
+        if direct.exists():
+            size = direct.stat().st_size
+            if size > LARGE_FILE_BYTES:
+                large_refs.append(f"[script] {direct}")
+            else:
+                zf.writestr(f"{dest_dir}/{filename}", direct.read_bytes())
             return
+        for candidate in sessions_root.rglob(f"*{run_id[:8]}*/analysis.py"):
+            if candidate.is_file():
+                zf.writestr(f"{dest_dir}/{filename}", candidate.read_bytes())
+                return
 
 
 def _add_artifacts(
@@ -204,8 +226,12 @@ def _add_artifacts(
     large_refs: List[str],
     session_id: str,
     run_id: str,
+    sessions_root: Path,
 ) -> None:
     """Add plots and tables from the run's artifact files."""
+    plot_names: set[str] = set()
+    table_names: set[str] = set()
+
     # Check produced_artifacts list
     arts = run.get("produced_artifacts") or []
     for a in arts:
@@ -223,21 +249,49 @@ def _add_artifacts(
             large_refs.append(f"[{atype}] {p}")
         else:
             zf.writestr(f"{dest_dir}/{sub}/{p.name}", p.read_bytes())
+            if atype == "plot":
+                plot_names.add(p.name)
+            else:
+                table_names.add(p.name)
 
     # Also sweep run_dir/plots/ and run_dir/tables/ on disk
-    run_dir = _SESSIONS_ROOT / session_id / "runs" / run_id
-    for sub in ("plots", "tables"):
+    run_dir = sessions_root / session_id / "runs" / run_id
+    for sub, names in (("plots", plot_names), ("tables", table_names)):
         sub_dir = run_dir / sub
         if not sub_dir.exists():
             continue
         for f in sorted(sub_dir.iterdir()):
             if not f.is_file():
                 continue
+            if f.name in names:
+                continue
             size = f.stat().st_size
             if size > LARGE_FILE_BYTES:
                 large_refs.append(f"[{sub[:-1]}] {f}")
             else:
                 zf.writestr(f"{dest_dir}/{sub}/{f.name}", f.read_bytes())
+
+
+def _add_tabular_session_raw_inputs(
+    zf: zipfile.ZipFile,
+    dir_name: str,
+    large_refs: List[str],
+    sessions_root: Path,
+    session_id: str,
+) -> None:
+    """Pack uploads under sessions/<id>/uploads/raw for offline re-run with bundled analysis.py."""
+    raw_dir = sessions_root / session_id / "uploads" / "raw"
+    if not raw_dir.is_dir():
+        return
+    for f in sorted(raw_dir.iterdir()):
+        if not f.is_file():
+            continue
+        arc = f"{dir_name}/inputs/raw/{f.name}"
+        size = f.stat().st_size
+        if size > LARGE_FILE_BYTES:
+            large_refs.append(f"[tabular_input] {f}")
+        else:
+            zf.writestr(arc, f.read_bytes())
 
 
 # ── manifest ──────────────────────────────────────────────────────────────────
@@ -322,6 +376,15 @@ def _build_readme(
         "Each script is self-contained — just edit the `# ── Parameters ──` block",
         "at the top to adjust settings, then re-run.",
         "",
+    ]
+    if tool_name == "tabular_analysis":
+        lines += [
+            "**Tabular inputs:** originals from the session upload area are included under",
+            "`inputs/raw/` in this bundle. Re-point loading logic to those paths if you run",
+            "outside the Helix sandbox (the generated script expects `df` in-process).",
+            "",
+        ]
+    lines += [
         "---",
         "",
         "## Analysis steps",
