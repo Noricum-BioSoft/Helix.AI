@@ -124,3 +124,26 @@ else
 fi
 
 echo "[helix] done."
+
+# ---------------------------------------------------------------------------
+# Smoke test suite (optional — runs when HELIX_SMOKE_URL is set)
+# ---------------------------------------------------------------------------
+# On the EC2 host this typically points to http://localhost (nginx) or the
+# public hostname.  Set HELIX_SMOKE_URL before invoking this script, e.g.:
+#   HELIX_SMOKE_URL=https://helix-beta.noricum-biosoft.com ./update-from-git.sh
+# When not set, the smoke suite is skipped.
+_SMOKE_URL="${HELIX_SMOKE_URL:-}"
+_SMOKE_SCRIPT="$(dirname "$0")/../../tests/smoke/ec2_smoke.py"
+
+if [[ -n "${_SMOKE_URL}" ]]; then
+  echo "[helix] running smoke suite against ${_SMOKE_URL} ..."
+  if python3 "${_SMOKE_SCRIPT}" "${_SMOKE_URL}" 2>&1; then
+    echo "[helix] smoke suite PASSED — deploy accepted."
+  else
+    echo "ERROR: smoke suite FAILED — review output above before accepting this deploy." >&2
+    exit 1
+  fi
+else
+  echo "[helix] HELIX_SMOKE_URL not set — skipping smoke suite."
+  echo "        Tip: rerun with HELIX_SMOKE_URL=https://helix-beta.noricum-biosoft.com to verify."
+fi

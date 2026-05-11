@@ -363,3 +363,128 @@ class TestTabularPlanning:
         assert resp.get("tool") != "tabular_analysis_plan", (
             "Advisory commands must not generate a tabular_analysis_plan"
         )
+
+
+# ── Archetype 6: Advisory quick-reply follow-up ───────────────────────────────
+
+
+class TestAdvisoryFollowup:
+    """Regression suite for the advisory → quick-reply interaction pattern.
+
+    A quick-reply button submits its label text (e.g. "yes, inspect it")
+    as a new /execute command in a session that has NO pending workflow plan.
+    The backend must:
+      - NOT classify the reply as a workflow approval
+      - NOT return "There is no pending workflow to approve"
+      - Route the reply as a normal analytical command
+    """
+
+    # Phrases the frontend can submit as quick-reply labels.
+    # All start with "yes" to exercise the affirmative-prefix guard.
+    QUICK_REPLY_PHRASES = [
+        "yes, inspect it",
+        "yes, profile it",
+        "yes, proceed",
+        "yes, run the analysis",
+        "focus on differential analysis",
+        "focus on visualization",
+    ]
+
+    def _advisory_dispatch(self) -> dict:
+        return {
+            "status": "success",
+            "text": "Workbook profiling complete.",
+            "tool_name": "tabular_qa",
+        }
+
+    @pytest.mark.parametrize("phrase", QUICK_REPLY_PHRASES)
+    def test_quick_reply_does_not_hit_approval_gate(self, monkeypatch, phrase):
+        """Submitting a quick-reply label with no pending plan must NOT return
+        the 'no pending workflow' error — it must return a normal response."""
+        from backend.command_router import CommandRouter
+        from backend.intent_classifier import IntentDecision
+
+        monkeypatch.setattr(
+            "backend.main.dispatch_tool",
+            AsyncMock(return_value=self._advisory_dispatch()),
+        )
+        monkeypatch.setattr(
+            "backend.intent_classifier.classify_intent",
+            lambda t, **kw: IntentDecision(intent="execute", reason="test_quickreply"),
+        )
+        with patch.object(CommandRouter, "_route_with_llm", lambda s, c, sc: ("tabular_qa", {})):
+            client = _client()
+            resp = _execute(client, phrase)
+
+        # The approval-gate dead-end message must never appear.
+        text = (resp.get("text") or "").lower()
+        assert "no pending workflow" not in text, (
+            f"Quick-reply '{phrase}' was misrouted to the approval gate. "
+            "is_approval_command must return False when has_pending_plan=False."
+        )
+        assert resp.get("success") is True, f"Expected success response, got: {resp}"
+
+    def test_quick_reply_followup_in_same_session(self, monkeypatch):
+        """Two-turn test: advisory turn followed immediately by a quick-reply
+        in the same session.  The follow-up must NOT hit the approval gate."""
+        from backend.command_router import CommandRouter
+        from backend.intent_classifier import IntentDecision
+        import json
+
+        # Turn 1: advisory
+        advisory_payload = {
+            "helix_type": "advisory",
+            "title": "Analysis Options",
+            "summary": "Here is what I can do.",
+            "sections": [],
+            "workflow_steps": [],
+            "requirements": [],
+            "questions_for_user": [
+                {
+                    "question": "Should I profile the workbook?",
+                    "examples": ["yes, inspect it", "yes, profile it"],
+                }
+            ],
+            "next_steps": [],
+        }
+        advisory_result = {
+            "status": "success",
+            "text": json.dumps(advisory_payload),
+            "tool_name": "handle_natural_command",
+        }
+        action_result = {
+            "status": "success",
+            "text": "Profiling complete: 5 sheets, 200 rows.",
+            "tool_name": "tabular_qa",
+        }
+
+        monkeypatch.setattr(
+            "backend.intent_classifier.classify_intent",
+            lambda t, **kw: IntentDecision(intent="execute", reason="test"),
+        )
+
+        call_count = [0]
+
+        def _dispatch(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return advisory_result
+            return action_result
+
+        monkeypatch.setattr("backend.main.dispatch_tool", AsyncMock(side_effect=_dispatch))
+
+        with patch.object(CommandRouter, "_route_with_llm", lambda s, c, sc: ("handle_natural_command", {})):
+            client = _client()
+            r1 = _execute(client, "what can I do with this dataset?")
+
+        sid = r1["session_id"]
+
+        with patch.object(CommandRouter, "_route_with_llm", lambda s, c, sc: ("tabular_qa", {})):
+            r2 = _execute(client, "yes, inspect it", session_id=sid)
+
+        text2 = (r2.get("text") or "").lower()
+        assert "no pending workflow" not in text2, (
+            "Quick-reply in turn 2 was misrouted to the approval gate. "
+            "Session state is IDLE so is_approval_command must return False."
+        )
+        assert r2.get("success") is True, f"Turn 2 must succeed, got: {r2}"
