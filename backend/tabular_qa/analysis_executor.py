@@ -100,6 +100,38 @@ def _strip_fences(text: str) -> str:
     return re.sub(r"\n?```$", "", text.strip(), flags=re.MULTILINE).strip()
 
 
+# Regex matching any top-level import line the LLM might emit.
+# All needed names (pd, np, plt, sns, stats, scipy, df) are pre-bound in the
+# sandbox, so these lines are not just harmless — they are required to be
+# absent.  We strip them pre-emptively so the sandbox never raises
+# SandboxImportError, regardless of whether the model follows the instruction.
+_IMPORT_LINE_RE = re.compile(
+    r"^\s*(import\s+\S|from\s+\S+\s+import\b)",
+    re.MULTILINE,
+)
+
+
+def _strip_imports(code: str) -> str:
+    """Remove import/from-import lines from LLM-generated sandbox code.
+
+    Logs a warning for every stripped line so we can track model compliance.
+    """
+    lines = code.splitlines(keepends=True)
+    clean, stripped = [], []
+    for line in lines:
+        if _IMPORT_LINE_RE.match(line):
+            stripped.append(line.rstrip())
+        else:
+            clean.append(line)
+    if stripped:
+        logger.warning(
+            "[analysis_executor] stripped %d import line(s) from generated code: %s",
+            len(stripped),
+            "; ".join(stripped),
+        )
+    return "".join(clean)
+
+
 def _schema_text(profile: Dict[str, Any]) -> str:
     from backend.tabular_qa.agent import _schema_to_text
     return _schema_to_text(profile)
@@ -226,6 +258,7 @@ def execute_analysis_plan(
             prompt = code_prompt
 
         code = _strip_fences(_llm_call(llm, CODEGEN_SYSTEM_PROMPT, prompt))
+        code = _strip_imports(code)
         last_code = code
         exec_result = execute_code(code, df)
 

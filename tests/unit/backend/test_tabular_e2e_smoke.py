@@ -370,3 +370,49 @@ class TestIngestSmoke:
 
         with pytest.raises(FileNotFoundError):
             ingest_tabular(tmp_path / "nonexistent.csv")
+
+
+# ---------------------------------------------------------------------------
+# _strip_imports — LLM-generated import scrubbing
+# ---------------------------------------------------------------------------
+
+class TestStripImports:
+    """Verify that _strip_imports removes import lines and leaves the rest intact."""
+
+    def _strip(self, code: str) -> str:
+        from backend.tabular_qa.analysis_executor import _strip_imports
+        return _strip_imports(code)
+
+    def test_bare_import_removed(self):
+        code = "import pandas as pd\nresult = df.shape"
+        assert "import" not in self._strip(code)
+        assert "result = df.shape" in self._strip(code)
+
+    def test_from_import_removed(self):
+        code = "from scipy import stats\nresult = stats.ttest_ind(df['a'], df['b'])"
+        cleaned = self._strip(code)
+        assert "from scipy" not in cleaned
+        assert "stats.ttest_ind" in cleaned
+
+    def test_multiple_imports_removed(self):
+        code = (
+            "import numpy as np\n"
+            "import pandas as pd\n"
+            "from matplotlib import pyplot as plt\n"
+            "result = np.mean(df['value'])\n"
+        )
+        cleaned = self._strip(code)
+        assert "import" not in cleaned
+        assert "result = np.mean" in cleaned
+
+    def test_no_imports_unchanged(self):
+        code = "result = df.describe().to_dict()"
+        assert self._strip(code) == code
+
+    def test_indented_import_stripped_too(self):
+        """Imports inside function bodies are also stripped — they would fail in
+        the sandbox exactly the same way as top-level imports."""
+        code = "def helper():\n    import os\n    return os.getcwd()\nresult = helper()"
+        cleaned = self._strip(code)
+        assert "import os" not in cleaned
+        assert "result = helper()" in cleaned
