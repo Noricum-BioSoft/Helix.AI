@@ -416,3 +416,59 @@ class TestStripImports:
         cleaned = self._strip(code)
         assert "import os" not in cleaned
         assert "result = helper()" in cleaned
+
+
+class TestBuildScriptHeader:
+    """_build_script_header produces a correct Python docstring for analysis.py."""
+
+    def _header(self, plan, filename="data.xlsx"):
+        from backend.tabular_qa.analysis_executor import _build_script_header
+        return _build_script_header(plan, filename)
+
+    def test_header_is_valid_python(self):
+        plan = {
+            "title": "Workbook profile",
+            "goal": "Summarise column types and row counts.",
+            "steps": [
+                {"id": 1, "name": "Load data",   "operation": "read Excel sheet", "type": "compute"},
+                {"id": 2, "name": "Profile cols", "operation": "describe dtypes",  "type": "compute"},
+            ],
+        }
+        header = self._header(plan)
+        # Must be syntactically valid Python (compile raises on error)
+        compile(header + "\nresult = {}", "<header>", "exec")
+
+    def test_header_contains_title_and_goal(self):
+        plan = {"title": "DEG analysis", "goal": "Find differentially expressed genes."}
+        header = self._header(plan)
+        assert "DEG analysis" in header
+        assert "Find differentially expressed genes." in header
+
+    def test_header_contains_filename(self):
+        plan = {"title": "Test"}
+        header = self._header(plan, filename="counts.csv")
+        assert "counts.csv" in header
+
+    def test_header_lists_compute_steps(self):
+        plan = {
+            "title": "T",
+            "steps": [
+                {"id": 1, "name": "Normalize", "operation": "log2 transform", "type": "compute"},
+                {"id": 2, "name": "Interpret",  "operation": "summarise",      "type": "interpret"},
+            ],
+        }
+        header = self._header(plan)
+        assert "Normalize" in header        # compute step included
+        assert "Interpret" not in header    # interpret step excluded
+
+    def test_header_starts_with_docstring_delimiter(self):
+        plan = {"title": "Quick check"}
+        header = self._header(plan)
+        assert header.strip().startswith('"""')
+        assert '"""' in header[3:]          # closing delimiter present
+
+    def test_header_contains_environment_notes(self):
+        plan = {"title": "T"}
+        header = self._header(plan)
+        assert "df" in header
+        assert "result" in header
