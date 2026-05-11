@@ -2763,25 +2763,96 @@ function App() {
           </div>
         )}
 
-        {/* Questions for the user */}
+        {/* Questions for the user — with clickable quick-reply option buttons */}
         {questions.length > 0 && (
           <div style={{ background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 8, padding: '12px 16px' }}>
             {sectionLabel('To proceed, I need the following information', '#92400E')}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {questions.map((q: any, i) => renderItem({ ...q, label: q.label || q.question || '' }, i, '?', '#D97706'))}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {questions.map((q: any, i) => {
+                const questionText = q.label || q.question || '';
+                const options: string[] = q.examples || [];
+                return (
+                  <div key={i}>
+                    <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                      <span style={{ color: '#D97706', fontWeight: 700, minWidth: 14, marginTop: 1 }}>?</span>
+                      <div>
+                        <span style={{ fontWeight: 600, color: '#0F172A' }}>{questionText}</span>
+                        {q.description && (
+                          <div style={{ color: '#64748B', marginTop: 1, lineHeight: 1.5 }}>{q.description}</div>
+                        )}
+                      </div>
+                    </div>
+                    {options.length > 0 && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8, marginLeft: 24 }}>
+                        {options.map((opt: string, oi: number) => (
+                          <button
+                            key={oi}
+                            onClick={() => {
+                              setCommand(opt);
+                              setTimeout(() => {
+                                const form = document.querySelector('form');
+                                if (form) form.requestSubmit();
+                              }, 0);
+                            }}
+                            style={{
+                              background: '#FEF3C7',
+                              border: '1px solid #F59E0B',
+                              borderRadius: 20,
+                              padding: '4px 14px',
+                              fontSize: '0.8rem',
+                              color: '#92400E',
+                              cursor: 'pointer',
+                              fontWeight: 500,
+                              transition: 'background 0.15s',
+                            }}
+                            onMouseEnter={e => (e.currentTarget.style.background = '#FDE68A')}
+                            onMouseLeave={e => (e.currentTarget.style.background = '#FEF3C7')}
+                          >
+                            {opt}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
 
-        {/* Next steps */}
+        {/* Next steps — clickable to submit directly */}
         {nextSteps.length > 0 && (
           <div style={{ borderTop: '1px solid #E2E8F0', paddingTop: 12 }}>
             {sectionLabel('Next Steps', '#475569')}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {nextSteps.map((ns, i) => (
-                <div key={i} style={{ display: 'flex', gap: 8, color: '#475569', lineHeight: 1.6 }}>
-                  <span style={{ color: '#94A3B8' }}>→</span>
-                  <span>{ns}</span>
+                <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                  <span style={{ color: '#94A3B8', marginTop: 2 }}>→</span>
+                  <button
+                    onClick={() => {
+                      setCommand(ns);
+                      setTimeout(() => {
+                        const form = document.querySelector('form');
+                        if (form) form.requestSubmit();
+                      }, 0);
+                    }}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      padding: 0,
+                      color: '#2563EB',
+                      cursor: 'pointer',
+                      textAlign: 'left' as const,
+                      lineHeight: 1.6,
+                      fontSize: 'inherit',
+                      textDecoration: 'underline',
+                      textDecorationColor: '#BFDBFE',
+                    }}
+                    onMouseEnter={e => (e.currentTarget.style.textDecorationColor = '#2563EB')}
+                    onMouseLeave={e => (e.currentTarget.style.textDecorationColor = '#BFDBFE')}
+                  >
+                    {ns}
+                  </button>
                 </div>
               ))}
             </div>
