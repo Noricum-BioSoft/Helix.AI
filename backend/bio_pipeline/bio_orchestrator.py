@@ -204,9 +204,9 @@ class BioOrchestrator:
     def _script_path_for(self, config: BioRunConfig) -> Optional[Path]:
         """Return the expected analysis.py path for *config* (may not exist yet)."""
         from pathlib import Path as _Path
+        from backend.history_manager import history_manager as _hm
         sid = config.session_id or "default"
-        sessions_root = _Path(__file__).parent.parent.parent / "sessions"
-        return sessions_root / sid / "runs" / config.run_id / "analysis.py"
+        return _hm.storage_dir / sid / "runs" / config.run_id / "analysis.py"
 
     def _save_script(self, config: BioRunConfig, result: Dict) -> None:
         """Generate and persist analysis.py under sessions/<sid>/runs/<run_id>/."""

@@ -919,7 +919,7 @@ def _materialize_run_artifacts(
         or f"run_{uuid.uuid4().hex[:12]}"
     )
 
-    sessions_root = Path(__file__).parent.parent / "sessions"
+    sessions_root = history_manager.storage_dir
     run_dir = sessions_root / session_id / "runs" / run_id
     plots_dir = run_dir / "plots"
     tables_dir = run_dir / "tables"
@@ -1159,6 +1159,55 @@ def _materialize_run_artifacts(
     }
 
 
+def _record_turn(
+    session_id: str,
+    command: str,
+    tool: str,
+    result: Any,
+    *,
+    tool_args: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Persist exactly one history entry (+ optional run record) per executed turn.
+
+    This is the single authoritative write path for the run ledger.  Every
+    branch in ``/execute`` that produces a user-visible result MUST call this
+    function — either directly or via ``_dispatch_result``.
+
+    Guarantees (per call):
+    - ``session["history"]`` grows by exactly 1.
+    - ``session["runs"]`` grows by at most 1 (only for tool-bearing turns).
+    - When artifacts are written to disk, ``produced_artifacts`` is non-empty
+      and every URI in it exists on the filesystem at write time.
+    """
+    if not session_id:
+        return
+    metadata = _extract_metadata(result, tool_args=tool_args)
+    persisted = _materialize_run_artifacts(
+        session_id=session_id,
+        tool=tool,
+        result=result,
+        tool_args=tool_args,
+        command=command,
+    )
+    if isinstance(persisted, dict):
+        persisted_run_id = persisted.get("run_id")
+        if persisted_run_id and isinstance(result, dict) and not result.get("run_id"):
+            result["run_id"] = persisted_run_id
+        if persisted_run_id and not metadata.get("run_id"):
+            metadata["run_id"] = persisted_run_id
+        persisted_arts = persisted.get("produced_artifacts") or []
+        existing_arts = metadata.get("produced_artifacts") or []
+        if isinstance(existing_arts, list) and isinstance(persisted_arts, list):
+            metadata["produced_artifacts"] = existing_arts + persisted_arts
+    history_manager.add_history_entry(
+        session_id,
+        command,
+        tool,
+        result,
+        metadata=metadata,
+    )
+
+
 async def _dispatch_result(
     req: "CommandRequest",
     tool: str,
@@ -1171,9 +1220,9 @@ async def _dispatch_result(
     """
     Single exit point shared by every dispatch branch.
 
-    Optionally records a history entry, then builds and returns the standard
-    JSON response.  Pass ``record_history=False`` for paths (e.g. S3 browse)
-    that intentionally skip the run ledger.
+    Optionally records a history entry via ``_record_turn``, then builds and
+    returns the standard JSON response.  Pass ``record_history=False`` for
+    paths (e.g. S3 browse) that intentionally skip the run ledger.
     """
     effective_tool_args = dict(tool_args) if isinstance(tool_args, dict) else tool_args
     if isinstance(effective_tool_args, dict) and "action_type" not in effective_tool_args:
@@ -1204,30 +1253,12 @@ async def _dispatch_result(
             _apply_session_context_side_effects(req.session_id, _effective_tool, result)
 
     if record_history:
-        metadata = _extract_metadata(result, tool_args=effective_tool_args)
-        persisted = _materialize_run_artifacts(
-            session_id=req.session_id,
-            tool=tool,
-            result=result,
-            tool_args=effective_tool_args,
-            command=req.command,
-        )
-        if isinstance(persisted, dict):
-            persisted_run_id = persisted.get("run_id")
-            if persisted_run_id and isinstance(result, dict) and not result.get("run_id"):
-                result["run_id"] = persisted_run_id
-            if persisted_run_id and not metadata.get("run_id"):
-                metadata["run_id"] = persisted_run_id
-            persisted_arts = persisted.get("produced_artifacts") or []
-            existing_arts = metadata.get("produced_artifacts") or []
-            if isinstance(existing_arts, list) and isinstance(persisted_arts, list):
-                metadata["produced_artifacts"] = existing_arts + persisted_arts
-        history_manager.add_history_entry(
+        _record_turn(
             req.session_id,
             req.command,
             tool,
             result,
-            metadata=metadata,
+            tool_args=effective_tool_args,
         )
     if execution_path:
         logger.info("Routing path=%s tool=%s session=%s", execution_path, tool, req.session_id)
@@ -1754,6 +1785,33 @@ def build_standard_response(
     if text:
         text = normalize_advisory_text(text)
 
+    # Promote advisory to a dedicated structured field so the frontend can render
+    # it without JSON-parsing result.text.  When text is canonical advisory JSON,
+    # extract it to result.advisory and replace text with a markdown fallback so
+    # the text field is always human-readable prose.
+    _advisory_structured: Optional[Dict[str, Any]] = None
+    if text and text.strip().startswith("{"):
+        try:
+            _maybe_advisory = json.loads(text)
+            if isinstance(_maybe_advisory, dict) and _maybe_advisory.get("helix_type") == "advisory":
+                _advisory_structured = _maybe_advisory
+                # Generate a compact markdown fallback so result.text is never blank.
+                _md_title = _maybe_advisory.get("title", "")
+                _md_summary = _maybe_advisory.get("summary", "")
+                _md_next_steps = _maybe_advisory.get("next_steps") or []
+                _md_lines = []
+                if _md_title:
+                    _md_lines.append(f"## {_md_title}")
+                if _md_summary:
+                    _md_lines.append(_md_summary)
+                if _md_next_steps:
+                    _md_lines.append("**Next steps:**")
+                    for _ns in _md_next_steps[:5]:
+                        _md_lines.append(f"- {_ns}")
+                text = "\n\n".join(_md_lines) if _md_lines else text
+        except (json.JSONDecodeError, TypeError):
+            pass
+
     # Download links should only be surfaced for completed/executed outputs.
     # Planning, needs-inputs, and in-progress states should not expose downloads.
     _non_executed_statuses = {
@@ -2003,6 +2061,10 @@ def build_standard_response(
         "execute_ready": execute_ready,
         "approval_required": approval_required,
         "text": text,
+        # Structured advisory envelope — present when the response is an advisory.
+        # The frontend should render this directly (via renderAdvisoryJSON) rather than
+        # JSON-parsing result.text.  result.text always contains a markdown fallback.
+        "advisory": _advisory_structured,
         "data": data,
         "visualization_type": visualization_type,  # Hint for frontend on how to render
         "logs": logs,
@@ -2488,7 +2550,7 @@ async def download_script(path: str):
 
         GET /download/script?path=/abs/path/to/sessions/xxx/runs/yyy/analysis.py
     """
-    sessions_root = (Path(__file__).parent.parent / "sessions").resolve()
+    sessions_root = history_manager.storage_dir.resolve()
     try:
         resolved = Path(path).resolve()
     except Exception:
@@ -3266,59 +3328,12 @@ async def execute(req: CommandRequest, request: Request):
         except Exception as e:
             logger.warning(f"S3 browse fast-path skipped due to error: {e}")
 
-        # ── Tabular analysis planning gate ───────────────────────────────────────
-        # When the user has uploaded tabular files and issues a multi-step
-        # analytical request, generate a structured plan for approval before
-        # executing any code — this is the core Plan→Approve→Execute UX.
-        if not req.execute_plan and not _is_approval_command(req.command, has_pending_plan=_has_pending_plan):
-            try:
-                from backend.tabular_qa.analysis_planner import (
-                    is_analytical_request,
-                    plan_analysis,
-                )
-                if is_analytical_request(req.command, session_context):
-                    logger.info("[tabular_analysis_plan] analytical request detected — generating plan")
-                    plan_result = await plan_analysis(req.command, session_context)
-                    if plan_result["status"] == "success":
-                        _ap = plan_result["plan"]
-                        _store_pending_plan(req.session_id, req.command, _ap)
-                        history_manager.save_checkpoint(
-                            req.session_id,
-                            WorkflowCheckpoint.waiting_for_approval(
-                                pending_plan={"plan": _ap, "command": req.command},
-                            ),
-                        )
-                        _ap_response = {
-                            "status": "workflow_planned",
-                            "workflow_state": WorkflowState.WAITING_FOR_APPROVAL.value,
-                            "success": True,
-                            "execute_ready": True,
-                            "approval_required": True,
-                            "analysis_plan": _ap,
-                            "text": (
-                                f"I've prepared an analysis plan.\n\n"
-                                f"**Goal:** {_ap.get('goal', req.command)}\n\n"
-                                f"Review the steps below and click **Approve & Run** to execute."
-                            ),
-                        }
-                        std = build_standard_response(
-                            prompt=req.command,
-                            tool="tabular_analysis_plan",
-                            result=_ap_response,
-                            session_id=req.session_id,
-                            mcp_route="/execute",
-                            success=True,
-                            execution_path="tabular_analysis_plan",
-                        )
-                        return CustomJSONResponse(std)
-            except Exception as _ap_exc:
-                logger.warning(
-                    "[tabular_analysis_plan] planning failed, falling through to standard routing: %s",
-                    _ap_exc,
-                )
-
         # Universal approval gate (action-based):
         # return a pending plan preview unless user explicitly asked to execute.
+        # When the LLM router returns tabular_analysis and the session has tabular uploads,
+        # generate a rich multi-step plan via plan_analysis() instead of the single-step
+        # plan used for other tools — this replaces the former is_analytical_request gate
+        # that ran before the router and caused redundant classification.
         if not req.execute_plan and not _is_approval_command(req.command, has_pending_plan=_has_pending_plan):
             try:
                 from backend.command_router import CommandRouter as _ApprovalRouter
@@ -3369,6 +3384,54 @@ async def execute(req: CommandRequest, request: Request):
                     _approval_tool,
                     session_context,
                 )
+                # When the LLM router returns tabular_analysis and the session has
+                # tabular uploads, generate a rich multi-step plan (instead of the
+                # generic single-step plan used for other tools).  This path replaces
+                # the old is_analytical_request pre-router gate; the LLM router is now
+                # the single authority on intent classification.
+                if _approval_tool == "tabular_analysis" and not _ready_hist_recreate:
+                    try:
+                        from backend.tabular_qa.analysis_planner import plan_analysis
+                        logger.info("[tabular_analysis_plan] router→tabular_analysis — generating rich plan")
+                        _ta_plan_result = await plan_analysis(req.command, session_context)
+                        if _ta_plan_result.get("status") == "success":
+                            _ap = _ta_plan_result["plan"]
+                            _store_pending_plan(req.session_id, req.command, _ap)
+                            history_manager.save_checkpoint(
+                                req.session_id,
+                                WorkflowCheckpoint.waiting_for_approval(
+                                    pending_plan={"plan": _ap, "command": req.command},
+                                ),
+                            )
+                            _ap_response = {
+                                "status": "workflow_planned",
+                                "workflow_state": WorkflowState.WAITING_FOR_APPROVAL.value,
+                                "success": True,
+                                "execute_ready": True,
+                                "approval_required": True,
+                                "analysis_plan": _ap,
+                                "text": (
+                                    f"I've prepared an analysis plan.\n\n"
+                                    f"**Goal:** {_ap.get('goal', req.command)}\n\n"
+                                    f"Review the steps below and click **Approve & Run** to execute."
+                                ),
+                            }
+                            std = build_standard_response(
+                                prompt=req.command,
+                                tool="tabular_analysis_plan",
+                                result=_ap_response,
+                                session_id=req.session_id,
+                                mcp_route="/execute",
+                                success=True,
+                                execution_path="tabular_analysis_plan",
+                            )
+                            return CustomJSONResponse(std)
+                    except Exception as _ta_plan_exc:
+                        logger.warning(
+                            "[tabular_analysis_plan] rich plan generation failed, falling through: %s",
+                            _ta_plan_exc,
+                        )
+
                 if _should_stage_for_approval(_approval_tool, req.command, _approval_params) and not _ready_hist_recreate:
                     _approval_params = _approval_params or {}
                     _approval_params.setdefault("session_id", req.session_id)
@@ -3429,18 +3492,13 @@ async def execute(req: CommandRequest, request: Request):
             )
             if isinstance(agent_result, dict):
                 agent_result.setdefault("diagnostics", agent_diag)
-            # Run through build_standard_response so the frontend can use the same
-            # rendering path as regular agent responses (clean markdown, no debug pane).
-            standard = build_standard_response(
-                prompt=req.command,
-                tool="agent",
-                result=agent_result,
-                session_id=req.session_id,
-                mcp_route="/execute",
-                success=agent_result.get("success", True) if isinstance(agent_result, dict) else True,
+            return await _dispatch_result(
+                req,
+                "agent",
+                agent_result,
+                tool_args={"execute_plan": True},
                 execution_path="agent_execute_plan",
             )
-            return CustomJSONResponse(standard)
 
         # Phase 2c: deterministic router allowlist fast path (agent-first strategy).
         # Also handle FastQC validation and MultiQC unsupported BEFORE agent to ensure
@@ -3616,25 +3674,22 @@ async def execute(req: CommandRequest, request: Request):
                 except Exception:
                     pass
 
-                standard_response = build_standard_response(
-                    prompt=req.command,
-                    tool="handle_natural_command",
-                    result={
-                        "status": "success",
-                        "text": (
-                            "This looks like a question. Enable the agent (HELIX_AGENT_DISABLED=0) "
-                            "or use the /chat endpoint for Q&A. If you intended execution, "
-                            "rephrase as: 'Run <analysis> on <inputs>'."
-                        ),
-                        "intent": intent.intent,
-                        "intent_reason": intent.reason,
-                    },
-                    session_id=req.session_id,
-                    mcp_route="/execute",
-                    success=True,
+                _advisory_result = {
+                    "status": "success",
+                    "text": (
+                        "This looks like a question. Enable the agent (HELIX_AGENT_DISABLED=0) "
+                        "or use the /chat endpoint for Q&A. If you intended execution, "
+                        "rephrase as: 'Run <analysis> on <inputs>'."
+                    ),
+                    "intent": intent.intent,
+                    "intent_reason": intent.reason,
+                }
+                return await _dispatch_result(
+                    req,
+                    "handle_natural_command",
+                    _advisory_result,
                     execution_path="qa_safe_fallback",
                 )
-                return CustomJSONResponse(standard_response)
 
             from backend.command_router import CommandRouter
             command_router = CommandRouter()
@@ -4925,7 +4980,7 @@ def _save_analysis_script(
             session_id = "default"
 
         # Store scripts under sessions/<session_id>/runs/<run_id>/
-        sessions_root = Path(__file__).parent.parent / "sessions"
+        sessions_root = history_manager.storage_dir
         run_dir = sessions_root / session_id / "runs" / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -7267,11 +7322,25 @@ async def ds_get_run(run_id: str, session_id: str):
 @app.get("/health")
 async def health_check():
     """Health check endpoint - available immediately, even before full initialization."""
+    import subprocess as _sp
+
+    git_commit = "unknown"
+    try:
+        git_commit = _sp.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=Path(__file__).parent.parent,
+            stderr=_sp.DEVNULL,
+            timeout=2,
+        ).decode().strip()
+    except Exception:
+        pass
+
     return {
         "status": "healthy",
         "service": "Helix.AI Bioinformatics API",
         "agent_disabled": _agent_disabled(),
         "mock_mode": _agent_disabled(),  # backward compatibility
+        "git_commit": git_commit,
     }
 
 

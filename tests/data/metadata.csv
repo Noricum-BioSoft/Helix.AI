@@ -1,0 +1,5 @@
+sample,condition,replicate
+sampleA,treated,1
+sampleB,treated,2
+sampleC,control,1
+sampleD,control,2

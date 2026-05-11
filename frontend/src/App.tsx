@@ -136,6 +136,8 @@ function App() {
   const [sessionModalOpen, setSessionModalOpen] = useState(false);
   const [sessionInfo, setSessionInfo] = useState<any>(null);
   const [sessionInfoLoading, setSessionInfoLoading] = useState(false);
+  /** Shown when restoring a session whose schema_version is older than the backend's current version. */
+  const [schemaVersionBanner, setSchemaVersionBanner] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [activities, setActivities] = useState<Array<{
     id: string;
@@ -219,6 +221,10 @@ function App() {
     setCommand('');
     setUploadedFiles([]);
     setWorkflowContext({});
+    setPreviewTables(null);
+    setActivities([]);
+    setPendingScenarioId(undefined);
+    setSchemaVersionBanner(false);
   };
 
   const extractJobIds = (obj: any, out: Set<string>) => {
@@ -293,6 +299,12 @@ function App() {
           if (restored.length > 0) {
             setHistory(restored);
             debugLog('Restored', restored.length, 'history items from session');
+          }
+          // Surface a banner when the stored session was created by an older backend
+          // that did not yet stamp schema_version (missing field ≡ schema_version 0).
+          const sessionSchemaVersion = (sessionData.session as any)?.schema_version ?? 0;
+          if (sessionSchemaVersion < 1) {
+            setSchemaVersionBanner(true);
           }
         }
       } catch (err) {
@@ -2261,9 +2273,16 @@ function App() {
     }
 
     if (finalText) {
-      // ── Advisory JSON detection ──────────────────────────────────────────
-      // The backend normalises advisory responses to { helix_type: "advisory", ... }.
-      // Also handle legacy / cached variants with or without code-fence wrapping.
+      // ── Advisory structured field (Slice C) ────────────────────────────────
+      // When the backend sets result.advisory, use it directly — no JSON parsing
+      // of result.text needed. This is the preferred path for new responses.
+      if (agentOutput?.advisory && typeof agentOutput.advisory === 'object' && agentOutput.advisory.helix_type === 'advisory') {
+        return <div>{renderAdvisoryJSON(agentOutput.advisory)}</div>;
+      }
+
+      // ── Legacy advisory JSON detection (cached / old sessions) ──────────────
+      // For responses that pre-date Slice C, the advisory may still be embedded
+      // in result.text as JSON.  Keep this fallback so old history renders correctly.
       {
         let parseCandidate = finalText.trimStart();
         // Strip fenced code blocks (```json ... ``` or ``` ... ```)
@@ -3677,6 +3696,27 @@ function App() {
             </div>
           </div>
           
+          {/* Schema-version mismatch banner */}
+          {schemaVersionBanner && (
+            <div className="alert alert-warning alert-dismissible d-flex align-items-center mb-3" role="alert">
+              <span>
+                This session was created on an older Helix version. Some features (e.g. bundle downloads) may behave differently.&nbsp;
+                <button
+                  className="btn btn-sm btn-outline-warning ms-2"
+                  onClick={handleNewSession}
+                >
+                  Start fresh session
+                </button>
+              </span>
+              <button
+                type="button"
+                className="btn-close ms-auto"
+                aria-label="Dismiss"
+                onClick={() => setSchemaVersionBanner(false)}
+              />
+            </div>
+          )}
+
           {/* Workflow Context Display */}
           {(workflowContext.alignedSequences || workflowContext.selectedSequences || workflowContext.mutatedSequences || workflowContext.plasmidData) && (
             <div className="alert alert-success mb-3">

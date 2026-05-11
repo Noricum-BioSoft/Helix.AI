@@ -17,6 +17,13 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# Bump this integer whenever the session on-disk schema changes in a way that
+# makes old sessions incompatible with new features (e.g. a required new field
+# is added that existing sessions won't have).  Clients can compare the value
+# they received at session-load time against this constant to decide whether to
+# surface a "created on an older version" warning.
+CURRENT_SESSION_SCHEMA_VERSION: int = 1
+
 # S3 Configuration (session marker uploads; disabled when HELIX_LOCAL_SESSIONS_ONLY is set)
 S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME", "helix-ai-frontend-794270057041-us-west-1")
 
@@ -752,6 +759,7 @@ class HistoryManager:
             
             session_data = {
                 "session_id": session_id,
+                "schema_version": CURRENT_SESSION_SCHEMA_VERSION,
                 "user_id": user_id,
                 "created_at": datetime.now().isoformat(),
                 "updated_at": datetime.now().isoformat(),

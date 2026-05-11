@@ -88,4 +88,39 @@ else
   echo "Service helix-backend not active (install scripts/ec2/helix-backend.service first)." >&2
 fi
 
+# ---------------------------------------------------------------------------
+# Post-deploy behavioral health check
+# ---------------------------------------------------------------------------
+_BACKEND_URL="${HELIX_BACKEND_URL:-http://localhost:8001}"
+_HEALTH_RETRIES=10
+_HEALTH_INTERVAL=3
+
+echo "[helix] waiting for backend to become healthy at ${_BACKEND_URL} ..."
+for i in $(seq 1 "${_HEALTH_RETRIES}"); do
+  if curl -sf "${_BACKEND_URL}/health" -o /tmp/helix_health.json 2>/dev/null; then
+    echo "[helix] /health OK:"
+    python3 -c "import json,sys; d=json.load(open('/tmp/helix_health.json')); print('  status:', d.get('status')); print('  git_commit:', d.get('git_commit','unknown'))"
+    break
+  fi
+  echo "[helix] health check attempt ${i}/${_HEALTH_RETRIES} failed — retrying in ${_HEALTH_INTERVAL}s..."
+  sleep "${_HEALTH_INTERVAL}"
+done
+
+# Verify response shape with a known-good fixture request.
+_FIXTURE_CMD="List available tools"
+echo "[helix] probing /execute with fixture: '${_FIXTURE_CMD}' ..."
+if curl -sf -X POST "${_BACKEND_URL}/execute" \
+    -H "Content-Type: application/json" \
+    -d "{\"command\": \"${_FIXTURE_CMD}\"}" \
+    -o /tmp/helix_probe.json 2>/dev/null; then
+  _PROBE_SUCCESS=$(python3 -c "import json; d=json.load(open('/tmp/helix_probe.json')); print('ok' if d.get('success') or d.get('status') in ('success','ok') else 'fail')" 2>/dev/null || echo "parse_error")
+  if [[ "${_PROBE_SUCCESS}" == "ok" ]]; then
+    echo "[helix] /execute probe passed — deployment verified."
+  else
+    echo "WARNING: /execute probe returned non-success (${_PROBE_SUCCESS}). Check logs." >&2
+  fi
+else
+  echo "WARNING: /execute probe failed (curl error). Backend may not be fully ready." >&2
+fi
+
 echo "[helix] done."
