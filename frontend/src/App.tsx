@@ -2787,7 +2787,13 @@ function App() {
                         {options.map((opt: string, oi: number) => (
                           <button
                             key={oi}
-                            onClick={() => executeCommand(opt, undefined, true)}
+                            onClick={() => {
+                              // Prefix the question so the router receives a full sentence,
+                              // not an isolated noun phrase (which maps to unknown_intent).
+                              const q_text = questionText ? questionText.replace(/\?+$/, '').trim() : '';
+                              const fullCmd = q_text ? `${q_text}: ${opt}` : opt;
+                              executeCommand(fullCmd, undefined, true);
+                            }}
                             style={{
                               background: '#FEF3C7',
                               border: '1px solid #F59E0B',

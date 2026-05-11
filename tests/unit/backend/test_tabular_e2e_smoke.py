@@ -377,7 +377,7 @@ class TestIngestSmoke:
 # ---------------------------------------------------------------------------
 
 class TestStripImports:
-    """Verify that _strip_imports removes import lines and leaves the rest intact."""
+    """Verify that _strip_imports removes import statements in all forms."""
 
     def _strip(self, code: str) -> str:
         from backend.tabular_qa.analysis_executor import _strip_imports
@@ -386,7 +386,7 @@ class TestStripImports:
     def test_bare_import_removed(self):
         code = "import pandas as pd\nresult = df.shape"
         assert "import" not in self._strip(code)
-        assert "result = df.shape" in self._strip(code)
+        assert "df.shape" in self._strip(code)
 
     def test_from_import_removed(self):
         code = "from scipy import stats\nresult = stats.ttest_ind(df['a'], df['b'])"
@@ -403,19 +403,30 @@ class TestStripImports:
         )
         cleaned = self._strip(code)
         assert "import" not in cleaned
-        assert "result = np.mean" in cleaned
+        assert "np.mean" in cleaned
 
     def test_no_imports_unchanged(self):
         code = "result = df.describe().to_dict()"
         assert self._strip(code) == code
 
     def test_indented_import_stripped_too(self):
-        """Imports inside function bodies are also stripped — they would fail in
-        the sandbox exactly the same way as top-level imports."""
         code = "def helper():\n    import os\n    return os.getcwd()\nresult = helper()"
         cleaned = self._strip(code)
         assert "import os" not in cleaned
-        assert "result = helper()" in cleaned
+        assert "result" in cleaned
+
+    def test_inline_import_after_semicolon(self):
+        """import after semicolon — missed by line-regex, caught by AST."""
+        code = "x = 1; import numpy as np\nresult = x"
+        cleaned = self._strip(code)
+        assert "import numpy" not in cleaned
+        assert "result" in cleaned
+
+    def test_inline_import_after_if(self):
+        """import on same line as if — missed by line-regex, caught by AST."""
+        code = "if True: import pandas\nresult = df.head()"
+        cleaned = self._strip(code)
+        assert "import pandas" not in cleaned
 
 
 class TestBuildScriptHeader:

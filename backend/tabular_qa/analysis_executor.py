@@ -114,10 +114,50 @@ _IMPORT_LINE_RE = re.compile(
 
 
 def _strip_imports(code: str) -> str:
-    """Remove import/from-import lines from LLM-generated sandbox code.
+    """Remove every import / from...import statement from generated code.
 
-    Logs a warning for every stripped line so we can track model compliance.
+    Uses the AST to catch *all* forms — including inline imports after
+    semicolons (``result = df; import numpy``) and class-/function-level
+    imports that a line-by-line regex would miss.  Falls back to a
+    line-based regex when the code has a SyntaxError so the caller always
+    gets something runnable rather than the original broken string.
     """
+    import ast as _ast
+
+    # ── AST path ────────────────────────────────────────────────────────────
+    try:
+        tree = _ast.parse(code)
+    except SyntaxError:
+        return _strip_imports_regex(code)
+
+    class _ImportRemover(_ast.NodeTransformer):
+        removed = 0
+        def visit_Import(self, node):
+            self.removed += 1
+            return None
+        def visit_ImportFrom(self, node):
+            self.removed += 1
+            return None
+
+    remover = _ImportRemover()
+    new_tree = remover.visit(tree)
+    _ast.fix_missing_locations(new_tree)
+
+    if remover.removed == 0:
+        return code  # nothing to strip — fast path
+
+    logger.warning(
+        "[analysis_executor] AST-stripped %d import statement(s) from generated code",
+        remover.removed,
+    )
+    try:
+        return _ast.unparse(new_tree)
+    except Exception:
+        return _strip_imports_regex(code)
+
+
+def _strip_imports_regex(code: str) -> str:
+    """Line-based regex fallback used when the code is not valid Python."""
     lines = code.splitlines(keepends=True)
     clean, stripped = [], []
     for line in lines:
@@ -127,7 +167,7 @@ def _strip_imports(code: str) -> str:
             clean.append(line)
     if stripped:
         logger.warning(
-            "[analysis_executor] stripped %d import line(s) from generated code: %s",
+            "[analysis_executor] regex-stripped %d import line(s): %s",
             len(stripped),
             "; ".join(stripped),
         )
