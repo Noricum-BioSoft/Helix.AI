@@ -3679,16 +3679,39 @@ function App() {
                 </div>
               </div>
             ) : (
-              <pre style={{ 
-                backgroundColor: '#f8f9fa', 
-                padding: '1rem', 
-                borderRadius: '0.25rem',
-                overflow: 'auto',
-                maxHeight: '70vh',
-                fontSize: '0.875rem'
-              }}>
-                {JSON.stringify(sessionInfo, null, 2)}
-              </pre>
+              <>
+                {/* Session-level bundle download */}
+                {sessionId && (
+                  <div className="d-flex align-items-center gap-2 mb-3 p-3"
+                    style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 8 }}>
+                    <span style={{ fontSize: '1.1rem' }}>📦</span>
+                    <div className="flex-grow-1">
+                      <div style={{ fontWeight: 600, fontSize: '0.9rem', color: '#166534' }}>Download all runs</div>
+                      <div style={{ fontSize: '0.8rem', color: '#15803D' }}>
+                        One ZIP with every analysis, script, and plot from this session
+                      </div>
+                    </div>
+                    <a
+                      href={`/download/bundle?session_id=${sessionId}&scope=all`}
+                      download
+                      className="btn btn-sm btn-success"
+                      style={{ whiteSpace: 'nowrap' }}
+                    >
+                      session_bundle.zip
+                    </a>
+                  </div>
+                )}
+                <pre style={{ 
+                  backgroundColor: '#f8f9fa', 
+                  padding: '1rem', 
+                  borderRadius: '0.25rem',
+                  overflow: 'auto',
+                  maxHeight: '60vh',
+                  fontSize: '0.875rem'
+                }}>
+                  {JSON.stringify(sessionInfo, null, 2)}
+                </pre>
+              </>
             )}
           </Modal.Body>
           <Modal.Footer>
@@ -4175,16 +4198,39 @@ function App() {
               </div>
             </div>
           ) : (
-            <pre style={{ 
-              backgroundColor: '#f8f9fa', 
-              padding: '1rem', 
-              borderRadius: '0.25rem',
-              overflow: 'auto',
-              maxHeight: '70vh',
-              fontSize: '0.875rem'
-            }}>
-              {JSON.stringify(sessionInfo, null, 2)}
-            </pre>
+            <>
+              {/* Session-level bundle download */}
+              {sessionId && (
+                <div className="d-flex align-items-center gap-2 mb-3 p-3"
+                  style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 8 }}>
+                  <span style={{ fontSize: '1.1rem' }}>📦</span>
+                  <div className="flex-grow-1">
+                    <div style={{ fontWeight: 600, fontSize: '0.9rem', color: '#166534' }}>Download all runs</div>
+                    <div style={{ fontSize: '0.8rem', color: '#15803D' }}>
+                      One ZIP with every analysis, script, and plot from this session
+                    </div>
+                  </div>
+                  <a
+                    href={`/download/bundle?session_id=${sessionId}&scope=all`}
+                    download
+                    className="btn btn-sm btn-success"
+                    style={{ whiteSpace: 'nowrap' }}
+                  >
+                    session_bundle.zip
+                  </a>
+                </div>
+              )}
+              <pre style={{ 
+                backgroundColor: '#f8f9fa', 
+                padding: '1rem', 
+                borderRadius: '0.25rem',
+                overflow: 'auto',
+                maxHeight: '60vh',
+                fontSize: '0.875rem'
+              }}>
+                {JSON.stringify(sessionInfo, null, 2)}
+              </pre>
+            </>
           )}
         </Modal.Body>
         <Modal.Footer>

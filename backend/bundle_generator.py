@@ -134,6 +134,129 @@ def build_bundle(
     return buf, suggested_filename
 
 
+# ── session-level bundle ──────────────────────────────────────────────────────
+
+def build_session_bundle(session_id: str) -> tuple[io.BytesIO, str]:
+    """Build a session-wide ZIP that includes every run with saved artifacts.
+
+    Bundle layout::
+
+        session_bundle_<id_short>/
+        ├── README.md                  overview of all runs
+        ├── session_manifest.json      machine-readable run listing
+        ├── inputs/                    session upload files (raw/*), ≤ LARGE_FILE_BYTES each
+        └── run_<n>_<run_id_short>/    one folder per run that has artifacts
+            ├── analysis.py            (tabular runs only)
+            ├── params.json            tool name + tool_args
+            ├── plots/
+            └── tables/
+    """
+    from backend.history_manager import history_manager
+
+    sessions_root: Path = history_manager.storage_dir.resolve()
+    all_runs: List[Dict[str, Any]] = history_manager.list_runs(session_id) or []
+
+    if not all_runs and not (sessions_root / session_id).exists():
+        raise ValueError(f"Session not found: {session_id!r}")
+
+    short_id = session_id[:8]
+    dir_name = f"session_bundle_{short_id}"
+    suggested_filename = f"{dir_name}.zip"
+
+    # Only include runs that have at least one artifact on disk
+    def _has_artifacts(run: Dict) -> bool:
+        arts = run.get("produced_artifacts") or []
+        if any(isinstance(a, dict) and Path(str(a.get("uri", ""))).exists() for a in arts):
+            return True
+        run_id = run.get("run_id", "")
+        if not run_id:
+            return False
+        run_dir = sessions_root / session_id / "runs" / run_id
+        return any(
+            any(p.is_file() for p in (run_dir / sub).iterdir())
+            for sub in ("plots", "tables")
+            if (run_dir / sub).exists()
+        ) or (run_dir / "analysis.py").exists()
+
+    runs_with_artifacts = [r for r in all_runs if isinstance(r, dict) and _has_artifacts(r)]
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        large_refs: List[str] = []
+
+        for idx, run in enumerate(runs_with_artifacts, start=1):
+            run_id = run.get("run_id", f"run_{idx}")
+            tool = run.get("tool", "unknown")
+            short_run = run_id[:8]
+            run_dir_name = f"{dir_name}/run_{idx:02d}_{short_run}"
+
+            # analysis.py
+            _add_script(zf, run, run_dir_name, "analysis.py", large_refs, sessions_root, session_id)
+
+            # plots & tables
+            _add_artifacts(zf, run, run_dir_name, large_refs, session_id, run_id, sessions_root)
+
+            # params.json — tool name + arguments so the run is self-describing
+            params = {"run_index": idx, "tool": tool, "tool_args": run.get("tool_args") or {}}
+            zf.writestr(f"{run_dir_name}/params.json", json.dumps(params, indent=2).encode())
+
+        # Session upload inputs
+        _add_tabular_session_raw_inputs(zf, dir_name, large_refs, sessions_root, session_id)
+
+        # session_manifest.json
+        manifest = {
+            "session_id": session_id,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "total_runs": len(all_runs),
+            "runs_with_artifacts": len(runs_with_artifacts),
+            "runs": [
+                {
+                    "index": idx,
+                    "run_id": r.get("run_id"),
+                    "tool": r.get("tool"),
+                    "created_at": r.get("created_at"),
+                    "artifact_count": len(r.get("produced_artifacts") or []),
+                }
+                for idx, r in enumerate(runs_with_artifacts, start=1)
+            ],
+        }
+        zf.writestr(f"{dir_name}/session_manifest.json", json.dumps(manifest, indent=2).encode())
+
+        # README.md
+        readme_lines = [
+            f"# Session Bundle — {short_id}",
+            "",
+            f"**Session ID:** `{session_id}`  ",
+            f"**Generated:** {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}  ",
+            f"**Total runs:** {len(all_runs)} ({len(runs_with_artifacts)} with saved artifacts)",
+            "",
+            "## Runs included",
+            "",
+        ]
+        for idx, r in enumerate(runs_with_artifacts, start=1):
+            run_id = r.get("run_id", "?")
+            tool = r.get("tool", "unknown")
+            ts = r.get("created_at", "")[:19].replace("T", " ")
+            readme_lines.append(f"### run_{idx:02d}_{run_id[:8]} — `{tool}`")
+            if ts:
+                readme_lines.append(f"*{ts} UTC*  ")
+            readme_lines.append(f"Folder: `run_{idx:02d}_{run_id[:8]}/`")
+            readme_lines.append("")
+        if large_refs:
+            readme_lines += ["## Large files (not embedded)", ""]
+            for ref in large_refs:
+                readme_lines.append(f"- `{ref}`")
+            readme_lines.append("")
+        readme_lines.append("*Generated by [Helix.AI](https://github.com/Noricum-BioSoft/Helix.AI)*")
+        zf.writestr(f"{dir_name}/README.md", "\n".join(readme_lines).encode())
+
+        if large_refs:
+            zf.writestr(f"{dir_name}/large_files.txt", "\n".join(large_refs) + "\n")
+
+    buf.seek(0)
+    return buf, suggested_filename
+
+
 # ── chain helpers ─────────────────────────────────────────────────────────────
 
 def _find_run(runs: List[Dict], run_id: Optional[str]) -> Optional[Dict]:

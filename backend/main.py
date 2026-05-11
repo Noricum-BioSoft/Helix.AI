@@ -2503,7 +2503,7 @@ async def score_benchmark_session(
 
 
 @app.get("/download/bundle")
-async def download_bundle(session_id: str, run_id: Optional[str] = None):
+async def download_bundle(session_id: str, run_id: Optional[str] = None, scope: Optional[str] = None):
     """Build and stream a reproducibility ZIP for a session run.
 
     The bundle contains:
@@ -2521,10 +2521,16 @@ async def download_bundle(session_id: str, run_id: Optional[str] = None):
         Active session ID.
     run_id : str, optional
         Specific run to package.  Defaults to the most recent scriptable run.
+    scope : str, optional
+        When ``"all"``, packages every run in the session instead of a single
+        run chain.  ``run_id`` is ignored when scope=all.
     """
     try:
-        from backend.bundle_generator import build_bundle
-        buf, filename = build_bundle(session_id=session_id, run_id=run_id)
+        from backend.bundle_generator import build_bundle, build_session_bundle
+        if scope == "all":
+            buf, filename = build_session_bundle(session_id=session_id)
+        else:
+            buf, filename = build_bundle(session_id=session_id, run_id=run_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except Exception as exc:
