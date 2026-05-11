@@ -2787,13 +2787,7 @@ function App() {
                         {options.map((opt: string, oi: number) => (
                           <button
                             key={oi}
-                            onClick={() => {
-                              setCommand(opt);
-                              setTimeout(() => {
-                                const form = document.querySelector('form');
-                                if (form) form.requestSubmit();
-                              }, 0);
-                            }}
+                            onClick={() => executeCommand(opt, undefined, true)}
                             style={{
                               background: '#FEF3C7',
                               border: '1px solid #F59E0B',
@@ -2829,13 +2823,7 @@ function App() {
                 <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
                   <span style={{ color: '#94A3B8', marginTop: 2 }}>→</span>
                   <button
-                    onClick={() => {
-                      setCommand(ns);
-                      setTimeout(() => {
-                        const form = document.querySelector('form');
-                        if (form) form.requestSubmit();
-                      }, 0);
-                    }}
+                    onClick={() => executeCommand(ns, undefined, true)}
                     style={{
                       background: 'none',
                       border: 'none',
