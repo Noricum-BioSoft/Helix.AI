@@ -428,6 +428,18 @@ class TestStripImports:
         cleaned = self._strip(code)
         assert "import pandas" not in cleaned
 
+    def test_direct_import_call_stripped(self):
+        """__import__('openpyxl') is a Call node, not an Import node — must also be removed."""
+        from backend.tabular_qa.executor import _compile_without_imports
+        import ast
+        code = "openpyxl = __import__('openpyxl')\nresult = df.describe()"
+        code_obj, n = _compile_without_imports(code)
+        assert n >= 1, "expected at least one node removed"
+        # compiled code should run without KeyError: '__import__'
+        ns = {"__builtins__": {}, "df": __import__('pandas').DataFrame({"a": [1]})}
+        exec(code_obj, ns)
+        assert "openpyxl" in ns  # variable set to None (replacement value)
+
 
 class TestBuildScriptHeader:
     """_build_script_header produces a correct Python docstring for analysis.py."""

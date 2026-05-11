@@ -12,9 +12,66 @@ Generated code must store its final answer in a variable called ``result``.
 """
 from __future__ import annotations
 
+import ast
 import builtins
+import logging
 import threading
 from typing import Any, Dict
+
+logger = logging.getLogger(__name__)
+
+
+class _ImportAndCallRemover(ast.NodeTransformer):
+    """AST transformer that removes import statements AND direct __import__ calls."""
+
+    removed: int = 0
+
+    def visit_Import(self, node: ast.Import) -> None:  # type: ignore[override]
+        self.removed += 1
+        return None  # remove from AST
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:  # type: ignore[override]
+        self.removed += 1
+        return None  # remove from AST
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Replace ``__import__(...)`` calls with None so the surrounding
+        expression stays syntactically valid but produces no side-effect."""
+        if (
+            isinstance(node.func, ast.Name) and node.func.id == "__import__"
+        ) or (
+            isinstance(node.func, ast.Attribute) and node.func.attr == "__import__"
+        ):
+            self.removed += 1
+            return ast.Constant(value=None)  # harmless replacement
+        return self.generic_visit(node)
+
+
+def _compile_without_imports(code: str) -> tuple[Any, int]:
+    """Parse *code*, strip all import statements and ``__import__`` calls at
+    the AST level, and compile the result to a code object.
+
+    Returns ``(code_object, n_removed)``.  Falls back to compiling the raw
+    string when the code has a ``SyntaxError`` (in that case n_removed = 0
+    and execution will fail immediately with the real SyntaxError, which is
+    more useful than a misleading ImportError).
+    """
+    try:
+        tree = ast.parse(code, "<tabular_qa>", "exec")
+    except SyntaxError:
+        return compile(code, "<tabular_qa>", "exec"), 0
+
+    remover = _ImportAndCallRemover()
+    new_tree = remover.visit(tree)
+    ast.fix_missing_locations(new_tree)
+
+    if remover.removed:
+        logger.warning(
+            "[executor] stripped %d import/call node(s) from generated code before execution",
+            remover.removed,
+        )
+
+    return compile(new_tree, "<tabular_qa>", "exec"), remover.removed
 
 # Built-ins that are safe inside the sandbox
 _SAFE_BUILTIN_NAMES = {
@@ -162,7 +219,8 @@ def execute_code(
 
     def _run() -> None:
         try:
-            exec(compile(code, "<tabular_qa>", "exec"), namespace)  # noqa: S102
+            code_obj, _ = _compile_without_imports(code)
+            exec(code_obj, namespace)  # noqa: S102
             result_holder["value"] = namespace.get("result")
         except Exception as e:  # noqa: BLE001
             exc_holder.append(e)

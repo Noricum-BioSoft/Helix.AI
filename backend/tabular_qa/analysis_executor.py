@@ -346,6 +346,7 @@ def execute_analysis_plan(
 
         code = _strip_fences(_llm_call(llm, CODEGEN_SYSTEM_PROMPT, prompt))
         code = _strip_imports(code)
+        logger.debug("[analysis_executor] attempt %d code (first 300 chars): %.300s", attempt + 1, code)
         last_code = code
         exec_result = execute_code(code, df)
 
