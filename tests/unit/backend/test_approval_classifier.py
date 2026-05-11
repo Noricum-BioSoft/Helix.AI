@@ -56,9 +56,18 @@ def test_keyword_fast_path_approves(phrase: str) -> None:
 
 @pytest.mark.parametrize("phrase", KEYWORD_APPROVALS)
 def test_classify_returns_keyword_fast_path_method(phrase: str) -> None:
-    decision = classify_approval(phrase)
+    # Keyword fast-path only fires when there IS a pending plan.
+    decision = classify_approval(phrase, has_pending_plan=True)
     assert decision.is_approval is True
     assert decision.method == "keyword_fast_path"
+
+
+@pytest.mark.parametrize("phrase", KEYWORD_APPROVALS)
+def test_keyword_approvals_return_false_without_pending_plan(phrase: str) -> None:
+    """Without a pending plan, even exact approval keywords must not be treated
+    as workflow approvals — they are just normal user input."""
+    decision = classify_approval(phrase, has_pending_plan=False)
+    assert decision.is_approval is False
 
 
 def test_keyword_fast_path_normalizes_whitespace() -> None:
@@ -135,7 +144,7 @@ def _mock_llm_response(approval: bool) -> MagicMock:
 @patch("backend.orchestration.approval_classifier._get_llm")
 def test_llm_path_approves(mock_get_llm: MagicMock) -> None:
     mock_get_llm.return_value = _mock_llm_response(True)
-    decision = classify_approval("yes, execute the plan")
+    decision = classify_approval("yes, execute the plan", has_pending_plan=True)
     assert decision.is_approval is True
     assert decision.method == "llm"
 
@@ -146,7 +155,7 @@ def test_llm_path_rejects(mock_get_llm: MagicMock) -> None:
     # prefix, no analytical verb, no affirmative prefix) but which the LLM
     # correctly classifies as non-approval.
     mock_get_llm.return_value = _mock_llm_response(False)
-    decision = classify_approval("Actually, never mind for now.")
+    decision = classify_approval("Actually, never mind for now.", has_pending_plan=True)
     assert decision.is_approval is False
     assert decision.method == "llm"
 
@@ -171,7 +180,7 @@ def test_llm_path_passes_pending_plan_context(mock_get_llm: MagicMock) -> None:
 def test_keyword_fast_path_bypasses_llm_entirely(mock_get_llm: MagicMock) -> None:
     """Keyword fast-path phrases never reach the LLM, even if LLM is down."""
     mock_get_llm.side_effect = RuntimeError("LLM disabled in HELIX_MOCK_MODE")
-    decision = classify_approval("proceed")
+    decision = classify_approval("proceed", has_pending_plan=True)
     # Hits keyword_fast_path BEFORE LLM is called
     assert decision.is_approval is True
     assert decision.method == "keyword_fast_path"
@@ -180,15 +189,23 @@ def test_keyword_fast_path_bypasses_llm_entirely(mock_get_llm: MagicMock) -> Non
 
 @patch("backend.orchestration.approval_classifier._get_llm")
 def test_llm_failure_raises_for_ambiguous_phrase(mock_get_llm: MagicMock) -> None:
-    """When the LLM is unavailable and the phrase is ambiguous, an exception is raised.
-
-    There is no keyword fallback — a silent wrong answer is worse than a
-    visible error that can be handled by the caller.
-    """
+    """When the LLM is unavailable, has_pending_plan=True, and the phrase is
+    ambiguous, an exception is raised — no silent keyword fallback."""
     mock_get_llm.side_effect = RuntimeError("no API key")
-    # "that looks right" is NOT a keyword and NOT clearly analytical
+    # "that looks right" is NOT a keyword and NOT clearly analytical,
+    # so we reach the LLM path — which raises when has_pending_plan=True.
     with pytest.raises(RuntimeError):
-        classify_approval("that looks right")
+        classify_approval("that looks right", has_pending_plan=True)
+
+
+@patch("backend.orchestration.approval_classifier._get_llm")
+def test_ambiguous_phrase_without_pending_plan_returns_false(mock_get_llm: MagicMock) -> None:
+    """Without a pending plan, ambiguous phrases return False immediately
+    without ever calling the LLM."""
+    mock_get_llm.side_effect = RuntimeError("should not be called")
+    decision = classify_approval("that looks right", has_pending_plan=False)
+    assert decision.is_approval is False
+    mock_get_llm.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -207,9 +224,9 @@ def test_has_pending_plan_true_biases_llm_call(mock_get_llm: MagicMock) -> None:
 
 @patch("backend.orchestration.approval_classifier._get_llm")
 def test_is_approval_command_drop_in_backward_compat(mock_get_llm: MagicMock) -> None:
-    """is_approval_command() without has_pending_plan still works."""
+    """is_approval_command() with has_pending_plan=True works as before."""
     mock_get_llm.return_value = _mock_llm_response(True)
-    assert is_approval_command("yes, execute the plan") is True
+    assert is_approval_command("yes, execute the plan", has_pending_plan=True) is True
 
 
 # ---------------------------------------------------------------------------
@@ -233,5 +250,5 @@ def test_natural_approval_phrases_are_classified_as_approvals(
 ) -> None:
     """These are phrases that the old keyword set would reject but users naturally say."""
     mock_get_llm.return_value = _mock_llm_response(True)
-    result = is_approval_command(phrase)
+    result = is_approval_command(phrase, has_pending_plan=True)
     assert result is True, f"Expected {phrase!r} to be classified as an approval"

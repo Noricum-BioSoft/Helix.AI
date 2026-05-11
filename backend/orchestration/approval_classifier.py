@@ -287,8 +287,9 @@ def classify_approval(
         Used to bias the classifier: any short affirmative is much more
         likely to be an approval in this context.
     """
-    # 1. Keyword fast-path (free, instant)
-    if _keyword_match(command):
+    # 1. Keyword fast-path (free, instant) — only meaningful when there IS a
+    #    pending plan; without one, "yes" / "ok" is just normal input.
+    if has_pending_plan and _keyword_match(command):
         return ApprovalDecision(
             is_approval=True,
             method="keyword_fast_path",
@@ -303,7 +304,17 @@ def classify_approval(
             reason="analytical_pattern_or_too_long",
         )
 
-    # 3. LLM classification — raises on failure; no keyword fallback.
+    # 3. When there is no pending plan there is nothing to approve.
+    # Skip the LLM call entirely: ambiguous affirmatives like "yes, inspect it"
+    # must not be misclassified as approvals when the session is idle.
+    if not has_pending_plan:
+        return ApprovalDecision(
+            is_approval=False,
+            method="early_rejection",
+            reason="no_pending_plan_skip_llm",
+        )
+
+    # 4. LLM classification — raises on failure; no keyword fallback.
     result = _classify_with_llm(command, has_pending_plan)
     return ApprovalDecision(
         is_approval=result,
