@@ -245,3 +245,21 @@ class TestCommandRouterTabularAnalysis:
         tool, params = router.route_command("profile the Excel workbook now", ctx)
         assert tool == "tabular_analysis"
         assert params.get("session_id") == "test-session"
+
+    def test_tumor_normal_ranking_with_session_upload_routes_tabular(self):
+        router = self._router()
+        ctx = self._ctx(
+            files=[
+                {
+                    "filename": "media-5__2_.xlsx",
+                    "schema_preview": {"family": "tabular"},
+                }
+            ]
+        )
+        cmd = (
+            "On sheet ts_final rank cancer targets by median_tumor / max_median_gtex "
+            "descending top 50"
+        )
+        tool, params = router.route_command(cmd, ctx)
+        assert tool == "tabular_analysis"
+        assert params.get("sheet") == "ts_final"

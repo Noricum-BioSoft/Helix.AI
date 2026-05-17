@@ -222,8 +222,11 @@ def run_tabular_qa(
     max_attempts = get_tabular_codegen_max_attempts()
 
     # --- Load DataFrame ---
+    from backend.tabular_qa.sheet_selection import resolve_execution_sheet
+
+    load_sheet = sheet or resolve_execution_sheet(command=question, profile=profile)
     try:
-        _conn, df, _meta = ingest_tabular(file_path, sheet=sheet)
+        _conn, df, _meta = ingest_tabular(file_path, sheet=load_sheet)
     except Exception as exc:
         return {
             "success": False,

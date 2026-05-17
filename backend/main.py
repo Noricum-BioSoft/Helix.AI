@@ -3004,9 +3004,15 @@ async def execute(req: CommandRequest, request: Request):
                     history_manager.save_checkpoint(req.session_id, _exec_cp)
                     try:
                         from backend.tabular_qa.analysis_executor import execute_analysis_plan
+                        _tabular_orig_cmd = pending_plan.get("command") or req.command
                         exec_result = await asyncio.get_running_loop().run_in_executor(
                             None,
-                            lambda: execute_analysis_plan(plan, req.session_id, session_context),
+                            lambda: execute_analysis_plan(
+                                plan,
+                                req.session_id,
+                                session_context,
+                                original_command=_tabular_orig_cmd,
+                            ),
                         )
                     except Exception as _exc:
                         exec_result = {"status": "error", "error": str(_exc)}

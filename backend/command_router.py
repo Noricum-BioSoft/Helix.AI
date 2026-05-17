@@ -246,6 +246,31 @@ class CommandRouter:
                 )
                 return _wrap("tabular_analysis", {})
 
+            # 7) Tumor-vs-normal target ranking on uploaded immunopeptidomics / expression tables
+            rank_verb = re.search(r"\b(rank|ranking|sort|order|prioriti[sz]e|top)\b", cmd_lower)
+            ratio_term = (
+                "median_tumor" in cmd_lower
+                and "max_median_gtex" in cmd_lower
+            ) or re.search(
+                r"median_tumor\s*/\s*max_median_gtex|tumor[- ]?normal|tumor[- ]?to[- ]?normal",
+                cmd_lower,
+            )
+            target_term = re.search(
+                r"\b(targets?|genes?|peptides?|candidates?|biomarkers?)\b",
+                cmd_lower,
+            )
+            if rank_verb and ratio_term and (target_term or "ts_final" in cmd_lower):
+                _record_metric(
+                    "router.deterministic_match",
+                    pattern="tabular_tumor_normal_ranking",
+                    tool="tabular_analysis",
+                )
+                params: Dict[str, Any] = {}
+                _sheet_m = re.search(r"sheet\s+['\"]?(\w+)['\"]?", command, re.IGNORECASE)
+                if _sheet_m:
+                    params["sheet"] = _sheet_m.group(1)
+                return _wrap("tabular_analysis", params)
+
         return None
 
     # ────────────────────────────────────────────────────────────────────

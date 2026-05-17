@@ -231,15 +231,40 @@ async def plan_analysis(
         plan["type"] = "tabular_analysis"
         plan.setdefault("expected_outputs", [])
 
+        from backend.tabular_qa.sheet_selection import (
+            extract_sheet_name,
+            extract_sheet_from_plan,
+            refresh_schema_preview_for_sheet,
+            resolve_execution_sheet,
+        )
+
+        sheet = resolve_execution_sheet(plan=plan, command=command) or extract_sheet_name(command)
+        if not sheet:
+            sheet = extract_sheet_from_plan(plan)
+        if sheet:
+            plan["sheet"] = sheet
+
         # Attach file metadata so the executor doesn't need to re-resolve paths
-        plan["_files"] = [
-            {
-                "name": f.get("name") or f.get("original_filename"),
-                "local_path": f.get("local_path"),
-                "schema_preview": f.get("schema_preview"),
-            }
-            for f in tabular_files
-        ]
+        plan["_files"] = []
+        for f in tabular_files:
+            local_path = f.get("local_path")
+            sp = f.get("schema_preview") or {}
+            if sheet and local_path and str(local_path).lower().endswith((".xlsx", ".xls")):
+                try:
+                    sp = refresh_schema_preview_for_sheet(local_path, sheet)
+                except Exception as exc:
+                    logger.warning(
+                        "[analysis_planner] sheet profile refresh failed for %r: %s",
+                        sheet,
+                        exc,
+                    )
+            plan["_files"].append(
+                {
+                    "name": f.get("name") or f.get("original_filename"),
+                    "local_path": local_path,
+                    "schema_preview": sp,
+                }
+            )
 
         logger.info(
             "[analysis_planner] plan generated: title=%r steps=%d",

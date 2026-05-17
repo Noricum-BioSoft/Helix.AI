@@ -224,12 +224,20 @@ def _build_script_header(plan: Dict[str, Any], filename: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _load_df(local_path: str, profile: Dict[str, Any]):
-    """Load the DataFrame from the uploaded file path."""
+def _load_df(
+    local_path: str,
+    profile: Dict[str, Any],
+    *,
+    sheet: Optional[str] = None,
+):
+    """Load the DataFrame from the uploaded file path (pandas; no DuckDB required)."""
     import pandas as pd
-    sheet = (profile.get("summary") or {}).get("source_sheet")
-    if local_path.endswith((".xlsx", ".xls")):
-        return pd.read_excel(local_path, sheet_name=sheet or 0)
+
+    resolved_sheet = sheet or (profile.get("summary") or {}).get("source_sheet")
+    if local_path.lower().endswith((".xlsx", ".xls")):
+        return pd.read_excel(local_path, sheet_name=resolved_sheet or 0)
+    if local_path.lower().endswith(".tsv"):
+        return pd.read_csv(local_path, sep="\t")
     return pd.read_csv(local_path, sep=None, engine="python")
 
 
@@ -242,6 +250,8 @@ def execute_analysis_plan(
     plan: Dict[str, Any],
     session_id: str,
     session_context: Dict[str, Any],
+    *,
+    original_command: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Execute a tabular analysis plan and return interpreted findings.
@@ -290,12 +300,86 @@ def execute_analysis_plan(
     if not local_path or not Path(local_path).exists():
         return {"status": "error", "error": f"File not found on server: {local_path}"}
 
+    from backend.tabular_qa.sheet_selection import (
+        refresh_schema_preview_for_sheet,
+        resolve_execution_sheet,
+        tabular_result_indicates_failure,
+    )
+    from backend.tabular_qa.target_ranking import (
+        format_ranking_interpretation,
+        run_tumor_normal_ratio_ranking,
+        wants_tumor_normal_ratio_ranking,
+    )
+
+    available_sheets = (profile.get("available_sheets") or []) if profile else []
+    sheet = resolve_execution_sheet(
+        plan=plan,
+        command=original_command,
+        profile=profile,
+        available_sheets=available_sheets if isinstance(available_sheets, list) else None,
+    )
+    if sheet and local_path.lower().endswith((".xlsx", ".xls")):
+        profile_default = (profile.get("summary") or {}).get("source_sheet")
+        if sheet != profile_default:
+            try:
+                profile = refresh_schema_preview_for_sheet(local_path, sheet)
+                file_info["schema_preview"] = profile
+            except Exception as exc:
+                logger.warning(
+                    "[analysis_executor] could not refresh profile for sheet %r: %s",
+                    sheet,
+                    exc,
+                )
+
     try:
-        df = _load_df(local_path, profile)
+        df = _load_df(local_path, profile, sheet=sheet)
     except Exception as exc:
         return {"status": "error", "error": f"Could not load file: {exc}"}
 
     schema_text = _schema_text(profile)
+    if sheet:
+        schema_text = f"Execution sheet: {sheet}\n{schema_text}"
+
+    # Deterministic path: tumor/normal ratio ranking (beta-tester immunopeptidomics workflow).
+    if wants_tumor_normal_ratio_ranking(plan, original_command):
+        rank_payload = run_tumor_normal_ratio_ranking(
+            df, command=original_command or plan.get("goal") or ""
+        )
+        if rank_payload.get("status") == "ok":
+            serialized = {"type": "dict", "value": rank_payload}
+            return {
+                "status": "success",
+                "text": format_ranking_interpretation(rank_payload, sheet=sheet),
+                "result_data": serialized,
+                "plot_path": None,
+                "plot_base64": None,
+                "plan_title": plan.get("title"),
+                "plan_goal": plan.get("goal"),
+                "attempts_used": 0,
+                "attempts_max": 0,
+                "code_used": _build_script_header(plan, filename)
+                + (
+                    f"# Deterministic ranking on sheet {sheet!r}\n"
+                    if sheet
+                    else "# Deterministic tumor_normal_ratio ranking\n"
+                )
+                + "result = <computed by helix.tabular_qa.target_ranking>\n",
+                "input_local_path": local_path,
+                "execution_sheet": sheet,
+            }
+        fail_msg = tabular_result_indicates_failure({"type": "dict", "value": rank_payload})
+        if fail_msg:
+            return {
+                "status": "error",
+                "error": fail_msg,
+                "result_data": {"type": "dict", "value": rank_payload},
+                "plan_title": plan.get("title"),
+                "plan_goal": plan.get("goal"),
+                "attempts_used": 0,
+                "attempts_max": 0,
+                "tabular_retry_available": True,
+                "execution_sheet": sheet,
+            }
 
     # Build step descriptions for the code prompt (exclude interpret steps)
     steps_text = "\n".join(
@@ -350,13 +434,22 @@ def execute_analysis_plan(
         last_code = code
         exec_result = execute_code(code, df)
 
-        if exec_result.get("error"):
-            last_error = exec_result["error"]
+        if exec_result.get("error") or not exec_result.get("success", True):
+            last_error = exec_result.get("error") or "Sandbox execution failed."
             logger.warning(
                 "[analysis_executor] code attempt %d failed: %s", attempt + 1, last_error
             )
         else:
-            break
+            logic_err = tabular_result_indicates_failure(exec_result.get("result"))
+            if logic_err:
+                last_error = logic_err
+                logger.warning(
+                    "[analysis_executor] code attempt %d logical failure: %s",
+                    attempt + 1,
+                    logic_err,
+                )
+            else:
+                break
     else:
         return {
             "status": "error",
@@ -396,6 +489,21 @@ def execute_analysis_plan(
         f"Write the biological interpretation."
     )
 
+    logic_err = tabular_result_indicates_failure(exec_result.get("result"))
+    if logic_err:
+        return {
+            "status": "error",
+            "error": logic_err,
+            "result_data": exec_result.get("result"),
+            "plan_title": plan.get("title"),
+            "plan_goal": plan.get("goal"),
+            "attempts_used": attempt + 1,
+            "attempts_max": max_attempts,
+            "last_code_preview": truncate_code_preview(last_code),
+            "tabular_retry_available": True,
+            "execution_sheet": sheet,
+        }
+
     try:
         interpretation = _llm_call(llm, INTERPRETATION_SYSTEM_PROMPT, interp_prompt)
     except Exception as exc:
@@ -417,4 +525,5 @@ def execute_analysis_plan(
         # header, so this never affects execution.
         "code_used": _build_script_header(plan, filename) + last_code,
         "input_local_path": local_path,
+        "execution_sheet": sheet,
     }
