@@ -312,6 +312,10 @@ def execute_analysis_plan(
     )
 
     available_sheets = (profile.get("available_sheets") or []) if profile else []
+    if not available_sheets and local_path.lower().endswith((".xlsx", ".xls")):
+        from backend.ds_pipeline.pipelines.ingest import list_sheets
+
+        available_sheets = list_sheets(local_path)
     sheet = resolve_execution_sheet(
         plan=plan,
         command=original_command,

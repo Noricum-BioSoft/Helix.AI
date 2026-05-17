@@ -238,9 +238,15 @@ async def plan_analysis(
             resolve_execution_sheet,
         )
 
-        sheet = resolve_execution_sheet(plan=plan, command=command) or extract_sheet_name(command)
+        _avail = None
+        for f in tabular_files:
+            sp = f.get("schema_preview") or {}
+            if sp.get("available_sheets"):
+                _avail = sp.get("available_sheets")
+                break
+        sheet = resolve_execution_sheet(plan=plan, command=command, available_sheets=_avail)
         if not sheet:
-            sheet = extract_sheet_from_plan(plan)
+            sheet = extract_sheet_from_plan(plan, available_sheets=_avail)
         if sheet:
             plan["sheet"] = sheet
 

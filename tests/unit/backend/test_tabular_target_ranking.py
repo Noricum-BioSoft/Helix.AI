@@ -42,6 +42,17 @@ def test_extract_sheet_name_from_command():
     assert extract_sheet_name(cmd) == "ts_final"
 
 
+def test_extract_sheet_name_sheet_from_phrase():
+    """Regression: 'sheet from ts_final' must not capture stopword 'from'."""
+    avail = ["gene_morpheus_mem", "ts_final"]
+    cmd = "Load data from sheet ts_final and rank median_tumor / max_median_gtex"
+    assert extract_sheet_name(cmd, available_sheets=avail) == "ts_final"
+    assert resolve_execution_sheet(
+        command="Using the uploaded workbook, load sheet from ts_final",
+        available_sheets=avail,
+    ) == "ts_final"
+
+
 def test_resolve_execution_sheet_prefers_plan_over_profile():
     plan = {"sheet": "ts_final", "goal": "rank targets"}
     profile = {"summary": {"source_sheet": "gene_morpheus_mem"}}

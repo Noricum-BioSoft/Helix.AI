@@ -266,9 +266,11 @@ class CommandRouter:
                     tool="tabular_analysis",
                 )
                 params: Dict[str, Any] = {}
-                _sheet_m = re.search(r"sheet\s+['\"]?(\w+)['\"]?", command, re.IGNORECASE)
-                if _sheet_m:
-                    params["sheet"] = _sheet_m.group(1)
+                from backend.tabular_qa.sheet_selection import extract_sheet_name
+
+                _sheet = extract_sheet_name(command)
+                if _sheet:
+                    params["sheet"] = _sheet
                 return _wrap("tabular_analysis", params)
 
         return None
@@ -1607,9 +1609,17 @@ class CommandRouter:
                 _file_m = re.search(r"(?:in|from|on|file)\s+([\w./\\-]+\.(?:csv|tsv|xlsx?|xls))\b", command, re.IGNORECASE)
                 if _file_m:
                     params["file_path"] = _file_m.group(1)
-            _sheet_m = re.search(r"sheet\s+['\"]?(\w+)['\"]?", command, re.IGNORECASE)
-            if _sheet_m:
-                params["sheet"] = _sheet_m.group(1)
+            from backend.tabular_qa.sheet_selection import extract_sheet_name
+
+            _avail = None
+            for _f in _session_files:
+                _sp = (_f.get("schema_preview") or {}) if isinstance(_f, dict) else {}
+                if _sp.get("available_sheets"):
+                    _avail = _sp.get("available_sheets")
+                    break
+            _sheet = extract_sheet_name(command, available_sheets=_avail)
+            if _sheet:
+                params["sheet"] = _sheet
             params["session_id"] = session_context.get("session_id", "")
             return params
 
