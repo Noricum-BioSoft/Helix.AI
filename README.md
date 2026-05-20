@@ -1,6 +1,7 @@
 # Helix.AI
 
-**Helix.AI** is an autonomous bioinformatics agent: it takes a natural-language analysis
+**Helix.AI** is a **domain-specific AI system for biology, biotech, biopharma, and bioinformatics**.
+It is an autonomous bioinformatics agent: it takes a natural-language analysis
 request, proposes a plan, waits for approval, then **generates code, chooses infrastructure,
 and executes — end to end, without the user touching a terminal.**
 
