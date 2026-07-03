@@ -213,6 +213,17 @@ def should_stage_for_approval(
     if is_approval_command(command, has_pending_plan=has_pending_plan):
         return False
 
+    # Composite multi-step requests ALWAYS get a plan card first, even when the
+    # user phrased them imperatively ("run X then Y then Z"). A
+    # ``multi_step_workflow`` has no single specialist tool: if we skip the plan
+    # gate it falls through to the tool-generator retry loop, which can run for
+    # minutes and return no actionable output. Staging preserves the
+    # Plan → Approve → Execute contract and gives the user (and binding
+    # validation) a chance to supply missing inputs before anything runs.
+    # This is decided structurally, so no classifier/LLM call is needed.
+    if tool_name == "multi_step_workflow":
+        return True
+
     # Concrete routed tools execute directly unless the LLM says otherwise.
     decision = _classify_staging_intent(command)
     logger.debug(
@@ -228,12 +239,7 @@ def should_stage_for_approval(
         return False
     if decision.requires_approval:
         return True
-    # Router-level fallbacks always need a plan card before execution.
-    # ``multi_step_workflow`` always represents a composite request that needs
-    # the approval-then-agent re-route path; ``handle_natural_command`` only
-    # stages when the LLM has flagged it as planning.
-    if tool_name == "multi_step_workflow":
-        return True
+    # ``handle_natural_command`` only stages when the LLM flagged it as planning.
     if tool_name == "handle_natural_command" and decision.is_planning_request:
         return True
     return False

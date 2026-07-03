@@ -104,6 +104,69 @@ def test_planning_request_with_handle_natural_command_is_staged(command: str) ->
 
 
 # ---------------------------------------------------------------------------
+# multi_step_workflow is ALWAYS staged (composite requests get a plan card
+# first, even when phrased imperatively). Regression: an imperative amplicon
+# prompt ("Run FastQC, trim adapters, merge...") used to skip the gate on
+# has_execute_intent=True and fall into the tool-generator retry loop (~10 min).
+# ---------------------------------------------------------------------------
+
+MULTI_STEP_IMPERATIVE_COMMANDS = [
+    "Run FastQC, trim adapters, merge paired-end reads, generate QC report.",
+    "Fetch SARS-CoV-2 spike sequences from NCBI then align with MAFFT then build a tree",
+    "Run FastQC then trim adapters then merge paired-end reads",
+]
+
+
+@pytest.mark.parametrize("command", MULTI_STEP_IMPERATIVE_COMMANDS)
+def test_multi_step_workflow_staged_even_with_execute_intent(command: str) -> None:
+    """multi_step_workflow must stage a plan card even when the classifier
+    reports execute intent, so composite requests never bypass the gate into
+    the long-running tool-generator path."""
+    decision = _mock_staging_decision(
+        requires_approval=False,
+        has_execute_intent=True,  # imperative "run ..." phrasing
+        is_planning_request=False,
+    )
+    with patch(
+        "backend.orchestration.approval_policy._classify_staging_intent",
+        return_value=decision,
+    ):
+        result = should_stage_for_approval("multi_step_workflow", command)
+    assert result is True, f"multi_step_workflow should always be staged: {command!r}"
+
+
+def test_multi_step_workflow_staging_is_structural_no_classifier_call() -> None:
+    """The multi_step_workflow decision is structural — it must not depend on
+    the (LLM-backed) staging classifier, so it stays robust if the LLM fails."""
+    with patch(
+        "backend.orchestration.approval_policy._classify_staging_intent",
+        side_effect=AssertionError("classifier should not be called for multi_step_workflow"),
+    ):
+        result = should_stage_for_approval(
+            "multi_step_workflow",
+            "Run FastQC, trim adapters, merge paired-end reads, generate QC report.",
+        )
+    assert result is True
+
+
+def test_multi_step_workflow_not_staged_when_approving_pending_plan() -> None:
+    """Approving a pending plan must not re-stage, even for multi_step_workflow.
+
+    The approval check must run BEFORE the structural multi_step_workflow rule.
+    """
+    with patch(
+        "backend.orchestration.approval_policy.is_approval_command",
+        return_value=True,
+    ):
+        result = should_stage_for_approval(
+            "multi_step_workflow",
+            "yes, approve and run the plan",
+            has_pending_plan=True,
+        )
+    assert result is False
+
+
+# ---------------------------------------------------------------------------
 # READ_ONLY tools are never staged (includes tabular_qa)
 # ---------------------------------------------------------------------------
 

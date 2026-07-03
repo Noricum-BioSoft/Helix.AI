@@ -1669,11 +1669,20 @@ def build_standard_response(
         if isinstance(inner, dict) and inner.get("type") == "plan_result" and isinstance(inner.get("steps"), list):
             steps_list = inner["steps"]
             plan_exec = _analyze_plan_execution(steps_list)
+            # Router placeholders carry no concrete tool — show the human-readable
+            # step description (e.g. "Run FastQC quality control ...") instead of a
+            # bare "multi_step_workflow" line so the plan card is meaningful.
+            _PLACEHOLDER_STEP_TOOLS = {"multi_step_workflow", "handle_natural_command"}
             lines = []
             for i, step in enumerate(steps_list, 1):
                 step_id = step.get("id") or f"step{i}"
                 tool_name_step = step.get("tool_name") or ""
-                lines.append(f"{i}. **{step_id}** (`{tool_name_step}`)")
+                desc = str(step.get("description") or "").strip()
+                if desc and tool_name_step in _PLACEHOLDER_STEP_TOOLS:
+                    short_desc = desc if len(desc) <= 140 else desc[:137] + "…"
+                    lines.append(f"{i}. {short_desc}")
+                else:
+                    lines.append(f"{i}. **{step_id}** (`{tool_name_step}`)")
             steps_md = "\n".join(lines) if lines else "(no steps)"
             inner_status = str(inner.get("status") or "").lower()
             execute_ready_flag = bool(inner.get("execute_ready")) if "execute_ready" in inner else True

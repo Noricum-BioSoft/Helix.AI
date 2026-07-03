@@ -5,25 +5,30 @@ from typing import Any, Dict, Optional
 from backend.action_plan import infer_action_type, map_action_to_tool
 
 
+_PLACEHOLDER_PLAN_TOOLS = ("handle_natural_command", "multi_step_workflow")
+
+
 def build_single_step_plan(command: str, tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
     """Build a single-step action plan.
 
-    When ``tool_name`` is ``handle_natural_command`` and the router returned
-    ``suggested_steps``, expand those into labelled steps so the plan card
-    shows a meaningful workflow instead of a bare "handle_natural_command" line.
-    The execution path (approval → agent re-route) handles actual dispatch.
+    When ``tool_name`` is a router placeholder (``handle_natural_command`` or
+    ``multi_step_workflow``) and the router returned ``suggested_steps``, expand
+    those into labelled steps so the plan card shows a meaningful decomposed
+    workflow (e.g. "Run FastQC", "Trim adapters", ...) instead of a bare
+    "multi_step_workflow" line. The execution path (approval → agent re-route)
+    handles actual dispatch.
     """
     params = params or {}
     router_reasoning = params.get("router_reasoning") or {}
     suggested_steps: list = router_reasoning.get("suggested_steps") or []
     action_type = infer_action_type(command, tool_name)
 
-    if tool_name == "handle_natural_command" and len(suggested_steps) > 1:
+    if tool_name in _PLACEHOLDER_PLAN_TOOLS and len(suggested_steps) > 1:
         steps = [
             {
                 "id": f"step{i + 1}",
                 "action_type": action_type,
-                "tool_name": "handle_natural_command",
+                "tool_name": tool_name,
                 "arguments": params,
                 "description": step_desc,
             }

@@ -2163,10 +2163,13 @@ class CommandProcessor:
                 "success": True,
                 "execute_ready": False,
                 "text": (
-                    "## Pipeline Executed\n\n"
-                    "All steps completed. Check the **Jobs** panel to track individual results."
+                    "## Plan Approved\n\n"
+                    "The reviewed plan was approved and executed, but it didn't reference "
+                    "concrete input data, so no analysis jobs were produced. Add input files "
+                    "(e.g. FASTQ/CSV paths or an uploaded dataset), or use **Load & run** with "
+                    "example data, to generate results."
                 ),
-                "message": "Pipeline executed.",
+                "message": "Plan approved; no runnable inputs were found.",
                 "jobs": [],
                 "visualization_type": "markdown",
             }
