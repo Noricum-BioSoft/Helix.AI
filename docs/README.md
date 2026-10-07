@@ -23,7 +23,8 @@ This directory contains the documentation needed for **release** and ongoing dev
 | Document | Description |
 |----------|-------------|
 | [**agent.md**](agent.md) | BioAgent system prompt: role, principles, task types (micro/macroflow), session awareness, safety, structured output. Defines how the primary agent behaves. |
-| [**HELIX_VS_CLAWBIO.md**](HELIX_VS_CLAWBIO.md) | Comparison with ClawBio: philosophy, architecture, feature matrix, strengths/weaknesses. Useful for positioning and design decisions. |
+
+Competitive positioning and strategy documents (Helix vs. ClawBio, differentiation strategy, market research) live in the private `Noricum-BioSoft/business-docs` repo under `strategy/`.
 
 ### 3. User scenarios
 

@@ -22,7 +22,7 @@ This document evaluates the `docs/` folder and defines what is **needed for rele
 | Keep | Path | Reason |
 |------|------|--------|
 | ✅ | **agent.md** | BioAgent system prompt: principles, micro/macroflow, session awareness, output contract. |
-| ✅ | **HELIX_VS_CLAWBIO.md** | Positioning and comparison; informs architecture and product decisions. |
+| ➡️ | *HELIX_VS_CLAWBIO.md* | Moved to the private `Noricum-BioSoft/business-docs` repo (`strategy/`) — positioning material, not code documentation. |
 
 ### 3. User scenarios
 
@@ -104,7 +104,6 @@ docs/
 ├── AWS_USAGE.md                ← How AWS is used (hosting, data, compute)
 ├── ORCHESTRATION_DUALITY.md
 ├── agent.md                    ← Agents (BioAgent prompt)
-├── HELIX_VS_CLAWBIO.md
 ├── USER_SCENARIOS.md           ← User scenarios
 ├── TESTBED.md                  ← Tests
 ├── FASTQC_EXECUTION_FLOW.md    ← Optional
@@ -133,7 +132,7 @@ Historical docs are in **docs/archive/**; the **release set** is what **README.m
 ## Summary
 
 - **Architecture:** SYSTEM_OVERVIEW.md + architecture/* + ORCHESTRATION_DUALITY.md.
-- **Agents:** agent.md + HELIX_VS_CLAWBIO.md.
+- **Agents:** agent.md (competitive positioning lives in `business-docs/strategy/`).
 - **User scenarios:** USER_SCENARIOS.md.
 - **Tests:** TESTBED.md (+ `tests/testbed/` in code).
 - **Operations:** getting-started, deployment, development, troubleshooting.
