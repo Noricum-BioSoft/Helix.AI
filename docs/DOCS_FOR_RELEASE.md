@@ -84,8 +84,8 @@ deployment/COPILOT_*.md, CDK_*.md, DEPLOYMENT_ALTERNATIVES*.md, DEPLOYMENT_STATU
 **Analysis and investigations:**  
 analysis/*.md (EMR, job validation, PySpark, performance, etc.), CODEBASE_ORGANIZATION_ANALYSIS.md, COMPLETE_SUMMARY.md, COMPLETE_TRACE_CATALOG.md, DEMO_EVAL_SYSTEM_COMPLETE.md, END_TO_END_VERIFICATION.md, INTEGRATION_SUCCESS.md, JOB_STATUS_TRACKING.md, SEMANTIC_INVARIANTS.md, TRACE_*.md, TASK_ARCHITECTURE.md.
 
-**Strategy / GTM / pitch (optional):**  
-HELIX_AI_GTM_STRATEGY_INPUT.md, PITCH_DECK_OUTLINE.md, TRL_ASSESSMENT.md, TDS_HELIX_AI_DRAFT.md — keep only if you want them in the repo for release.
+**Strategy / GTM / pitch:**  
+HELIX_AI_GTM_STRATEGY_INPUT.md, PITCH_DECK_OUTLINE.md, TRL_ASSESSMENT.md, TDS_HELIX_AI_DRAFT.md — moved to the private `Noricum-BioSoft/business-docs` repo (2026-10-07).
 
 **Duplicate or moved content:**  
 Various fixes in `docs/fixes/` that duplicate or supersede root-level fix docs; `docs/agent.md` vs `docs/reference/agent.md` (keep one; README points to `docs/agent.md`).
