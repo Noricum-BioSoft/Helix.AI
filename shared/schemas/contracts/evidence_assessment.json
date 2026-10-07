@@ -1,0 +1,587 @@
+{
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Artifact Id"
+        },
+        "content_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content Hash"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "dataset | file | sequence | report | \u2026",
+          "title": "Kind"
+        },
+        "uri": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uri"
+        }
+      },
+      "title": "ArtifactRef",
+      "type": "object"
+    },
+    "ExecutionConstraints": {
+      "additionalProperties": false,
+      "description": "Per-objective narrowing of where execution may happen (profile policy still wins).",
+      "properties": {
+        "allowed_providers": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Allowed Providers",
+          "type": "array"
+        },
+        "data_residency": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Data Residency"
+        },
+        "max_cost_usd": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Cost Usd"
+        },
+        "preferred_provider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Preferred Provider"
+        }
+      },
+      "title": "ExecutionConstraints",
+      "type": "object"
+    },
+    "Interpretation": {
+      "additionalProperties": false,
+      "properties": {
+        "contradicts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Contradicts",
+          "type": "array"
+        },
+        "rationale": {
+          "items": {
+            "$ref": "#/$defs/RationaleItem"
+          },
+          "title": "Rationale",
+          "type": "array"
+        },
+        "supports": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Supports",
+          "type": "array"
+        },
+        "uncertainties": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Uncertainties",
+          "type": "array"
+        }
+      },
+      "title": "Interpretation",
+      "type": "object"
+    },
+    "NextDecision": {
+      "additionalProperties": false,
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "decision_id": {
+          "title": "Decision Id",
+          "type": "string"
+        },
+        "evidence_ids": {
+          "description": "Observation/artifact ids this decision rests on.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "kind": {
+          "enum": [
+            "stop",
+            "rerun_analysis",
+            "acquire_data",
+            "repeat_experiment",
+            "new_condition",
+            "switch_provider",
+            "escalate"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "proposed_objective": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScientificObjective"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "rationale": {
+          "items": {
+            "$ref": "#/$defs/RationaleItem"
+          },
+          "minItems": 1,
+          "title": "Rationale",
+          "type": "array"
+        },
+        "schema_version": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "trace_id": {
+          "description": "Shared by every record of one scientific loop (orch_<uuid7>).",
+          "title": "Trace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "trace_id",
+        "decision_id",
+        "kind",
+        "rationale",
+        "evidence_ids"
+      ],
+      "title": "NextDecision",
+      "type": "object"
+    },
+    "ObjectiveConstraints": {
+      "additionalProperties": false,
+      "properties": {
+        "execution": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExecutionConstraints"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "other": {
+          "description": "Free-form user constraints, kept as given.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Other",
+          "type": "array"
+        },
+        "time_budget_days": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Time Budget Days"
+        }
+      },
+      "title": "ObjectiveConstraints",
+      "type": "object"
+    },
+    "Observation": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Artifact Refs",
+          "type": "array"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "method": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "How the value was obtained (tool/version), not what it means.",
+          "title": "Method"
+        },
+        "metric": {
+          "minLength": 1,
+          "title": "Metric",
+          "type": "string"
+        },
+        "observation_id": {
+          "title": "Observation Id",
+          "type": "string"
+        },
+        "run_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Run Ids",
+          "type": "array"
+        },
+        "schema_version": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "trace_id": {
+          "description": "Shared by every record of one scientific loop (orch_<uuid7>).",
+          "title": "Trace Id",
+          "type": "string"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "boolean"
+            }
+          ],
+          "title": "Value"
+        }
+      },
+      "required": [
+        "trace_id",
+        "observation_id",
+        "metric",
+        "value"
+      ],
+      "title": "Observation",
+      "type": "object"
+    },
+    "RationaleItem": {
+      "description": "One statement \u2192 conclusion pair, optionally backed by evidence references.",
+      "properties": {
+        "conclusion": {
+          "description": "What follows from the statement for this decision.",
+          "minLength": 1,
+          "title": "Conclusion",
+          "type": "string"
+        },
+        "confidence": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Confidence"
+        },
+        "evidence_refs": {
+          "description": "Ids/URIs of evidence this item relies on (dataset:\u2026, artifact:\u2026, criterion:\u2026, policy:\u2026).",
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "statement": {
+          "description": "Observed fact or assumption, stated plainly.",
+          "minLength": 1,
+          "title": "Statement",
+          "type": "string"
+        }
+      },
+      "required": [
+        "statement",
+        "conclusion"
+      ],
+      "title": "RationaleItem",
+      "type": "object"
+    },
+    "ScientificObjective": {
+      "additionalProperties": false,
+      "properties": {
+        "biological_system": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Biological System"
+        },
+        "constraints": {
+          "$ref": "#/$defs/ObjectiveConstraints"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "desired_evidence": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Desired Evidence",
+          "type": "array"
+        },
+        "expected_outputs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Expected Outputs",
+          "type": "array"
+        },
+        "known_inputs": {
+          "items": {
+            "$ref": "#/$defs/ArtifactRef"
+          },
+          "title": "Known Inputs",
+          "type": "array"
+        },
+        "objective": {
+          "description": "One-sentence objective as the user framed it.",
+          "minLength": 1,
+          "title": "Objective",
+          "type": "string"
+        },
+        "objective_id": {
+          "title": "Objective Id",
+          "type": "string"
+        },
+        "parent_decision_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Set when this objective was proposed by a NextDecision; stays 'proposed' until a user activates it.",
+          "title": "Parent Decision Id"
+        },
+        "question": {
+          "description": "The scientific question the loop should answer.",
+          "minLength": 1,
+          "title": "Question",
+          "type": "string"
+        },
+        "schema_version": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "status": {
+          "default": "proposed",
+          "enum": [
+            "proposed",
+            "active",
+            "answered",
+            "abandoned"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "success_criteria": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Success Criteria",
+          "type": "array"
+        },
+        "supersedes_version": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Supersedes Version"
+        },
+        "trace_id": {
+          "description": "Shared by every record of one scientific loop (orch_<uuid7>).",
+          "title": "Trace Id",
+          "type": "string"
+        },
+        "user_context": {
+          "additionalProperties": true,
+          "title": "User Context",
+          "type": "object"
+        },
+        "version": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "trace_id",
+        "objective_id",
+        "objective",
+        "question"
+      ],
+      "title": "ScientificObjective",
+      "type": "object"
+    }
+  },
+  "$id": "https://noricum.bio/schemas/contracts/evidence_assessment.json",
+  "additionalProperties": false,
+  "properties": {
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "decision": {
+      "$ref": "#/$defs/NextDecision"
+    },
+    "interpretation": {
+      "$ref": "#/$defs/Interpretation"
+    },
+    "objective_id": {
+      "title": "Objective Id",
+      "type": "string"
+    },
+    "observations": {
+      "items": {
+        "$ref": "#/$defs/Observation"
+      },
+      "title": "Observations",
+      "type": "array"
+    },
+    "run_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Run Ids",
+      "type": "array"
+    },
+    "schema_version": {
+      "default": 1,
+      "minimum": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "trace_id": {
+      "description": "Shared by every record of one scientific loop (orch_<uuid7>).",
+      "title": "Trace Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "trace_id",
+    "objective_id",
+    "interpretation",
+    "decision"
+  ],
+  "title": "EvidenceAssessment",
+  "type": "object"
+}

@@ -1,0 +1,20 @@
+# Default execution profile: no cloud, no external providers.
+# Used by tests and HELIX_MOCK_MODE. Adapters are declared from Phase 3A on;
+# until then the ids are placeholders the registry will resolve.
+profile: local-only
+default_provider: local_compute
+policy:
+  allow_cloud: false
+  allowed_regions: []
+  max_cost_usd_per_run: 0
+providers:
+  - id: local_compute
+    enabled: true
+  - id: nextflow
+    enabled: true
+    config:
+      executor: local
+  - id: mock_experimental_provider
+    enabled: true
+    config:
+      completion_delay_seconds: 0

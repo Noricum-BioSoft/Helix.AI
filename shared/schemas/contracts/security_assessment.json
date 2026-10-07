@@ -1,0 +1,344 @@
+{
+  "$defs": {
+    "AppliedPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "policy_id": {
+          "title": "Policy Id",
+          "type": "string"
+        },
+        "result": {
+          "enum": [
+            "ALLOW",
+            "ALLOW_WITH_APPROVAL",
+            "REQUIRE_REVIEW",
+            "DENY"
+          ],
+          "title": "Result",
+          "type": "string"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "policy_id",
+        "version",
+        "result"
+      ],
+      "title": "AppliedPolicy",
+      "type": "object"
+    },
+    "AssessmentAudit": {
+      "additionalProperties": false,
+      "properties": {
+        "actor": {
+          "description": "agent:<id> | system | user:<subject>",
+          "title": "Actor",
+          "type": "string"
+        },
+        "gate_version": {
+          "title": "Gate Version",
+          "type": "string"
+        },
+        "profile": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Profile"
+        }
+      },
+      "required": [
+        "actor",
+        "gate_version"
+      ],
+      "title": "AssessmentAudit",
+      "type": "object"
+    },
+    "PolicyEnvelope": {
+      "additionalProperties": false,
+      "description": "Constraints later provider selection must satisfy. Intersection semantics when combined.",
+      "properties": {
+        "allowed_data_classes": {
+          "items": {
+            "enum": [
+              "public",
+              "internal",
+              "sensitive",
+              "phi",
+              "restricted"
+            ],
+            "type": "string"
+          },
+          "title": "Allowed Data Classes",
+          "type": "array"
+        },
+        "allowed_provider_categories": {
+          "items": {
+            "enum": [
+              "computational",
+              "experimental",
+              "data",
+              "advisory"
+            ],
+            "type": "string"
+          },
+          "title": "Allowed Provider Categories",
+          "type": "array"
+        },
+        "allowed_regions": {
+          "description": "Empty = no regional restriction.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Allowed Regions",
+          "type": "array"
+        },
+        "external_execution_allowed": {
+          "default": true,
+          "title": "External Execution Allowed",
+          "type": "boolean"
+        },
+        "human_approval_required": {
+          "default": false,
+          "title": "Human Approval Required",
+          "type": "boolean"
+        },
+        "max_cost_usd": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Cost Usd"
+        },
+        "screening_required": {
+          "default": false,
+          "title": "Screening Required",
+          "type": "boolean"
+        }
+      },
+      "title": "PolicyEnvelope",
+      "type": "object"
+    },
+    "RationaleItem": {
+      "description": "One statement \u2192 conclusion pair, optionally backed by evidence references.",
+      "properties": {
+        "conclusion": {
+          "description": "What follows from the statement for this decision.",
+          "minLength": 1,
+          "title": "Conclusion",
+          "type": "string"
+        },
+        "confidence": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Confidence"
+        },
+        "evidence_refs": {
+          "description": "Ids/URIs of evidence this item relies on (dataset:\u2026, artifact:\u2026, criterion:\u2026, policy:\u2026).",
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "statement": {
+          "description": "Observed fact or assumption, stated plainly.",
+          "minLength": 1,
+          "title": "Statement",
+          "type": "string"
+        }
+      },
+      "required": [
+        "statement",
+        "conclusion"
+      ],
+      "title": "RationaleItem",
+      "type": "object"
+    },
+    "RequiredApproval": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "role": {
+          "title": "Role",
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "reason"
+      ],
+      "title": "RequiredApproval",
+      "type": "object"
+    },
+    "ScreeningResult": {
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "description": "Screening adapter id; 'mock' or 'not_configured' are explicit.",
+          "title": "Provider",
+          "type": "string"
+        },
+        "reference_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reference Id"
+        },
+        "status": {
+          "enum": [
+            "accepted",
+            "flagged",
+            "rejected",
+            "not_run",
+            "error"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "summary": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Summary"
+        }
+      },
+      "required": [
+        "provider",
+        "status"
+      ],
+      "title": "ScreeningResult",
+      "type": "object"
+    }
+  },
+  "$id": "https://noricum.bio/schemas/contracts/security_assessment.json",
+  "additionalProperties": false,
+  "properties": {
+    "applied_policies": {
+      "items": {
+        "$ref": "#/$defs/AppliedPolicy"
+      },
+      "title": "Applied Policies",
+      "type": "array"
+    },
+    "assessment_hash": {
+      "default": "",
+      "description": "Computed over outcome + envelope + applied policies.",
+      "title": "Assessment Hash",
+      "type": "string"
+    },
+    "assessment_id": {
+      "title": "Assessment Id",
+      "type": "string"
+    },
+    "audit": {
+      "$ref": "#/$defs/AssessmentAudit"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "outcome": {
+      "enum": [
+        "ALLOW",
+        "ALLOW_WITH_APPROVAL",
+        "REQUIRE_REVIEW",
+        "DENY"
+      ],
+      "title": "Outcome",
+      "type": "string"
+    },
+    "plan_hash": {
+      "title": "Plan Hash",
+      "type": "string"
+    },
+    "plan_id": {
+      "title": "Plan Id",
+      "type": "string"
+    },
+    "policy_envelope": {
+      "$ref": "#/$defs/PolicyEnvelope"
+    },
+    "rationale": {
+      "items": {
+        "$ref": "#/$defs/RationaleItem"
+      },
+      "title": "Rationale",
+      "type": "array"
+    },
+    "required_approvals": {
+      "items": {
+        "$ref": "#/$defs/RequiredApproval"
+      },
+      "title": "Required Approvals",
+      "type": "array"
+    },
+    "schema_version": {
+      "default": 1,
+      "minimum": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "screening_results": {
+      "items": {
+        "$ref": "#/$defs/ScreeningResult"
+      },
+      "title": "Screening Results",
+      "type": "array"
+    },
+    "trace_id": {
+      "description": "Shared by every record of one scientific loop (orch_<uuid7>).",
+      "title": "Trace Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "trace_id",
+    "assessment_id",
+    "plan_id",
+    "plan_hash",
+    "outcome",
+    "audit"
+  ],
+  "title": "SecurityAssessment",
+  "type": "object"
+}

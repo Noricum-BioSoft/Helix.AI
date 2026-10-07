@@ -1,0 +1,318 @@
+{
+  "$defs": {
+    "Plan": {
+      "properties": {
+        "steps": {
+          "items": {
+            "$ref": "#/$defs/PlanStep"
+          },
+          "title": "Steps",
+          "type": "array"
+        },
+        "version": {
+          "default": "v1",
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "steps"
+      ],
+      "title": "Plan",
+      "type": "object"
+    },
+    "PlanStep": {
+      "properties": {
+        "action_type": {
+          "default": "execute_tool",
+          "description": "Generic action type",
+          "title": "Action Type",
+          "type": "string"
+        },
+        "arguments": {
+          "additionalProperties": true,
+          "description": "Tool arguments",
+          "title": "Arguments",
+          "type": "object"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable step description",
+          "title": "Description"
+        },
+        "id": {
+          "description": "Unique step id (stable within plan)",
+          "title": "Id",
+          "type": "string"
+        },
+        "tool_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Concrete tool name to execute",
+          "title": "Tool Name"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "PlanStep",
+      "type": "object"
+    },
+    "RationaleItem": {
+      "description": "One statement \u2192 conclusion pair, optionally backed by evidence references.",
+      "properties": {
+        "conclusion": {
+          "description": "What follows from the statement for this decision.",
+          "minLength": 1,
+          "title": "Conclusion",
+          "type": "string"
+        },
+        "confidence": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Confidence"
+        },
+        "evidence_refs": {
+          "description": "Ids/URIs of evidence this item relies on (dataset:\u2026, artifact:\u2026, criterion:\u2026, policy:\u2026).",
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "statement": {
+          "description": "Observed fact or assumption, stated plainly.",
+          "minLength": 1,
+          "title": "Statement",
+          "type": "string"
+        }
+      },
+      "required": [
+        "statement",
+        "conclusion"
+      ],
+      "title": "RationaleItem",
+      "type": "object"
+    },
+    "ScientificPlanStep": {
+      "additionalProperties": false,
+      "description": "Plan-IR step plus the scientific metadata the gate/recommender need.",
+      "properties": {
+        "action_type": {
+          "default": "execute_tool",
+          "title": "Action Type",
+          "type": "string"
+        },
+        "arguments": {
+          "additionalProperties": true,
+          "title": "Arguments",
+          "type": "object"
+        },
+        "assumptions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Assumptions",
+          "type": "array"
+        },
+        "depends_on": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Depends On",
+          "type": "array"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "default": "computational",
+          "enum": [
+            "reasoning",
+            "computational",
+            "experimental"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "required_capabilities": {
+          "description": "capability_ids, e.g. local_compute:fastqc",
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Capabilities",
+          "type": "array"
+        },
+        "required_data": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Data",
+          "type": "array"
+        },
+        "tool_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tool Name"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "ScientificPlanStep",
+      "type": "object"
+    }
+  },
+  "$id": "https://noricum.bio/schemas/contracts/scientific_plan.json",
+  "additionalProperties": false,
+  "properties": {
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "expected_outputs": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Expected Outputs",
+      "type": "array"
+    },
+    "ir": {
+      "$ref": "#/$defs/Plan"
+    },
+    "objective_id": {
+      "title": "Objective Id",
+      "type": "string"
+    },
+    "plan_hash": {
+      "default": "",
+      "description": "Computed; covers steps+ir+security_requirements, not rationale.",
+      "title": "Plan Hash",
+      "type": "string"
+    },
+    "plan_id": {
+      "title": "Plan Id",
+      "type": "string"
+    },
+    "plan_rationale": {
+      "items": {
+        "$ref": "#/$defs/RationaleItem"
+      },
+      "title": "Plan Rationale",
+      "type": "array"
+    },
+    "schema_version": {
+      "default": 1,
+      "minimum": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "security_requirements": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Security Requirements",
+      "type": "array"
+    },
+    "status": {
+      "default": "draft",
+      "enum": [
+        "draft",
+        "assessed",
+        "recommended",
+        "authorized",
+        "approved",
+        "rejected",
+        "executing",
+        "completed",
+        "failed"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "steps": {
+      "items": {
+        "$ref": "#/$defs/ScientificPlanStep"
+      },
+      "title": "Steps",
+      "type": "array"
+    },
+    "supersedes_plan_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Supersedes Plan Id"
+    },
+    "trace_id": {
+      "description": "Shared by every record of one scientific loop (orch_<uuid7>).",
+      "title": "Trace Id",
+      "type": "string"
+    },
+    "version": {
+      "default": 1,
+      "minimum": 1,
+      "title": "Version",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "trace_id",
+    "plan_id",
+    "objective_id",
+    "steps",
+    "ir"
+  ],
+  "title": "ScientificPlan",
+  "type": "object"
+}

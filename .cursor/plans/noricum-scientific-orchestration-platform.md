@@ -11,7 +11,7 @@ derived_plans:
 todos:
   - id: p0-contracts
     content: "P0: contracts (Objective, Plan w/ structured rationale, Assessment+PolicyEnvelope, Recommendation, ProviderAuthorization, ExecutionIntent, Approval, ExecutionRequest w/ idempotency, Evidence), trace_id, domain-ID generation, ExecutionProfile, auth mode guard, invariants module, ORCH-001 skeleton, flags, fixtures"
-    status: pending
+    status: completed
   - id: p1-objective-plan
     content: "P1 (Helix): ScientificObjective + persisted ScientificPlan + ExecutionIntent + approval endpoint bound to execution_intent_hash"
     status: pending

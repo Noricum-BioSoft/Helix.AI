@@ -1,0 +1,31 @@
+# AWS development profile. Credentials come from the SDK default chain (env /
+# shared config / instance role); nothing secret is stored here.
+profile: aws-dev
+default_provider: local_compute
+policy:
+  allow_cloud: true
+  allowed_regions: ["us-east-1"]
+  max_cost_usd_per_run: 10
+providers:
+  - id: local_compute
+    enabled: true
+  - id: nextflow
+    enabled: true
+    config:
+      executor: local
+  - id: mock_experimental_provider
+    enabled: true
+  - id: aws_emr
+    enabled: true
+    config:
+      region: ${AWS_REGION}
+      workdir_uri: ${HELIX_EMR_WORKDIR}
+    credentials:
+      source: env
+  - id: aws_ec2
+    enabled: false
+    config:
+      region: ${AWS_REGION}
+      instance_id: ${HELIX_EC2_INSTANCE_ID}
+    credentials:
+      source: env

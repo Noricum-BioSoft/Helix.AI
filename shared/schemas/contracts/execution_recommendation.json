@@ -1,0 +1,306 @@
+{
+  "$defs": {
+    "CriteriaScores": {
+      "additionalProperties": false,
+      "description": "Each criterion scored 0\u20131 (higher is better). Missing criteria are not allowed.",
+      "properties": {
+        "availability": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Availability",
+          "type": "number"
+        },
+        "capability_match": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Capability Match",
+          "type": "number"
+        },
+        "cost": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Cost",
+          "type": "number"
+        },
+        "inputs_ready": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Inputs Ready",
+          "type": "number"
+        },
+        "prior_performance": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Prior Performance",
+          "type": "number"
+        },
+        "privacy": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Privacy",
+          "type": "number"
+        },
+        "provenance": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Provenance",
+          "type": "number"
+        },
+        "security": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Security",
+          "type": "number"
+        },
+        "suitability": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Suitability",
+          "type": "number"
+        },
+        "throughput": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Throughput",
+          "type": "number"
+        },
+        "turnaround": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Turnaround",
+          "type": "number"
+        }
+      },
+      "required": [
+        "suitability",
+        "capability_match",
+        "inputs_ready",
+        "cost",
+        "turnaround",
+        "throughput",
+        "security",
+        "privacy",
+        "availability",
+        "prior_performance",
+        "provenance"
+      ],
+      "title": "CriteriaScores",
+      "type": "object"
+    },
+    "RationaleItem": {
+      "description": "One statement \u2192 conclusion pair, optionally backed by evidence references.",
+      "properties": {
+        "conclusion": {
+          "description": "What follows from the statement for this decision.",
+          "minLength": 1,
+          "title": "Conclusion",
+          "type": "string"
+        },
+        "confidence": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Confidence"
+        },
+        "evidence_refs": {
+          "description": "Ids/URIs of evidence this item relies on (dataset:\u2026, artifact:\u2026, criterion:\u2026, policy:\u2026).",
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "statement": {
+          "description": "Observed fact or assumption, stated plainly.",
+          "minLength": 1,
+          "title": "Statement",
+          "type": "string"
+        }
+      },
+      "required": [
+        "statement",
+        "conclusion"
+      ],
+      "title": "RationaleItem",
+      "type": "object"
+    },
+    "RecommendationAlternative": {
+      "additionalProperties": false,
+      "properties": {
+        "capability_id": {
+          "title": "Capability Id",
+          "type": "string"
+        },
+        "criteria_scores": {
+          "$ref": "#/$defs/CriteriaScores"
+        },
+        "provider_id": {
+          "title": "Provider Id",
+          "type": "string"
+        },
+        "score": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Score",
+          "type": "number"
+        },
+        "tradeoffs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tradeoffs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "provider_id",
+        "capability_id",
+        "score",
+        "criteria_scores"
+      ],
+      "title": "RecommendationAlternative",
+      "type": "object"
+    }
+  },
+  "$id": "https://noricum.bio/schemas/contracts/execution_recommendation.json",
+  "additionalProperties": false,
+  "properties": {
+    "alternatives": {
+      "items": {
+        "$ref": "#/$defs/RecommendationAlternative"
+      },
+      "title": "Alternatives",
+      "type": "array"
+    },
+    "candidate_set": {
+      "description": "All provider_ids that were eligible; approval may only pick from these.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Candidate Set",
+      "type": "array"
+    },
+    "capability_id": {
+      "title": "Capability Id",
+      "type": "string"
+    },
+    "confidence": {
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Confidence",
+      "type": "number"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "criteria_scores": {
+      "$ref": "#/$defs/CriteriaScores"
+    },
+    "legacy_infrastructure": {
+      "anyOf": [
+        {
+          "enum": [
+            "Local",
+            "EC2",
+            "EMR",
+            "Batch",
+            "Lambda"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Back-compat mapping for InfraDecision consumers; None for non-compute providers.",
+      "title": "Legacy Infrastructure"
+    },
+    "plan_id": {
+      "title": "Plan Id",
+      "type": "string"
+    },
+    "provider_id": {
+      "title": "Provider Id",
+      "type": "string"
+    },
+    "rationale": {
+      "description": "Items should reference criteria via evidence_refs 'criterion:<name>'.",
+      "items": {
+        "$ref": "#/$defs/RationaleItem"
+      },
+      "title": "Rationale",
+      "type": "array"
+    },
+    "recommendation_id": {
+      "title": "Recommendation Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "default": 1,
+      "minimum": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "score": {
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Score",
+      "type": "number"
+    },
+    "step_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Step Id"
+    },
+    "trace_id": {
+      "description": "Shared by every record of one scientific loop (orch_<uuid7>).",
+      "title": "Trace Id",
+      "type": "string"
+    },
+    "warnings": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Warnings",
+      "type": "array"
+    },
+    "weights": {
+      "additionalProperties": {
+        "type": "number"
+      },
+      "title": "Weights",
+      "type": "object"
+    }
+  },
+  "required": [
+    "trace_id",
+    "recommendation_id",
+    "plan_id",
+    "provider_id",
+    "capability_id",
+    "candidate_set",
+    "criteria_scores",
+    "score",
+    "confidence"
+  ],
+  "title": "ExecutionRecommendation",
+  "type": "object"
+}

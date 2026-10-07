@@ -1,0 +1,285 @@
+{
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Artifact Id"
+        },
+        "content_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content Hash"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "dataset | file | sequence | report | \u2026",
+          "title": "Kind"
+        },
+        "uri": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uri"
+        }
+      },
+      "title": "ArtifactRef",
+      "type": "object"
+    },
+    "ExecutionConstraints": {
+      "additionalProperties": false,
+      "description": "Per-objective narrowing of where execution may happen (profile policy still wins).",
+      "properties": {
+        "allowed_providers": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Allowed Providers",
+          "type": "array"
+        },
+        "data_residency": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Data Residency"
+        },
+        "max_cost_usd": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Cost Usd"
+        },
+        "preferred_provider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Preferred Provider"
+        }
+      },
+      "title": "ExecutionConstraints",
+      "type": "object"
+    },
+    "ObjectiveConstraints": {
+      "additionalProperties": false,
+      "properties": {
+        "execution": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExecutionConstraints"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "other": {
+          "description": "Free-form user constraints, kept as given.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Other",
+          "type": "array"
+        },
+        "time_budget_days": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Time Budget Days"
+        }
+      },
+      "title": "ObjectiveConstraints",
+      "type": "object"
+    }
+  },
+  "$id": "https://noricum.bio/schemas/contracts/scientific_objective.json",
+  "additionalProperties": false,
+  "properties": {
+    "biological_system": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Biological System"
+    },
+    "constraints": {
+      "$ref": "#/$defs/ObjectiveConstraints"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "desired_evidence": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Desired Evidence",
+      "type": "array"
+    },
+    "expected_outputs": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Expected Outputs",
+      "type": "array"
+    },
+    "known_inputs": {
+      "items": {
+        "$ref": "#/$defs/ArtifactRef"
+      },
+      "title": "Known Inputs",
+      "type": "array"
+    },
+    "objective": {
+      "description": "One-sentence objective as the user framed it.",
+      "minLength": 1,
+      "title": "Objective",
+      "type": "string"
+    },
+    "objective_id": {
+      "title": "Objective Id",
+      "type": "string"
+    },
+    "parent_decision_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Set when this objective was proposed by a NextDecision; stays 'proposed' until a user activates it.",
+      "title": "Parent Decision Id"
+    },
+    "question": {
+      "description": "The scientific question the loop should answer.",
+      "minLength": 1,
+      "title": "Question",
+      "type": "string"
+    },
+    "schema_version": {
+      "default": 1,
+      "minimum": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "status": {
+      "default": "proposed",
+      "enum": [
+        "proposed",
+        "active",
+        "answered",
+        "abandoned"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "success_criteria": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Success Criteria",
+      "type": "array"
+    },
+    "supersedes_version": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Supersedes Version"
+    },
+    "trace_id": {
+      "description": "Shared by every record of one scientific loop (orch_<uuid7>).",
+      "title": "Trace Id",
+      "type": "string"
+    },
+    "user_context": {
+      "additionalProperties": true,
+      "title": "User Context",
+      "type": "object"
+    },
+    "version": {
+      "default": 1,
+      "minimum": 1,
+      "title": "Version",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "trace_id",
+    "objective_id",
+    "objective",
+    "question"
+  ],
+  "title": "ScientificObjective",
+  "type": "object"
+}

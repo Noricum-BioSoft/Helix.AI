@@ -1,5 +1,17 @@
 # Helix.AI Worklog
 
+## 2026-10-07 — Platform P0: contracts, IDs, trace, flags, invariants, ORCH-001 skeleton
+
+Plan: `.cursor/plans/noricum-scientific-orchestration-platform.md` (rev 2). Zero behaviour change; all additive.
+
+- `backend/contracts/`: `ids.py` (uuid7 — Python 3.9 has none — `new_id`, `new_trace_id`, `stable_hash` over canonical JSON), `rationale.py` (`RationaleItem`), `base.py` (`TracedModel`: `trace_id`, `schema_version`, `created_at`), `scientific_objective.py`, `scientific_plan.py` (wraps `plan_ir.Plan`; `plan_hash` excludes rationale), `security_assessment.py` (`SecurityOutcome`, `PolicyEnvelope.intersect`, `assessment_hash`), `execution_recommendation.py` (`candidate_set` enforced), `provider_authorization.py`, `execution_intent.py` (frozen; hash over 10 fields), `human_approval.py` (`Principal`, binds to `execution_intent_hash`), `execution_request.py` (`idempotency_key`), `evidence_assessment.py` (Observation has no claims; proposed objective must stay `proposed`), `provenance.py` (agent/prompt-template/code_commit/schema_version), `schema_export.py` → `shared/schemas/contracts/*.json` (14 files, consumed by DataWeaver).
+- `shared/capability_registry.py` (`CapabilityDescriptor`, no `available` field), `backend/execution/providers/base.py` (`ExecutionProvider` Protocol + `idempotency_support`).
+- `backend/config/execution_profile.py` + `profiles/{local-only,aws-dev}.yaml`; `feature_flags.py`; `auth_mode.py` with `assert_auth_mode_allowed()` called from `main.py` startup (production + dev_header → refuse to start).
+- `backend/orchestration/invariants.py`: 12 executable invariants; wired by later phases.
+- `tests/acceptance/test_orch_001_golden_path.py`: 21 skipped steps labelled by phase + one import assertion; marker `orch001` registered.
+- Tests: 46 unit + 1 acceptance, all green. Full unit suite 922 pass / same 5 pre-existing failures (`artifacts/test_results/p0_contracts_2026-10-07.md`).
+- Notes: `ruff` not in `.venv` (compile check only). Schemas copied to `DataWeaver.AI/backend/app/schemas/contracts/` so P5 can start.
+
 ## 2026-10-07 — Repo reorg: business docs moved to `Noricum-BioSoft/business-docs`
 
 - New local layout `~/git/Noricum/{Helix.AI,DataWeaver.AI,BioMarketPlace,outreach,business-docs,teaching}`; `~/git/Helix.AI` is now a symlink to `~/git/Noricum/Helix.AI` so existing shells/workspaces keep working (reopen the workspace at the real path when convenient).

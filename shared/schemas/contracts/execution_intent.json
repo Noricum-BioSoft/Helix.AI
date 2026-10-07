@@ -1,0 +1,119 @@
+{
+  "$id": "https://noricum.bio/schemas/contracts/execution_intent.json",
+  "additionalProperties": false,
+  "properties": {
+    "assessment_hash": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Assessment Hash"
+    },
+    "assessment_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Assessment Id"
+    },
+    "authorization_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Authorization Id"
+    },
+    "capability_id": {
+      "title": "Capability Id",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "execution_intent_hash": {
+      "default": "",
+      "description": "Computed over INTENT_HASH_FIELDS.",
+      "title": "Execution Intent Hash",
+      "type": "string"
+    },
+    "execution_intent_id": {
+      "title": "Execution Intent Id",
+      "type": "string"
+    },
+    "execution_parameters_hash": {
+      "description": "stable_hash over step arguments after reference resolution.",
+      "title": "Execution Parameters Hash",
+      "type": "string"
+    },
+    "input_manifest_hash": {
+      "description": "stable_hash over resolved input URIs + sizes + content hashes where known.",
+      "title": "Input Manifest Hash",
+      "type": "string"
+    },
+    "plan_hash": {
+      "title": "Plan Hash",
+      "type": "string"
+    },
+    "plan_id": {
+      "title": "Plan Id",
+      "type": "string"
+    },
+    "provider_id": {
+      "description": "Registry provider id, or legacy:<Local|EC2|EMR|Batch|Lambda> in Phase 1.",
+      "title": "Provider Id",
+      "type": "string"
+    },
+    "recommendation_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Recommendation Id"
+    },
+    "schema_version": {
+      "default": 1,
+      "minimum": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "trace_id": {
+      "description": "Shared by every record of one scientific loop (orch_<uuid7>).",
+      "title": "Trace Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "trace_id",
+    "execution_intent_id",
+    "plan_id",
+    "plan_hash",
+    "provider_id",
+    "capability_id",
+    "input_manifest_hash",
+    "execution_parameters_hash"
+  ],
+  "title": "ExecutionIntent",
+  "type": "object"
+}

@@ -7492,6 +7492,11 @@ async def api_docs_info(request: Request):
 async def startup_event():
     """Initialize heavy components after server starts."""
 
+    # Fail closed: HELIX_ENV=production must not run with the dev-header identity mode.
+    from backend.config.auth_mode import assert_auth_mode_allowed, auth_mode, environment
+    assert_auth_mode_allowed()
+    logger.info("  HELIX_ENV=%s  HELIX_AUTH_MODE=%s", environment(), auth_mode())
+
     # Log EC2 / AWS config at startup so operators can confirm env is wired correctly
     logger.info("Backend startup — dotenv: %s", _dotenv_path or "NOT FOUND")
     logger.info("  AWS_REGION=%s  HELIX_USE_EC2=%s  HELIX_EC2_AUTO_CREATE=%s",
