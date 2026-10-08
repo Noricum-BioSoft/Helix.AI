@@ -90,6 +90,7 @@ def test_stage_plan_writes_objective_plan_intent_with_one_trace(ledger):
     by_trace = ledger.records_by_trace("s1", staged.trace_id)
     assert {k: len(v) for k, v in by_trace.items()} == {
         "objectives": 1, "plans": 1, "assessments": 1, "security_reviews": 0, "intents": 1, "approvals": 0,
+        "execution_requests": 0, "execution_runs": 0,
     }
     plan_file = ledger.storage_dir / "s1" / "platform" / "plans" / f"{staged.plan.plan_id}.v1.json"
     assert plan_file.exists()

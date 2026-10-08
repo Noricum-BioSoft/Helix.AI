@@ -102,6 +102,7 @@ def test_staging_persists_records_sharing_one_trace(client, ledger):
     by_trace = ledger.records_by_trace(sid, staged["trace_id"])
     assert {k: len(v) for k, v in by_trace.items()} == {
         "objectives": 1, "plans": 1, "assessments": 1, "security_reviews": 0, "intents": 1, "approvals": 0,
+        "execution_requests": 0, "execution_runs": 0,
     }
     assert by_trace["intents"][0].execution_intent_hash == staged["execution_intent_hash"]
     assert by_trace["plans"][0].plan_hash == staged["plan_hash"]

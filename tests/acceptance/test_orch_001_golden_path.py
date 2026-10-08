@@ -178,12 +178,110 @@ def test_orch_001_denied_state_blocks_intent(tmp_path, monkeypatch):
         build_intent_for(staged.plan, staged.assessment, None)
 
 
+# ── Execution fabric (P3A): capability → provider → execution → result ───────
+
+
+def _p3a_fabric(ledger, profile_name: str, *, runner=None):
+    from backend.config.execution_profile import load_execution_profile
+    from backend.execution.fabric import ExecutionFabric
+    from backend.execution.providers.factory import build_providers
+    from backend.execution.providers.local_compute import LocalComputeProvider
+    from backend.execution.registry import CapabilityRegistry
+
+    profile = load_execution_profile(profile_name, check_adapters=False)
+    registry = CapabilityRegistry.from_config(profile)
+    overrides = {}
+    if runner is not None:
+        overrides["local_compute"] = LocalComputeProvider(
+            [d for d in registry.all() if d.provider == "local_compute"], {}, tool_runner=runner
+        )
+    providers = build_providers(profile, registry, **overrides)
+    return registry, ExecutionFabric(registry, providers, ledger)
+
+
+def _p3a_request(intent, approval):
+    from backend.contracts.execution_request import ExecutionRequest, make_idempotency_key
+    from backend.contracts.ids import new_id
+
+    return ExecutionRequest(
+        execution_request_id=new_id(), trace_id=intent.trace_id,
+        execution_intent_id=intent.execution_intent_id, execution_intent_hash=intent.execution_intent_hash,
+        approval_id=(approval.approval_id if approval else None),
+        idempotency_key=make_idempotency_key(intent.execution_intent_hash),
+        provider_id=intent.provider_id, capability_id=intent.capability_id,
+    )
+
+
+def _p3a_approval(intent, plan):
+    from backend.contracts.human_approval import HumanApproval, Principal
+    from backend.contracts.ids import new_id
+
+    principal = Principal(subject_id="rev", identity_provider="dev_header", auth_method="header", roles=["approver"])
+    return HumanApproval(
+        approval_id=new_id(), trace_id=intent.trace_id, execution_intent_id=intent.execution_intent_id,
+        execution_intent_hash=intent.execution_intent_hash, plan_id=plan.plan_id, plan_hash=plan.plan_hash,
+        decision="approved", principal=principal,
+    )
+
+
+def test_orch_001_capability_resolved_from_registry(loop):
+    _, fabric = _p3a_fabric(loop["ledger"], "local-only")
+    cap_id = loop["staged"].intent.capability_id
+    assert cap_id == "local_compute:bulk_rnaseq_analysis"
+    assert fabric.registry.get(cap_id) is not None
+    assert fabric.registry.resolve_alias("bulk_rnaseq_analysis") == cap_id
+
+
+def test_orch_001_provider_executes_local(loop):
+    staged = loop["staged"]
+    approval = _p3a_approval(staged.intent, staged.plan)
+    _, fabric = _p3a_fabric(loop["ledger"], "local-only", runner=lambda t, a: {"status": "success", "text": "ok"})
+    run = fabric.run(loop["sid"], staged.intent, approval, _p3a_request(staged.intent, approval))
+    assert run.status == "succeeded" and run.trace_id == staged.intent.trace_id
+
+
+def test_orch_001_provider_executes_mock_experimental_with_approval(tmp_path, monkeypatch):
+    monkeypatch.setenv("HELIX_MOCK_MODE", "1")
+    from backend.contracts.ids import new_trace_id
+    from backend.orchestration.intent_builder import build_intent
+    from backend.orchestration.ledger import LocalLedger
+    from backend.orchestration.objective_builder import build_objective_deterministic
+    from backend.orchestration.plan_staging import build_scientific_plan
+
+    ledger = LocalLedger(tmp_path)
+    trace = new_trace_id()
+    cmd = "Express the protein construct"
+    objective = build_objective_deterministic(cmd, {"session_id": "lab"}, None, trace_id=trace)
+    plan = build_scientific_plan(
+        {"version": "v1", "steps": [{"id": "s1", "action_type": "run_analysis", "tool_name": "protein_expression", "arguments": {"construct": "pX-1"}}]},
+        objective, cmd,
+    )
+    intent = build_intent(plan, None, capability_id="mock_experimental:protein_expression")
+    approval = _p3a_approval(intent, plan)
+    _, fabric = _p3a_fabric(ledger, "local-only")
+    run = fabric.run("lab", intent, approval, _p3a_request(intent, approval))
+    assert run.status == "succeeded"
+    assert run.outputs and run.outputs[0].uri.startswith("mock://")
+
+
+def test_orch_001_retry_after_timeout_creates_no_duplicate(loop):
+    staged = loop["staged"]
+    approval = _p3a_approval(staged.intent, staged.plan)
+    calls = {"n": 0}
+
+    def runner(tool, args):
+        calls["n"] += 1
+        return {"status": "success", "text": "ok"}
+
+    _, fabric = _p3a_fabric(loop["ledger"], "local-only", runner=runner)
+    req = _p3a_request(staged.intent, approval)
+    run1 = fabric.run(loop["sid"], staged.intent, approval, req)
+    run2 = fabric.run(loop["sid"], staged.intent, approval, req.model_copy(update={"execution_request_id": "req-2"}))
+    assert run1.execution_run_id == run2.execution_run_id and calls["n"] == 1
+
+
 # ── Steps and the phase that un-skips them. Keep this list in sync with the plan.
 STEPS = [
-    ("capability_resolved_from_registry", "P3A"),
-    ("provider_executes_local", "P3A"),
-    ("provider_executes_mock_experimental_with_approval", "P3A"),
-    ("retry_after_timeout_creates_no_duplicate", "P3A"),
     ("recommendation_with_candidate_set", "P4"),
     ("provider_authorization_against_envelope", "P4"),
     ("intent_provider_in_candidate_set", "P4"),

@@ -56,6 +56,7 @@ def test_all_records_of_a_loop_share_the_trace(ledger):
     by_trace = ledger.records_by_trace("s1", staged.trace_id)
     assert {k: len(v) for k, v in by_trace.items()} == {
         "objectives": 1, "plans": 1, "assessments": 1, "security_reviews": 0, "intents": 1, "approvals": 1,
+        "execution_requests": 0, "execution_runs": 0,
     }
     assert outcome.checkpoint.trace_id == staged.trace_id
     assert outcome.checkpoint.state == WorkflowState.READY_TO_EXECUTE

@@ -1,0 +1,96 @@
+## Nextflow pipeline capabilities — hand-written from HELIX_TO_PIPELINE plus
+## nf-core/rnaseq. The executor/queue/workdir come from the execution profile
+## (ProviderConfig), not from here. Capabilities are vendor-published facts.
+##
+## Adapter: backend.execution.providers.nextflow:NextflowProvider
+## Idempotency: client_dedup, keyed on `-name {idempotency_key[:12]}` + ledger.
+capabilities:
+  - provider: nextflow
+    capability_id: nextflow:nf-core/rnaseq
+    category: computational
+    description: nf-core/rnaseq — bulk RNA-seq quantification and QC.
+    tool_name_aliases: [bulk_rnaseq_analysis]
+    inputs:
+      - name: samplesheet
+        type: file-path
+        format: csv
+        required: true
+      - name: genome
+        type: string
+        required: false
+    outputs:
+      - name: results
+        type: directory-path
+    supported_systems: [bulk_rnaseq]
+    cost:
+      model: per_vcpu_hour
+      unit_usd_range: [0.0, 0.5]
+    turnaround:
+      estimated_minutes: 120
+    integration:
+      adapter: backend.execution.providers.nextflow:NextflowProvider
+      execution_mode: async
+      idempotency_support: client_dedup
+    provenance:
+      source: manual
+      pinned_release:
+        pipeline: nf-core/rnaseq
+        revision: "3.14.0"
+
+  - provider: nextflow
+    capability_id: nextflow:nf-core/sarek
+    category: computational
+    description: nf-core/sarek — germline/somatic variant calling.
+    tool_name_aliases: [variant_calling]
+    inputs:
+      - name: samplesheet
+        type: file-path
+        format: csv
+        required: true
+    outputs:
+      - name: results
+        type: directory-path
+    supported_systems: [variant_calling]
+    cost:
+      model: per_vcpu_hour
+      unit_usd_range: [0.0, 0.8]
+    turnaround:
+      estimated_minutes: 240
+    integration:
+      adapter: backend.execution.providers.nextflow:NextflowProvider
+      execution_mode: async
+      idempotency_support: client_dedup
+    provenance:
+      source: manual
+      pinned_release:
+        pipeline: nf-core/sarek
+        revision: "3.4.0"
+
+  - provider: nextflow
+    capability_id: nextflow:nf-core/ampliseq
+    category: computational
+    description: nf-core/ampliseq — 16S amplicon metagenomics.
+    tool_name_aliases: [metagenomics_16s]
+    inputs:
+      - name: samplesheet
+        type: file-path
+        format: csv
+        required: true
+    outputs:
+      - name: results
+        type: directory-path
+    supported_systems: [metagenomics_16s]
+    cost:
+      model: per_vcpu_hour
+      unit_usd_range: [0.0, 0.6]
+    turnaround:
+      estimated_minutes: 180
+    integration:
+      adapter: backend.execution.providers.nextflow:NextflowProvider
+      execution_mode: async
+      idempotency_support: client_dedup
+    provenance:
+      source: manual
+      pinned_release:
+        pipeline: nf-core/ampliseq
+        revision: "2.9.0"

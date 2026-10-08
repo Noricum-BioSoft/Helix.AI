@@ -27,6 +27,7 @@ from typing import Dict, Iterator, List, Optional, Type, TypeVar
 from pydantic import BaseModel
 
 from backend.contracts.execution_intent import ExecutionIntent
+from backend.contracts.execution_request import ExecutionRequest, ExecutionRun
 from backend.contracts.human_approval import HumanApproval
 from backend.contracts.scientific_objective import ScientificObjective
 from backend.contracts.scientific_plan import ScientificPlan
@@ -42,6 +43,8 @@ KIND_INTENT = "intents"
 KIND_APPROVAL = "approvals"
 KIND_ASSESSMENT = "assessments"
 KIND_REVIEW = "security_reviews"
+KIND_REQUEST = "execution_requests"
+KIND_RUN = "execution_runs"
 AUDIT_FILE = "audit/events.jsonl"
 
 RECORD_KINDS = (
@@ -51,6 +54,8 @@ RECORD_KINDS = (
     (KIND_REVIEW, SecurityReview),
     (KIND_INTENT, ExecutionIntent),
     (KIND_APPROVAL, HumanApproval),
+    (KIND_REQUEST, ExecutionRequest),
+    (KIND_RUN, ExecutionRun),
 )
 
 
@@ -166,6 +171,37 @@ class LocalLedger:
 
     def reviews_for_assessment(self, session_id: str, assessment_id: str) -> List[SecurityReview]:
         return [r for r in self._iter(session_id, KIND_REVIEW, SecurityReview) if r.assessment_id == assessment_id]
+
+    # ── execution requests / runs (P3A) ──────────────────────────────────────
+
+    def record_request(self, session_id: str, request: ExecutionRequest) -> Path:
+        """Persist an ExecutionRequest. Immutable once written (idempotency anchor)."""
+        existing = self.load_request(session_id, request.execution_request_id)
+        if existing is not None and existing.idempotency_key != request.idempotency_key:
+            raise LedgerError(f"ExecutionRequest {request.execution_request_id} is immutable; refusing to overwrite")
+        return self._write(session_id, KIND_REQUEST, request.execution_request_id, None, request)
+
+    def load_request(self, session_id: str, execution_request_id: str) -> Optional[ExecutionRequest]:
+        return self._read(session_id, KIND_REQUEST, execution_request_id, None, ExecutionRequest)
+
+    def request_by_idempotency_key(self, session_id: str, idempotency_key: str) -> Optional[ExecutionRequest]:
+        """The existing submission for a key, if any — the heart of fail-safe retries."""
+        for req in self._iter(session_id, KIND_REQUEST, ExecutionRequest):
+            if req.idempotency_key == idempotency_key:
+                return req
+        return None
+
+    def record_run(self, session_id: str, run: ExecutionRun) -> Path:
+        return self._write(session_id, KIND_RUN, run.execution_run_id, None, run)
+
+    def load_run(self, session_id: str, execution_run_id: str) -> Optional[ExecutionRun]:
+        return self._read(session_id, KIND_RUN, execution_run_id, None, ExecutionRun)
+
+    def run_for_request(self, session_id: str, execution_request_id: str) -> Optional[ExecutionRun]:
+        for run in self._iter(session_id, KIND_RUN, ExecutionRun):
+            if run.execution_request_id == execution_request_id:
+                return run
+        return None
 
     # ── audit events (append-only JSONL, one line per event) ─────────────────
 

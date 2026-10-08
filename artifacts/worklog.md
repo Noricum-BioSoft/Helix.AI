@@ -1142,3 +1142,45 @@ Verification: `tests/unit` → 1013 passed, 1 skipped, 5 pre-existing failures
 denied_state_blocks_intent). Schemas exported and mirrored to DataWeaver. New
 benchmark case `benchmarks/cases/routing_safety/security-gate-no-bypass.yaml`.
 Details: `artifacts/test_results/p2_secure_science_2026-10-08.md`.
+
+## 2026-10-08 — P3A Execution Fabric core (flag `HELIX_EXECUTION_FABRIC_V1`, default off)
+
+Added the vendor-neutral execution path: capability → compatible providers →
+selected provider → approved execution → result. Three layers kept separate —
+capability descriptors (static YAML under `backend/config/capabilities/`),
+execution profile (`backend/config/profiles/local-only.yaml`: which providers
+this deployment enables), and runtime health.
+
+New modules: `backend/execution/registry.py` (`CapabilityRegistry` —
+profile-enabled + healthy filtering, deterministic alias resolution),
+`backend/execution/providers/` (base/common + `LocalComputeProvider`,
+`NextflowProvider`, `MockExperimentalProvider`, `LegacyBrokerProvider` + factory),
+`backend/execution/fabric.py` (`ExecutionFabric.run` — invariants, request
+persisted before the provider call, idempotency re-attach via the ledger, no
+blind retry after `ProviderTimeout`), `backend/execution/integration.py`
+(`try_fabric_execution` seam), `backend/api/capabilities.py` (`GET /capabilities`
+catalog). Ledger gained `execution_requests` / `execution_runs` record kinds.
+
+The broker calls `try_fabric_execution` first; it returns `None` (legacy path
+untouched) unless the flag is on and the session has an approved,
+`READY_TO_EXECUTE` intent whose capability matches the tool. `local-only` kept as
+its committed contract (local_compute + nextflow + mock_experimental_provider,
+no cloud); experimental is gated at runtime by the approval invariant, not by the
+profile. `LocalComputeProvider` drives `backend.main.dispatch_tool` directly (not
+the broker) — no recursion.
+
+Intentional, documented test updates: three trace-propagation tests enumerate
+the full ledger record-kind set, so their expected maps now include the two new
+kinds (both 0 pre-execution).
+
+Verification: `tests/unit` → 1037 passed, 1 skipped, 5 pre-existing failures
+(unchanged). New suites under `tests/unit/backend/execution/` (registry 5,
+conformance 8, fabric 7, broker-delegation 4, capabilities-endpoint 4). ORCH-001:
+4 P3A steps un-skipped (capability_resolved_from_registry, provider_executes_local,
+provider_executes_mock_experimental_with_approval, retry_after_timeout_creates_no_duplicate)
+→ 11 passed / 11 skipped. Flag on/off broker parity: 39 passed each. Schemas up
+to date. Deferred: real Nextflow wiring + `one_real_computational_backend`
+(P3B/P3A-nextflow); data providers enabled in a profile + cloud adapters (P4).
+Details: `artifacts/test_results/p3a_execution_fabric_2026-10-08.md`.
+
+- Autoloop stopped after max iterations: blockers: [{'id': 'working-tree-dirty', 'severity': 'high', 'description': 'Slices A–F changes are uncommitted. Must commit and push to origin/main before running update-from-git.sh on EC2.', 'resolution': "git add -A && git commit -m '...' && git push origin main"}, {'id': 'rscript-skip', 'severity': 'low', 'description': '1 unit test (single_cell R-based) skipped because Rscript runtime not installed. Pre-existing.', 'resolution': 'Install R runtime in CI/CD (no impact on Python-only release path).'}, {'id': 'router-quality-regressions-may4', 'severity': 'low', 'description': '6/79 router evals regressed on 2026-05-04 (plasmid/directed-evolution, quality_assessment shadowing). Eval pass rate 92.4% still meets 90% threshold.', 'resolution': 'Tighten LLM router disambiguation prompt for plasmid vs mutate_sequence. Follow-up before GA.'}]

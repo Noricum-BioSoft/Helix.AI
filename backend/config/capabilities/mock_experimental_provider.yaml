@@ -1,0 +1,58 @@
+## Mock experimental provider — an in-memory "wet lab" used to prove the
+## experimental execution path (approval-gated, screening-aware) without any
+## real instrument. Every run is synthetic and flagged provider="mock".
+##
+## Adapter: backend.execution.providers.mock_experimental:MockExperimentalProvider
+## Idempotency: native — the same idempotency_key returns the same fake run.
+capabilities:
+  - provider: mock_experimental_provider
+    capability_id: mock_experimental:protein_expression
+    category: experimental
+    description: Synthetic protein-expression assay (mock lab).
+    tool_name_aliases: [protein_expression]
+    inputs:
+      - name: construct
+        type: string
+        required: true
+    outputs:
+      - name: measurements
+        type: table
+    cost:
+      model: per_sample
+      unit_usd_range: [50.0, 200.0]
+    turnaround:
+      estimated_days: 10
+    integration:
+      adapter: backend.execution.providers.mock_experimental:MockExperimentalProvider
+      execution_mode: async
+      idempotency_support: native
+    security:
+      human_approval_required: true
+      screening_required: true
+      data_classes_allowed: [public, internal]
+
+  - provider: mock_experimental_provider
+    capability_id: mock_experimental:activity_assay
+    category: experimental
+    description: Synthetic enzyme activity assay (mock lab).
+    tool_name_aliases: [activity_assay]
+    inputs:
+      - name: sample
+        type: string
+        required: true
+    outputs:
+      - name: measurements
+        type: table
+    cost:
+      model: per_sample
+      unit_usd_range: [40.0, 150.0]
+    turnaround:
+      estimated_days: 7
+    integration:
+      adapter: backend.execution.providers.mock_experimental:MockExperimentalProvider
+      execution_mode: async
+      idempotency_support: native
+    security:
+      human_approval_required: true
+      screening_required: true
+      data_classes_allowed: [public, internal]

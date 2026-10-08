@@ -20,7 +20,7 @@ todos:
     status: completed
   - id: p3a-fabric-core
     content: "P3A (Helix): CapabilityDescriptor + static registry + execution profiles + provider factory + Local/Nextflow/MockExperimental providers + ExecutionFabric + conformance suite + broker compat"
-    status: pending
+    status: completed
   - id: p4-recommender-authz
     content: "P4 (Helix): Execution Recommender over registry + provider-specific authorization against the PolicyEnvelope"
     status: pending

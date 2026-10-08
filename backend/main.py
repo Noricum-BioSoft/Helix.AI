@@ -547,9 +547,11 @@ app.add_middleware(
 # Platform routers (Phase 1+). Endpoints themselves 404 unless their feature flag is on.
 from backend.api.approvals import router as _approvals_router  # noqa: E402
 from backend.api.security import router as _security_router  # noqa: E402
+from backend.api.capabilities import router as _capabilities_router  # noqa: E402
 
 app.include_router(_approvals_router)
 app.include_router(_security_router)
+app.include_router(_capabilities_router)
 
 
 def _platform_principal(request: Optional["Request"]):

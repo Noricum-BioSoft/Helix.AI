@@ -84,6 +84,18 @@ class ExecutionBroker:
         self._tool_executor = tool_executor
 
     async def execute_tool(self, req: ExecutionRequest) -> Dict[str, Any]:
+        # Phase 3A: delegate to the Execution Fabric when it is enabled and a
+        # matching approved intent is staged. Fallback-safe: returns None (and we
+        # keep the legacy path) with the flag off or when no platform intent applies.
+        try:
+            from backend.execution.integration import try_fabric_execution
+
+            _fabric_result = try_fabric_execution(req.tool_name, req.arguments or {}, req.session_context)
+            if _fabric_result is not None:
+                return _fabric_result
+        except Exception:
+            pass
+
         # Known unsupported tools: return clear message with alternatives (no execution)
         if req.tool_name == "unsupported_tool":
             from backend.unsupported_tools import get_unsupported_response
