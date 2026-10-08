@@ -153,6 +153,8 @@ class AgentRole(str, Enum):
 
     # Phase 1: the human approval gate sits between Infra/CodeGen and the Broker.
     HUMAN_APPROVAL = "HumanApproval"
+    # Phase 2: the Secure Science pre-routing assessment sits between Planner and Infra.
+    SECURITY_ASSESSOR = "SecurityAssessor"
 
 
 class HandoffPolicy:
@@ -185,8 +187,12 @@ class HandoffPolicy:
         # Guru (ask path) can only answer or escalate to Planner with user consent
         AgentRole.GURU: [AgentRole.PLANNER],  # Escalation requires user consent (checked separately)
         
-        # Planner (execute path) must go to Infra next
-        AgentRole.PLANNER: [AgentRole.INFRA],
+        # Planner (execute path) goes to the SecurityAssessor (Phase 2) or, when the
+        # science gate is off, straight to Infra. See validate_handoff(security_gate=...).
+        AgentRole.PLANNER: [AgentRole.SECURITY_ASSESSOR, AgentRole.INFRA],
+
+        # SecurityAssessor must go to Infra (DENY / REQUIRE_REVIEW end the sequence instead)
+        AgentRole.SECURITY_ASSESSOR: [AgentRole.INFRA],
         
         # Infra must go to CodeGen, HumanApproval or Broker. Infra → Broker directly is
         # legal only when no approval is required (read-only tools); see validate_handoff.
@@ -210,6 +216,11 @@ class HandoffPolicy:
         (AgentRole.INFRA, AgentRole.BROKER),
         (AgentRole.CODEGEN, AgentRole.BROKER),
     }
+
+    # Handoffs that skip the Secure Science assessment; illegal when the science gate is on.
+    SECURITY_BYPASS_HANDOFFS = {
+        (AgentRole.PLANNER, AgentRole.INFRA),
+    }
     
     # Intent-based routing rules
     INTENT_ROUTING = {
@@ -224,6 +235,7 @@ class HandoffPolicy:
         to_agent: AgentRole,
         user_consent: bool = False,
         approval_required: bool = False,
+        security_gate: bool = False,
     ) -> None:
         """
         Validate that a handoff from one agent to another is allowed.
@@ -235,6 +247,8 @@ class HandoffPolicy:
             approval_required: Whether the approval policy requires a human approval for
                 this action. When True, Infra/CodeGen → Broker must pass through
                 HumanApproval (Phase 1.5).
+            security_gate: Whether the Secure Science gate is on. When True,
+                Planner → Infra must pass through SecurityAssessor (Phase 2).
         
         Raises:
             PolicyViolationError: If the handoff is not allowed
@@ -258,6 +272,13 @@ class HandoffPolicy:
             raise PolicyViolationError(
                 f"Illegal handoff: {from_agent.value} → {to_agent.value} bypasses HumanApproval "
                 f"but the approval policy requires one"
+            )
+
+        # Phase 2: with the science gate on, Infra may only be reached via SecurityAssessor.
+        if security_gate and (from_agent, to_agent) in self.SECURITY_BYPASS_HANDOFFS:
+            raise PolicyViolationError(
+                f"Illegal handoff: {from_agent.value} → {to_agent.value} bypasses SecurityAssessor "
+                f"but the Secure Science gate is on"
             )
     
     def get_allowed_next_agents(self, from_agent: AgentRole) -> List[AgentRole]:
@@ -298,6 +319,7 @@ class HandoffPolicy:
         agent_sequence: List[AgentRole],
         intent: str,
         approval_required: bool = False,
+        security_gate: bool = False,
     ) -> None:
         """
         Validate that a complete workflow sequence follows the policy.
@@ -331,7 +353,7 @@ class HandoffPolicy:
         for i in range(len(agent_sequence) - 1):
             from_agent = agent_sequence[i]
             to_agent = agent_sequence[i + 1]
-            self.validate_handoff(from_agent, to_agent, approval_required=approval_required)
+            self.validate_handoff(from_agent, to_agent, approval_required=approval_required, security_gate=security_gate)
 
 
 class PolicyViolationError(Exception):

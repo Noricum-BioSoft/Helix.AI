@@ -82,12 +82,15 @@ def test_stage_plan_writes_objective_plan_intent_with_one_trace(ledger):
     assert staged.objective.trace_id == staged.plan.trace_id == staged.intent.trace_id
     assert staged.plan.objective_id == staged.objective.objective_id
     assert staged.intent.plan_hash == staged.plan.plan_hash
-    assert staged.plan.version == 1 and staged.plan.status == "draft"
+    assert staged.plan.version == 1 and staged.plan.status == "assessed"  # P2: assessed before intent
+    assert staged.assessment is not None and staged.assessment.plan_hash == staged.plan.plan_hash
     assert staged.intent.provider_id == "legacy:Local"
     assert staged.intent.capability_id == "local_compute:fastqc_quality_analysis"
 
     by_trace = ledger.records_by_trace("s1", staged.trace_id)
-    assert {k: len(v) for k, v in by_trace.items()} == {"objectives": 1, "plans": 1, "intents": 1, "approvals": 0}
+    assert {k: len(v) for k, v in by_trace.items()} == {
+        "objectives": 1, "plans": 1, "assessments": 1, "security_reviews": 0, "intents": 1, "approvals": 0,
+    }
     plan_file = ledger.storage_dir / "s1" / "platform" / "plans" / f"{staged.plan.plan_id}.v1.json"
     assert plan_file.exists()
     on_disk = json.loads(plan_file.read_text())

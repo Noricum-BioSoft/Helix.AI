@@ -1,0 +1,47 @@
+# Data sensitivity — derived from upload intake results
+# (backend/orchestration/upload_intake_policy.py: sensitivity_class, scan_flags,
+# policy_state). Encodes docs/SAFETY_POLICY.md "Human Data and Privacy".
+policy_id: data_sensitivity
+version: "2026.10"
+
+# intake sensitivity_class → platform data class (contracts.security_assessment.DataClass)
+sensitivity_to_data_class:
+  internal: internal
+  public: public
+  restricted_human_data: phi
+
+# Per data class: envelope contribution and base outcome.
+data_class_policy:
+  public:
+    outcome: ALLOW
+    envelope:
+      allowed_data_classes: [public, internal, sensitive, phi, restricted]
+  internal:
+    outcome: ALLOW
+    envelope:
+      allowed_data_classes: [public, internal, sensitive, phi, restricted]
+  sensitive:
+    outcome: ALLOW_WITH_APPROVAL
+    envelope:
+      allowed_data_classes: [sensitive, phi, restricted]
+      external_execution_allowed: false
+      human_approval_required: true
+  phi:
+    outcome: ALLOW_WITH_APPROVAL
+    envelope:
+      allowed_data_classes: [phi, restricted]
+      external_execution_allowed: false
+      human_approval_required: true
+      allowed_regions: [us]
+  restricted:
+    outcome: REQUIRE_REVIEW
+    envelope:
+      allowed_data_classes: [restricted]
+      external_execution_allowed: false
+      human_approval_required: true
+
+# Scan flags that deny outright (the upload path already blocks these; this is defence in depth).
+deny_scan_flags: [blocked_content_type, suspicious_payload_pattern]
+
+# Upload policy_state values that still need a human before execution.
+pending_policy_states: [approval_required]

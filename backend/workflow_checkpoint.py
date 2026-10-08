@@ -15,6 +15,10 @@ EXECUTING               – Pipeline is running.
 FAILED                  – Last step failed; recovery options available.
 FAILED_WAITING_FOR_USER – Failure recovery needs user guidance before retrying.
 COMPLETED               – Workflow finished successfully.
+WAITING_FOR_SECURITY_REVIEW – (Phase 2) Secure Science assessment requires a human reviewer
+                          before an execution intent may be built.
+DENIED                  – (Phase 2) Secure Science assessment denied the plan; terminal for this
+                          plan, can never transition to READY_TO_EXECUTE / EXECUTING.
 """
 
 from __future__ import annotations
@@ -37,6 +41,8 @@ class WorkflowState(str, Enum):
     FAILED = "FAILED"
     FAILED_WAITING_FOR_USER = "FAILED_WAITING_FOR_USER"
     COMPLETED = "COMPLETED"
+    WAITING_FOR_SECURITY_REVIEW = "WAITING_FOR_SECURITY_REVIEW"
+    DENIED = "DENIED"
 
 
 # States where the system is actively waiting for the user to act.
@@ -45,6 +51,7 @@ WAITING_STATES = {
     WorkflowState.WAITING_FOR_INPUTS,
     WorkflowState.WAITING_FOR_APPROVAL,
     WorkflowState.FAILED_WAITING_FOR_USER,
+    WorkflowState.WAITING_FOR_SECURITY_REVIEW,
 }
 
 # States that block a new independent workflow from starting.
@@ -84,6 +91,8 @@ class WorkflowCheckpoint:
     pending_execution_intent_id: Optional[str] = None
     pending_execution_intent_hash: Optional[str] = None
     approval_id: Optional[str] = None
+    assessment_id: Optional[str] = None          # Phase 2
+    security_outcome: Optional[str] = None       # Phase 2: ALLOW | ALLOW_WITH_APPROVAL | REQUIRE_REVIEW | DENY
 
     # Timestamps (unix seconds)
     created_at: float = field(default_factory=time.time)
@@ -97,11 +106,19 @@ class WorkflowCheckpoint:
         "pending_execution_intent_id",
         "pending_execution_intent_hash",
         "approval_id",
+        "assessment_id",
+        "security_outcome",
     )
 
     def transition(self, new_state: WorkflowState) -> "WorkflowCheckpoint":
-        """Return a new checkpoint with state updated and timestamp bumped."""
+        """Return a new checkpoint with state updated and timestamp bumped.
+
+        Raises ``InvariantViolation`` for DENIED → READY_TO_EXECUTE / EXECUTING (Phase 2 invariant).
+        """
         import copy
+        from backend.orchestration.invariants import check_state_transition_allowed
+
+        check_state_transition_allowed(self.state.value, new_state.value)
         cp = copy.copy(self)
         cp.state = new_state
         cp.updated_at = time.time()
@@ -226,6 +243,23 @@ class WorkflowCheckpoint:
             pending_plan=pending_plan,
             resume_node="failure_recovery",
         )
+
+    @classmethod
+    def waiting_for_security_review(
+        cls,
+        pending_plan: Dict[str, Any],
+        *,
+        resume_node: str = "security_review",
+    ) -> "WorkflowCheckpoint":
+        return cls(
+            state=WorkflowState.WAITING_FOR_SECURITY_REVIEW,
+            pending_plan=pending_plan,
+            resume_node=resume_node,
+        )
+
+    @classmethod
+    def denied(cls, pending_plan: Optional[Dict[str, Any]] = None) -> "WorkflowCheckpoint":
+        return cls(state=WorkflowState.DENIED, pending_plan=pending_plan, resume_node=None)
 
     @classmethod
     def executing(cls, run_id: str, current_step: str = "step1") -> "WorkflowCheckpoint":

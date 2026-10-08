@@ -1,0 +1,72 @@
+# Dual-use triage — keyword/entity routing to MANUAL REVIEW.
+#
+# This is conservative routing, not a biological-risk classifier and not a
+# substitute for specialised screening. A match means "a human looks at it";
+# it never means "unsafe", and no match never means "safe". Categories follow
+# docs/SAFETY_POLICY.md "Dual-Use and Biosafety".
+policy_id: dual_use_triage
+version: "2026.10"
+
+# Outcome on any match. Only REQUIRE_REVIEW is permitted here (enforced in code).
+outcome_on_match: REQUIRE_REVIEW
+
+categories:
+  pathogen_enhancement:
+    terms:
+      - gain of function
+      - gain-of-function
+      - increase virulence
+      - enhance virulence
+      - increase transmissibility
+      - enhance transmissibility
+      - immune evasion
+      - evade immune
+      - escape neutralizing
+      - antibiotic resistance engineering
+  bioweapon_development:
+    terms:
+      - weaponiz
+      - weaponis
+      - aerosoliz
+      - aerosolis
+      - bioweapon
+      - biological weapon
+      - mass production of pathogen
+      - evade detection
+  select_agents_and_toxins:
+    terms:
+      - botulinum
+      - ricin
+      - variola
+      - smallpox
+      - anthrax
+      - bacillus anthracis
+      - yersinia pestis
+      - ebola
+      - marburg
+      - 1918 influenza
+      - h5n1 reassort
+  human_germline:
+    terms:
+      - germline edit
+      - heritable genome edit
+      - embryo edit
+      - heritable modification
+      - eugenic
+  environmental_release:
+    terms:
+      - gene drive
+      - uncontained release
+      - invasive species engineering
+      - bypass containment
+
+# Terms that indicate ordinary defensive/clinical context. They do NOT cancel a
+# match (that would be a safety judgement); they are recorded as evidence for the reviewer.
+context_terms:
+  - vaccine
+  - surveillance
+  - diagnostic
+  - therapeutic
+  - biosafety
+  - irb
+  - ibc

@@ -17,7 +17,7 @@ todos:
     status: completed
   - id: p2-security-assessment
     content: "P2 (Helix): Secure Science pre-routing assessment → PolicyEnvelope; DualUseTriageCheck; new checkpoint states"
-    status: pending
+    status: completed
   - id: p3a-fabric-core
     content: "P3A (Helix): CapabilityDescriptor + static registry + execution profiles + provider factory + Local/Nextflow/MockExperimental providers + ExecutionFabric + conformance suite + broker compat"
     status: pending

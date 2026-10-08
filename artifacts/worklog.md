@@ -1103,3 +1103,42 @@ Content: the 13-gene T cell checkpoint DE table from `_DEMO_DE_CSV` in demo_e2e_
 - Autoloop stopped after max iterations: blockers: [{'id': 'working-tree-dirty', 'severity': 'high', 'description': 'Slices A–F changes are uncommitted. Must commit and push to origin/main before running update-from-git.sh on EC2.', 'resolution': "git add -A && git commit -m '...' && git push origin main"}, {'id': 'rscript-skip', 'severity': 'low', 'description': '1 unit test (single_cell R-based) skipped because Rscript runtime not installed. Pre-existing.', 'resolution': 'Install R runtime in CI/CD (no impact on Python-only release path).'}, {'id': 'router-quality-regressions-may4', 'severity': 'low', 'description': '6/79 router evals regressed on 2026-05-04 (plasmid/directed-evolution, quality_assessment shadowing). Eval pass rate 92.4% still meets 90% threshold.', 'resolution': 'Tighten LLM router disambiguation prompt for plasmid vs mutate_sequence. Follow-up before GA.'}]
 - Autoloop stopped after max iterations: blockers: [{'id': 'working-tree-dirty', 'severity': 'high', 'description': 'Slices A–F changes are uncommitted. Must commit and push to origin/main before running update-from-git.sh on EC2.', 'resolution': "git add -A && git commit -m '...' && git push origin main"}, {'id': 'rscript-skip', 'severity': 'low', 'description': '1 unit test (single_cell R-based) skipped because Rscript runtime not installed. Pre-existing.', 'resolution': 'Install R runtime in CI/CD (no impact on Python-only release path).'}, {'id': 'router-quality-regressions-may4', 'severity': 'low', 'description': '6/79 router evals regressed on 2026-05-04 (plasmid/directed-evolution, quality_assessment shadowing). Eval pass rate 92.4% still meets 90% threshold.', 'resolution': 'Tighten LLM router disambiguation prompt for plasmid vs mutate_sequence. Follow-up before GA.'}]
 - Autoloop stopped after max iterations: blockers: [{'id': 'working-tree-dirty', 'severity': 'high', 'description': 'Slices A–F changes are uncommitted. Must commit and push to origin/main before running update-from-git.sh on EC2.', 'resolution': "git add -A && git commit -m '...' && git push origin main"}, {'id': 'rscript-skip', 'severity': 'low', 'description': '1 unit test (single_cell R-based) skipped because Rscript runtime not installed. Pre-existing.', 'resolution': 'Install R runtime in CI/CD (no impact on Python-only release path).'}, {'id': 'router-quality-regressions-may4', 'severity': 'low', 'description': '6/79 router evals regressed on 2026-05-04 (plasmid/directed-evolution, quality_assessment shadowing). Eval pass rate 92.4% still meets 90% threshold.', 'resolution': 'Tighten LLM router disambiguation prompt for plasmid vs mutate_sequence. Follow-up before GA.'}]
+
+## 2026-10-08 — P2: Secure Science pre-routing assessment (gate-flagged)
+
+Implemented the Secure Science gate (`HELIX_SCIENCE_GATE_V1`): every staged plan
+is assessed before an `ExecutionIntent` is built. Pure checks over
+`(plan, objective, AssessmentContext)` (action classification, data sensitivity,
+dual-use triage, sequence screening, identity) combine into one immutable
+`SecurityAssessment` (outcome + policy envelope) persisted in the ledger.
+
+- Outcomes: `DENY > REQUIRE_REVIEW > ALLOW_WITH_APPROVAL > ALLOW`. DENY → `DENIED`
+  (terminal); REQUIRE_REVIEW → `WAITING_FOR_SECURITY_REVIEW`; neither builds an
+  intent. REQUIRE_REVIEW is resolved by a `security_reviewer` via `SecurityReview`
+  (approve → intent + `WAITING_FOR_APPROVAL`; deny → `DENIED`). Review is not
+  approval — the normal human approval still follows.
+- Fail-closed: broken check, missing screening adapter, or screening required but
+  no sequence present → REQUIRE_REVIEW. `execute_plan=True` cannot bypass a held
+  state. Dual-use triage is conservative routing to manual review, not a risk
+  classifier (disclaimer added to `docs/SAFETY_POLICY.md`).
+- New: `backend/security/` (assessor, checks, review_service), policies under
+  `backend/config/security/policies/`, `backend/api/security.py`,
+  `backend/contracts/security_review.py`, ledger assessment/review/audit kinds,
+  checkpoint `WAITING_FOR_SECURITY_REVIEW`/`DENIED`, agent `SECURITY_ASSESSOR`.
+
+Root-cause fixes found during P2:
+- `_platform_stage_pending_plan` used `WorkflowCheckpoint` without importing it →
+  NameError swallowed by the approval pre-gate `except`, letting a blocked plan
+  execute. Added the import.
+- `build_standard_response` rewrote blocked status to `needs_inputs` (due to
+  `execute_ready=False`); added a guard to preserve `security_denied` /
+  `security_review_required`.
+- `SequenceScreeningCheck` returned ALLOW with no sequence to screen; now
+  REQUIRE_REVIEW (`not_run`).
+
+Verification: `tests/unit` → 1013 passed, 1 skipped, 5 pre-existing failures
+(unchanged). New: `test_security_checks.py` (36), `test_execute_security_flow.py`
+(6), ORCH-001 P2 steps un-skipped (security_assessment_with_envelope,
+denied_state_blocks_intent). Schemas exported and mirrored to DataWeaver. New
+benchmark case `benchmarks/cases/routing_safety/security-gate-no-bypass.yaml`.
+Details: `artifacts/test_results/p2_secure_science_2026-10-08.md`.

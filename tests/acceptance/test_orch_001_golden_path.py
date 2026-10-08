@@ -122,10 +122,64 @@ def test_orch_001_approval_bound_to_intent_hash(loop):
         invariants.check_approval_matches_intent(approval, build_intent(staged.plan, _Infra()))
 
 
+# ── Security gate (P2) ───────────────────────────────────────────────────────
+
+
+def test_orch_001_security_assessment_with_envelope(loop):
+    """The staged plan carries a Secure Science assessment, and the intent is bound to it."""
+    staged = loop["staged"]
+    assessment = staged.assessment
+    assert assessment is not None
+    assert assessment.outcome == "ALLOW"
+    assert assessment.plan_hash == staged.plan.plan_hash
+    assert assessment.trace_id == staged.plan.trace_id
+    assert assessment.policy_envelope is not None
+    assert {p.policy_id for p in assessment.applied_policies} >= {"action_classification", "data_sensitivity"}
+    # the intent records which assessment cleared it
+    assert staged.intent is not None
+    assert staged.intent.assessment_id == assessment.assessment_id
+    assert staged.intent.assessment_hash == assessment.assessment_hash
+    assert loop["ledger"].load_assessment(loop["sid"], assessment.assessment_id) == assessment
+
+
+def test_orch_001_denied_state_blocks_intent(tmp_path, monkeypatch):
+    """A DENY assessment yields no ExecutionIntent, and one cannot be forced."""
+    monkeypatch.setenv("HELIX_MOCK_MODE", "1")
+    from backend.history_manager import history_manager
+
+    history_manager.storage_dir = tmp_path / "sessions"
+    history_manager.storage_dir.mkdir(parents=True, exist_ok=True)
+    history_manager.sessions = {}
+    history_manager._sessions_loaded = True
+
+    from backend.orchestration.invariants import InvariantViolation
+    from backend.orchestration.ledger import LocalLedger
+    from backend.orchestration.plan_staging import build_intent_for, stage_plan
+    from backend.security.checks.base import AssessmentContext
+
+    ledger = LocalLedger(history_manager.storage_dir)
+    context = AssessmentContext(
+        uploaded_files=[
+            {
+                "name": "data.csv",
+                "file_id": "f-data.csv",
+                "policy_state": "cleared",
+                "intake_policy": {"sensitivity_class": "internal", "scan_flags": ["suspicious_payload_pattern"]},
+            }
+        ]
+    )
+    staged = stage_plan("orch-deny", COMMAND, PLAN, {"session_id": "orch-deny"}, ledger=ledger, assessment_context=context)
+    assert staged.security_outcome == "DENY"
+    assert staged.blocked and staged.intent is None
+    # the assessment is still recorded for audit
+    assert ledger.load_assessment("orch-deny", staged.assessment.assessment_id) == staged.assessment
+    # and nothing can turn a DENY into an intent
+    with pytest.raises(InvariantViolation):
+        build_intent_for(staged.plan, staged.assessment, None)
+
+
 # ── Steps and the phase that un-skips them. Keep this list in sync with the plan.
 STEPS = [
-    ("security_assessment_with_envelope", "P2"),
-    ("denied_state_blocks_intent", "P2"),
     ("capability_resolved_from_registry", "P3A"),
     ("provider_executes_local", "P3A"),
     ("provider_executes_mock_experimental_with_approval", "P3A"),

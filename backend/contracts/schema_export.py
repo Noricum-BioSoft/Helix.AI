@@ -27,6 +27,7 @@ from backend.contracts.provider_authorization import ProviderAuthorization
 from backend.contracts.scientific_objective import ScientificObjective
 from backend.contracts.scientific_plan import ScientificPlan
 from backend.contracts.security_assessment import SecurityAssessment
+from backend.contracts.security_review import SecurityReview
 from shared.capability_registry import CapabilityDescriptor
 
 SCHEMA_DIR = Path(__file__).resolve().parents[2] / "shared" / "schemas" / "contracts"
@@ -35,6 +36,7 @@ CONTRACTS: Dict[str, Type[BaseModel]] = {
     "scientific_objective": ScientificObjective,
     "scientific_plan": ScientificPlan,
     "security_assessment": SecurityAssessment,
+    "security_review": SecurityReview,
     "execution_recommendation": ExecutionRecommendation,
     "provider_authorization": ProviderAuthorization,
     "execution_intent": ExecutionIntent,

@@ -27,6 +27,7 @@ from backend.contracts.ids import new_id
 from backend.contracts.rationale import RationaleItem
 from backend.contracts.scientific_objective import ScientificObjective
 from backend.contracts.scientific_plan import ScientificPlan, ScientificPlanStep, StepKind
+from backend.contracts.security_assessment import SecurityAssessment
 from backend.orchestration.intent_builder import build_intent
 from backend.orchestration.ledger import LocalLedger, get_ledger
 from backend.orchestration.objective_builder import build_objective
@@ -48,13 +49,28 @@ _TABULAR_STEP_KINDS: Dict[str, StepKind] = {
 
 @dataclass(frozen=True)
 class StagedRecords:
+    """Objective + plan always; assessment (P2) when the assessor ran; intent only when the gate allowed it.
+
+    ``intent is None`` ⇔ the assessment was DENY or REQUIRE_REVIEW: nothing can be approved or executed
+    until a reviewer resolves it (``backend/api/security.py``).
+    """
+
     objective: ScientificObjective
     plan: ScientificPlan
-    intent: ExecutionIntent
+    intent: Optional[ExecutionIntent]
+    assessment: Optional[SecurityAssessment] = None
 
     @property
     def trace_id(self) -> str:
         return self.plan.trace_id
+
+    @property
+    def security_outcome(self) -> Optional[str]:
+        return self.assessment.outcome if self.assessment else None
+
+    @property
+    def blocked(self) -> bool:
+        return self.intent is None
 
     def checkpoint_fields(self) -> Dict[str, Optional[str]]:
         return {
@@ -62,9 +78,11 @@ class StagedRecords:
             "objective_id": self.objective.objective_id,
             "pending_plan_id": self.plan.plan_id,
             "pending_plan_hash": self.plan.plan_hash,
-            "pending_execution_intent_id": self.intent.execution_intent_id,
-            "pending_execution_intent_hash": self.intent.execution_intent_hash,
+            "pending_execution_intent_id": self.intent.execution_intent_id if self.intent else None,
+            "pending_execution_intent_hash": self.intent.execution_intent_hash if self.intent else None,
             "approval_id": None,
+            "assessment_id": self.assessment.assessment_id if self.assessment else None,
+            "security_outcome": self.security_outcome,
         }
 
 
@@ -209,12 +227,19 @@ def stage_plan(
     supersedes: Optional[ScientificPlan] = None,
     objective: Optional[ScientificObjective] = None,
     ledger: Optional[LocalLedger] = None,
+    assessor: Optional[Any] = None,
+    assessment_context: Optional[Any] = None,
+    assess: bool = True,
 ) -> StagedRecords:
-    """Persist objective, plan and intent for a staged plan and return their identifiers.
+    """Persist objective, plan, (P2) security assessment and intent for a staged plan.
 
     ``supersedes`` makes this a revision: same ``plan_id``/``trace_id``/objective,
     ``version + 1``. ``objective`` reuses an existing objective (revisions);
     otherwise a new one (and a new ``trace_id``) is minted.
+
+    Security gate (``assess=True``): the plan is assessed *before* any intent is
+    built. ``DENY`` / ``REQUIRE_REVIEW`` → no intent (``StagedRecords.blocked``);
+    ``ALLOW`` / ``ALLOW_WITH_APPROVAL`` → intent carries ``assessment_id/hash``.
     """
     ledger = ledger or get_ledger()
     if objective is None:
@@ -231,14 +256,63 @@ def stage_plan(
     plan = build_scientific_plan(plan_dict, objective, command, router_params=router_params, supersedes=supersedes)
     ledger.record_plan(session_id, plan)
 
-    intent = build_intent(plan, infra_decision, current_state=current_state)
+    assessment: Optional[SecurityAssessment] = None
+    if assess:
+        from backend.security.assessor import default_assessor
+
+        assessment = (assessor or default_assessor()).assess(plan, objective, assessment_context)
+        ledger.record_assessment(session_id, assessment)
+        plan = plan.model_copy(update={"status": "assessed"})
+        ledger.record_plan(session_id, plan)
+        if assessment.outcome in ("DENY", "REQUIRE_REVIEW"):
+            logger.info(
+                "[platform] staged trace=%s plan=%s v%s assessment=%s outcome=%s — no intent built",
+                plan.trace_id, plan.plan_id, plan.version, assessment.assessment_id, assessment.outcome,
+            )
+            return StagedRecords(objective=objective, plan=plan, intent=None, assessment=assessment)
+
+    intent = build_intent_for(plan, assessment, infra_decision, current_state=current_state)
     ledger.record_intent(session_id, intent)
 
     logger.info(
-        "[platform] staged trace=%s objective=%s plan=%s v%s intent=%s",
-        plan.trace_id, objective.objective_id, plan.plan_id, plan.version, intent.execution_intent_id,
+        "[platform] staged trace=%s objective=%s plan=%s v%s assessment=%s intent=%s",
+        plan.trace_id, objective.objective_id, plan.plan_id, plan.version,
+        assessment.assessment_id if assessment else None, intent.execution_intent_id,
     )
-    return StagedRecords(objective=objective, plan=plan, intent=intent)
+    return StagedRecords(objective=objective, plan=plan, intent=intent, assessment=assessment)
+
+
+def build_intent_for(
+    plan: ScientificPlan,
+    assessment: Optional[SecurityAssessment],
+    infra_decision: Optional[Any] = None,
+    *,
+    current_state: Optional[str] = None,
+    review: Optional[Any] = None,
+) -> ExecutionIntent:
+    """Intent bound to the assessment (when present).
+
+    Refuses DENY always, and REQUIRE_REVIEW unless an approved ``SecurityReview``
+    bound to this assessment's hash is supplied.
+    """
+    if assessment is not None and assessment.outcome in ("DENY", "REQUIRE_REVIEW"):
+        from backend.orchestration.invariants import InvariantViolation
+
+        overridden = (
+            assessment.outcome == "REQUIRE_REVIEW"
+            and review is not None
+            and getattr(review, "approved", False)
+            and getattr(review, "assessment_hash", None) == assessment.assessment_hash
+        )
+        if not overridden:
+            raise InvariantViolation("no_intent_in_blocked_state", f"cannot build ExecutionIntent for a {assessment.outcome} assessment")
+    return build_intent(
+        plan,
+        infra_decision,
+        current_state=current_state,
+        assessment_id=assessment.assessment_id if assessment else None,
+        assessment_hash=assessment.assessment_hash if assessment else None,
+    )
 
 
 def try_stage_plan(*args: Any, **kwargs: Any) -> Optional[StagedRecords]:

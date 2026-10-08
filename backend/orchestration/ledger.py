@@ -30,6 +30,8 @@ from backend.contracts.execution_intent import ExecutionIntent
 from backend.contracts.human_approval import HumanApproval
 from backend.contracts.scientific_objective import ScientificObjective
 from backend.contracts.scientific_plan import ScientificPlan
+from backend.contracts.security_assessment import SecurityAssessment
+from backend.contracts.security_review import SecurityReview
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -38,6 +40,18 @@ KIND_OBJECTIVE = "objectives"
 KIND_PLAN = "plans"
 KIND_INTENT = "intents"
 KIND_APPROVAL = "approvals"
+KIND_ASSESSMENT = "assessments"
+KIND_REVIEW = "security_reviews"
+AUDIT_FILE = "audit/events.jsonl"
+
+RECORD_KINDS = (
+    (KIND_OBJECTIVE, ScientificObjective),
+    (KIND_PLAN, ScientificPlan),
+    (KIND_ASSESSMENT, SecurityAssessment),
+    (KIND_REVIEW, SecurityReview),
+    (KIND_INTENT, ExecutionIntent),
+    (KIND_APPROVAL, HumanApproval),
+)
 
 
 class LedgerError(RuntimeError):
@@ -131,17 +145,50 @@ class LocalLedger:
             a for a in self._iter(session_id, KIND_APPROVAL, HumanApproval) if a.execution_intent_id == execution_intent_id
         ]
 
+    # ── security assessments / reviews (P2) ─────────────────────────────────
+
+    def record_assessment(self, session_id: str, assessment: SecurityAssessment) -> Path:
+        existing = self.load_assessment(session_id, assessment.assessment_id)
+        if existing is not None and existing.assessment_hash != assessment.assessment_hash:
+            raise LedgerError(f"SecurityAssessment {assessment.assessment_id} is immutable; refusing to overwrite")
+        return self._write(session_id, KIND_ASSESSMENT, assessment.assessment_id, None, assessment)
+
+    def load_assessment(self, session_id: str, assessment_id: str) -> Optional[SecurityAssessment]:
+        return self._read(session_id, KIND_ASSESSMENT, assessment_id, None, SecurityAssessment)
+
+    def record_review(self, session_id: str, review: SecurityReview) -> Path:
+        if self.load_review(session_id, review.review_id) is not None:
+            raise LedgerError(f"SecurityReview {review.review_id} already recorded")
+        return self._write(session_id, KIND_REVIEW, review.review_id, None, review)
+
+    def load_review(self, session_id: str, review_id: str) -> Optional[SecurityReview]:
+        return self._read(session_id, KIND_REVIEW, review_id, None, SecurityReview)
+
+    def reviews_for_assessment(self, session_id: str, assessment_id: str) -> List[SecurityReview]:
+        return [r for r in self._iter(session_id, KIND_REVIEW, SecurityReview) if r.assessment_id == assessment_id]
+
+    # ── audit events (append-only JSONL, one line per event) ─────────────────
+
+    def record_audit_event(self, session_id: str, event: Dict) -> Path:
+        target = self.storage_dir / session_id / PLATFORM_DIR / AUDIT_FILE
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(event, default=str, sort_keys=True) + "\n")
+        return target
+
+    def audit_events(self, session_id: str, trace_id: Optional[str] = None) -> List[Dict]:
+        target = self.storage_dir / session_id / PLATFORM_DIR / AUDIT_FILE
+        if not target.exists():
+            return []
+        events = [json.loads(line) for line in target.read_text(encoding="utf-8").splitlines() if line.strip()]
+        return [e for e in events if trace_id is None or e.get("trace_id") == trace_id]
+
     # ── trace queries ────────────────────────────────────────────────────────
 
     def records_by_trace(self, session_id: str, trace_id: str) -> Dict[str, List[BaseModel]]:
         """All records of a loop, grouped by kind. Used by tests and (P7) the trace endpoint."""
-        out: Dict[str, List[BaseModel]] = {KIND_OBJECTIVE: [], KIND_PLAN: [], KIND_INTENT: [], KIND_APPROVAL: []}
-        for kind, model in (
-            (KIND_OBJECTIVE, ScientificObjective),
-            (KIND_PLAN, ScientificPlan),
-            (KIND_INTENT, ExecutionIntent),
-            (KIND_APPROVAL, HumanApproval),
-        ):
+        out: Dict[str, List[BaseModel]] = {}
+        for kind, model in RECORD_KINDS:
             out[kind] = [r for r in self._iter(session_id, kind, model) if r.trace_id == trace_id]
         return out
 

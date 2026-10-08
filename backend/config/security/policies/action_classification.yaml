@@ -1,0 +1,60 @@
+# Action classification — which risk category a plan step falls into and what
+# the PolicyEnvelope must say for it. Pre-routing: no provider names here.
+policy_id: action_classification
+version: "2026.10"
+
+# Risk categories in increasing order of control.
+categories: [read_only, compute, external_compute, experimental, synthesis]
+
+# Step kind → base category (capability prefixes below can raise it).
+kind_to_category:
+  reasoning: read_only
+  computational: compute
+  experimental: experimental
+
+# capability_id prefix → category (first match wins; checked after kind).
+capability_prefix_to_category:
+  "local_compute:": compute
+  "nextflow:": compute
+  "external_compute:": external_compute
+  "hosted:": external_compute
+  "experimental:": experimental
+  "synthesis:": synthesis
+  "dna_synthesis:": synthesis
+
+# Tool names that are read-only regardless of kind.
+read_only_tools:
+  - toolbox_inventory
+  - session_run_io_summary
+  - visualize_job_results
+  - bio_diff_runs
+  - fetch_ncbi_sequence
+
+# Tool names that imply synthesis / wet-lab ordering.
+synthesis_tools:
+  - order_dna_synthesis
+  - design_synthesis_order
+
+# Per category: outcome and envelope contribution.
+category_policy:
+  read_only:
+    outcome: ALLOW
+    envelope: {}
+  compute:
+    outcome: ALLOW
+    envelope: {}
+  external_compute:
+    outcome: ALLOW_WITH_APPROVAL
+    envelope:
+      human_approval_required: true
+  experimental:
+    outcome: ALLOW_WITH_APPROVAL
+    envelope:
+      human_approval_required: true
+      screening_required: true
+  synthesis:
+    outcome: ALLOW_WITH_APPROVAL
+    envelope:
+      human_approval_required: true
+      screening_required: true
+      allowed_provider_categories: [experimental, advisory]

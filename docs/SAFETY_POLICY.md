@@ -249,3 +249,34 @@ Instead, I can help with:
 **Example:**
 ```
 User: "How can I make this virus more transm
+```
+
+---
+
+## Automated triage (Secure Science gate)
+
+Helix.AI runs a pre-routing **Secure Science assessment** on every staged plan
+when `HELIX_SCIENCE_GATE_V1` is enabled. It combines a small set of declarative
+checks (action classification, data sensitivity, dual-use triage, sequence
+screening, identity) into one outcome and a policy envelope:
+
+- **ALLOW** / **ALLOW_WITH_APPROVAL** — the plan proceeds to the normal human
+  approval step; `ALLOW_WITH_APPROVAL` may also tighten the envelope (e.g. PHI
+  forbids external execution).
+- **REQUIRE_REVIEW** — the plan is held at `WAITING_FOR_SECURITY_REVIEW`; no
+  `ExecutionIntent` is built until a reviewer (`security_reviewer`) approves.
+  Reviewer approval is **not** execution approval — the human approval step
+  still follows.
+- **DENY** — the plan is terminal (`DENIED`); it cannot be approved or executed.
+
+The gate **fails closed**: a broken check, a missing screening adapter, or a
+plan that requires screening but exposes no sequence all route to
+`REQUIRE_REVIEW` rather than `ALLOW`. `execute_plan` requests cannot bypass a
+`DENIED` or `WAITING_FOR_SECURITY_REVIEW` state.
+
+> **Disclaimer.** The dual-use triage is **conservative keyword/entity routing
+> to manual review, not a biological-risk classifier and not a substitute for
+> specialised biosecurity screening.** A match means "a human looks at it"; it
+> never means "unsafe", and the absence of a match never means "safe". Final
+> responsibility for biosafety and biosecurity rests with the human reviewers
+> and the institutional oversight bodies (IRB/IBC), per the categories above.

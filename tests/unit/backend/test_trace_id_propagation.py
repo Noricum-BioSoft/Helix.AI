@@ -54,7 +54,9 @@ def test_all_records_of_a_loop_share_the_trace(ledger):
     assert is_trace_id(staged.trace_id)
     invariants.check_same_trace(staged.objective, staged.plan, staged.intent, outcome.approval)
     by_trace = ledger.records_by_trace("s1", staged.trace_id)
-    assert {k: len(v) for k, v in by_trace.items()} == {"objectives": 1, "plans": 1, "intents": 1, "approvals": 1}
+    assert {k: len(v) for k, v in by_trace.items()} == {
+        "objectives": 1, "plans": 1, "assessments": 1, "security_reviews": 0, "intents": 1, "approvals": 1,
+    }
     assert outcome.checkpoint.trace_id == staged.trace_id
     assert outcome.checkpoint.state == WorkflowState.READY_TO_EXECUTE
     # the broker pre-check accepts this checkpoint
