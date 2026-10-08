@@ -73,9 +73,31 @@ class WorkflowCheckpoint:
     current_step: Optional[str] = None
     resume_node: Optional[str] = None                    # logical label for where to resume
 
+    # Platform records (Phase 1, populated only when HELIX_SCIENCE_GATE_V1 is on).
+    # The plan IR dict in `pending_plan` stays authoritative for back-compat;
+    # these identify the persisted ScientificObjective / ScientificPlan /
+    # ExecutionIntent / HumanApproval records in the ledger.
+    trace_id: Optional[str] = None
+    objective_id: Optional[str] = None
+    pending_plan_id: Optional[str] = None
+    pending_plan_hash: Optional[str] = None
+    pending_execution_intent_id: Optional[str] = None
+    pending_execution_intent_hash: Optional[str] = None
+    approval_id: Optional[str] = None
+
     # Timestamps (unix seconds)
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
+
+    PLATFORM_FIELDS = (
+        "trace_id",
+        "objective_id",
+        "pending_plan_id",
+        "pending_plan_hash",
+        "pending_execution_intent_id",
+        "pending_execution_intent_hash",
+        "approval_id",
+    )
 
     def transition(self, new_state: WorkflowState) -> "WorkflowCheckpoint":
         """Return a new checkpoint with state updated and timestamp bumped."""
@@ -85,8 +107,23 @@ class WorkflowCheckpoint:
         cp.updated_at = time.time()
         return cp
 
+    def with_platform_records(self, **records: Optional[str]) -> "WorkflowCheckpoint":
+        """Return a copy carrying the given platform record identifiers."""
+        import copy
+        unknown = set(records) - set(self.PLATFORM_FIELDS)
+        if unknown:
+            raise ValueError(f"unknown platform fields: {sorted(unknown)}")
+        cp = copy.copy(self)
+        for key, value in records.items():
+            setattr(cp, key, value)
+        cp.updated_at = time.time()
+        return cp
+
+    def platform_records(self) -> Dict[str, Optional[str]]:
+        return {k: getattr(self, k) for k in self.PLATFORM_FIELDS}
+
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d = {
             "workflow_id": self.workflow_id,
             "state": self.state.value,
             "pending_plan": self.pending_plan,
@@ -100,6 +137,12 @@ class WorkflowCheckpoint:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
+        # Only serialise platform fields when set, keeping legacy checkpoints byte-identical.
+        for key in self.PLATFORM_FIELDS:
+            value = getattr(self, key)
+            if value is not None:
+                d[key] = value
+        return d
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "WorkflowCheckpoint":
@@ -116,6 +159,7 @@ class WorkflowCheckpoint:
             resume_node=d.get("resume_node"),
             created_at=d.get("created_at", time.time()),
             updated_at=d.get("updated_at", time.time()),
+            **{k: d.get(k) for k in cls.PLATFORM_FIELDS},
         )
 
     @classmethod

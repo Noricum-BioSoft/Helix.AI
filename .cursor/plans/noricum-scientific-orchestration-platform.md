@@ -14,7 +14,7 @@ todos:
     status: completed
   - id: p1-objective-plan
     content: "P1 (Helix): ScientificObjective + persisted ScientificPlan + ExecutionIntent + approval endpoint bound to execution_intent_hash"
-    status: pending
+    status: completed
   - id: p2-security-assessment
     content: "P2 (Helix): Secure Science pre-routing assessment → PolicyEnvelope; DualUseTriageCheck; new checkpoint states"
     status: pending

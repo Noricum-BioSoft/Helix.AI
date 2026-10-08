@@ -1,0 +1,153 @@
+"""
+Platform ledger — the single write path for shared domain records (Phase 1).
+
+Objective, plan, execution intent and approval records are written here and
+nowhere else. Phase 7 routes these ``record_*`` helpers through
+``KnowledgeStore`` (local | dataweaver | dual); until then the local JSON
+ledger under ``sessions/{session_id}/platform/`` is the only backend.
+
+Layout::
+
+    sessions/{sid}/platform/objectives/{objective_id}.v{n}.json
+    sessions/{sid}/platform/plans/{plan_id}.v{n}.json
+    sessions/{sid}/platform/intents/{execution_intent_id}.json
+    sessions/{sid}/platform/approvals/{approval_id}.json
+
+IDs are minted by the callers at the domain layer (``backend.contracts.ids``);
+the ledger never mints IDs for shared objects.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+from typing import Dict, Iterator, List, Optional, Type, TypeVar
+
+from pydantic import BaseModel
+
+from backend.contracts.execution_intent import ExecutionIntent
+from backend.contracts.human_approval import HumanApproval
+from backend.contracts.scientific_objective import ScientificObjective
+from backend.contracts.scientific_plan import ScientificPlan
+
+T = TypeVar("T", bound=BaseModel)
+
+PLATFORM_DIR = "platform"
+KIND_OBJECTIVE = "objectives"
+KIND_PLAN = "plans"
+KIND_INTENT = "intents"
+KIND_APPROVAL = "approvals"
+
+
+class LedgerError(RuntimeError):
+    pass
+
+
+class LocalLedger:
+    """File-backed ledger scoped to a sessions storage directory."""
+
+    def __init__(self, storage_dir: Path):
+        self.storage_dir = Path(storage_dir)
+
+    # ── paths ────────────────────────────────────────────────────────────────
+
+    def _dir(self, session_id: str, kind: str) -> Path:
+        return self.storage_dir / session_id / PLATFORM_DIR / kind
+
+    @staticmethod
+    def _file_name(record_id: str, version: Optional[int]) -> str:
+        return f"{record_id}.v{version}.json" if version is not None else f"{record_id}.json"
+
+    # ── generic write/read ───────────────────────────────────────────────────
+
+    def _write(self, session_id: str, kind: str, record_id: str, version: Optional[int], model: BaseModel) -> Path:
+        target_dir = self._dir(session_id, kind)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / self._file_name(record_id, version)
+        tmp = target.with_suffix(".json.tmp")
+        tmp.write_text(model.model_dump_json(indent=2), encoding="utf-8")
+        os.replace(tmp, target)
+        return target
+
+    def _read(self, session_id: str, kind: str, record_id: str, version: Optional[int], model: Type[T]) -> Optional[T]:
+        path = self._dir(session_id, kind) / self._file_name(record_id, version)
+        if not path.exists():
+            return None
+        return model.model_validate_json(path.read_text(encoding="utf-8"))
+
+    def _iter(self, session_id: str, kind: str, model: Type[T]) -> Iterator[T]:
+        target_dir = self._dir(session_id, kind)
+        if not target_dir.exists():
+            return
+        for path in sorted(target_dir.glob("*.json")):
+            try:
+                yield model.model_validate_json(path.read_text(encoding="utf-8"))
+            except Exception:  # corrupt file must not hide the rest of the ledger
+                continue
+
+    # ── objectives ───────────────────────────────────────────────────────────
+
+    def record_objective(self, session_id: str, objective: ScientificObjective) -> Path:
+        return self._write(session_id, KIND_OBJECTIVE, objective.objective_id, objective.version, objective)
+
+    def load_objective(self, session_id: str, objective_id: str, version: int = 1) -> Optional[ScientificObjective]:
+        return self._read(session_id, KIND_OBJECTIVE, objective_id, version, ScientificObjective)
+
+    # ── plans ────────────────────────────────────────────────────────────────
+
+    def record_plan(self, session_id: str, plan: ScientificPlan) -> Path:
+        return self._write(session_id, KIND_PLAN, plan.plan_id, plan.version, plan)
+
+    def load_plan(self, session_id: str, plan_id: str, version: int = 1) -> Optional[ScientificPlan]:
+        return self._read(session_id, KIND_PLAN, plan_id, version, ScientificPlan)
+
+    def list_plans(self, session_id: str) -> List[ScientificPlan]:
+        return list(self._iter(session_id, KIND_PLAN, ScientificPlan))
+
+    # ── execution intents ────────────────────────────────────────────────────
+
+    def record_intent(self, session_id: str, intent: ExecutionIntent) -> Path:
+        existing = self.load_intent(session_id, intent.execution_intent_id)
+        if existing is not None and existing.execution_intent_hash != intent.execution_intent_hash:
+            raise LedgerError(f"ExecutionIntent {intent.execution_intent_id} is immutable; refusing to overwrite")
+        return self._write(session_id, KIND_INTENT, intent.execution_intent_id, None, intent)
+
+    def load_intent(self, session_id: str, execution_intent_id: str) -> Optional[ExecutionIntent]:
+        return self._read(session_id, KIND_INTENT, execution_intent_id, None, ExecutionIntent)
+
+    # ── approvals ────────────────────────────────────────────────────────────
+
+    def record_approval(self, session_id: str, approval: HumanApproval) -> Path:
+        if self.load_approval(session_id, approval.approval_id) is not None:
+            raise LedgerError(f"HumanApproval {approval.approval_id} already recorded")
+        return self._write(session_id, KIND_APPROVAL, approval.approval_id, None, approval)
+
+    def load_approval(self, session_id: str, approval_id: str) -> Optional[HumanApproval]:
+        return self._read(session_id, KIND_APPROVAL, approval_id, None, HumanApproval)
+
+    def approvals_for_intent(self, session_id: str, execution_intent_id: str) -> List[HumanApproval]:
+        return [
+            a for a in self._iter(session_id, KIND_APPROVAL, HumanApproval) if a.execution_intent_id == execution_intent_id
+        ]
+
+    # ── trace queries ────────────────────────────────────────────────────────
+
+    def records_by_trace(self, session_id: str, trace_id: str) -> Dict[str, List[BaseModel]]:
+        """All records of a loop, grouped by kind. Used by tests and (P7) the trace endpoint."""
+        out: Dict[str, List[BaseModel]] = {KIND_OBJECTIVE: [], KIND_PLAN: [], KIND_INTENT: [], KIND_APPROVAL: []}
+        for kind, model in (
+            (KIND_OBJECTIVE, ScientificObjective),
+            (KIND_PLAN, ScientificPlan),
+            (KIND_INTENT, ExecutionIntent),
+            (KIND_APPROVAL, HumanApproval),
+        ):
+            out[kind] = [r for r in self._iter(session_id, kind, model) if r.trace_id == trace_id]
+        return out
+
+
+def get_ledger() -> LocalLedger:
+    """Ledger bound to the live ``history_manager`` storage dir (tests monkeypatch that dir)."""
+    from backend.history_manager import history_manager
+
+    return LocalLedger(Path(history_manager.storage_dir))

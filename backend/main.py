@@ -3,7 +3,7 @@ from fastapi import File, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from pydantic import BaseModel
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 import asyncio
 import base64
 import json
@@ -543,6 +543,151 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Platform routers (Phase 1+). Endpoints themselves 404 unless their feature flag is on.
+from backend.api.approvals import router as _approvals_router  # noqa: E402
+
+app.include_router(_approvals_router)
+
+
+def _platform_stage_pending_plan(
+    session_id: str,
+    command: str,
+    plan_dict: Dict[str, Any],
+    session_context: Optional[Dict[str, Any]],
+    *,
+    router_params: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Phase 1: persist objective/plan/intent for a freshly staged plan (HELIX_SCIENCE_GATE_V1).
+
+    Must run *after* the WAITING_FOR_APPROVAL checkpoint has been saved; it
+    re-saves the checkpoint with the platform record identifiers. Returns a
+    summary for the response, or None when the gate is off or staging failed
+    (the NL approval path then fails closed).
+    """
+    from backend.config.feature_flags import science_gate_enabled
+
+    if not science_gate_enabled():
+        return None
+    from backend.orchestration.plan_staging import try_stage_plan
+
+    checkpoint = history_manager.load_checkpoint(session_id)
+    staged = try_stage_plan(
+        session_id,
+        command,
+        plan_dict,
+        session_context,
+        router_params=router_params,
+        current_state=checkpoint.state.value,
+    )
+    if staged is None:
+        return None
+    history_manager.save_checkpoint(session_id, checkpoint.with_platform_records(**staged.checkpoint_fields()))
+    return {
+        "trace_id": staged.trace_id,
+        "objective_id": staged.objective.objective_id,
+        "plan_id": staged.plan.plan_id,
+        "plan_version": staged.plan.version,
+        "plan_hash": staged.plan.plan_hash,
+        "execution_intent_id": staged.intent.execution_intent_id,
+        "execution_intent_hash": staged.intent.execution_intent_hash,
+        "provider_id": staged.intent.provider_id,
+        "capability_id": staged.intent.capability_id,
+        "approve_url": f"/session/{session_id}/intents/{staged.intent.execution_intent_id}/approve",
+    }
+
+
+def _platform_approve_via_chat(
+    req: "CommandRequest",
+    checkpoint: "WorkflowCheckpoint",
+) -> Tuple[Optional["WorkflowCheckpoint"], Optional[Dict[str, Any]]]:
+    """Phase 1: the NL approval path records the same HumanApproval the HTTP endpoint would.
+
+    Returns ``(checkpoint, None)`` when execution may proceed (gate off, or
+    approval recorded/verified), or ``(None, error_result)`` when the staged
+    plan/intent is missing or changed since staging (fail closed).
+    """
+    from backend.config.feature_flags import science_gate_enabled
+
+    if not science_gate_enabled():
+        return checkpoint, None
+    from backend.orchestration.approval_service import (
+        ApprovalError,
+        decide_intent,
+        natural_language_principal,
+        verify_approved_for_execution,
+    )
+    from backend.orchestration.invariants import InvariantViolation
+    from backend.workflow_checkpoint import WorkflowState as _WS
+
+    def _blocked(code: str, message: str) -> Tuple[None, Dict[str, Any]]:
+        return None, {
+            "status": "approval_blocked",
+            "success": False,
+            "text": message,
+            "approval_error": code,
+            "workflow_state": checkpoint.state.value,
+        }
+
+    if not checkpoint.pending_execution_intent_id:
+        return _blocked(
+            "no_pending_intent",
+            "This plan was staged without an execution intent and cannot be approved by chat. "
+            "Please ask for the plan again so it can be recorded, then approve.",
+        )
+    if checkpoint.approval_id:
+        # Already approved through the HTTP endpoint — only re-verify, do not record twice.
+        try:
+            verify_approved_for_execution(req.session_id, checkpoint)
+            return checkpoint, None
+        except InvariantViolation as exc:
+            return _blocked(exc.invariant, f"Execution blocked: {exc.detail}.")
+    try:
+        outcome = decide_intent(
+            req.session_id,
+            checkpoint.pending_execution_intent_id,
+            "approved",
+            natural_language_principal(req.session_id, req.command),
+            note=req.command[:500],
+            checkpoint=checkpoint,
+            save_checkpoint=False,
+        )
+    except ApprovalError as exc:
+        return _blocked(exc.code, f"Cannot approve: {exc.detail}.")
+    cp = outcome.checkpoint
+    if cp.state == _WS.READY_TO_EXECUTE:
+        cp = cp.transition(_WS.WAITING_FOR_APPROVAL)  # execution continues in this turn
+    return cp, None
+
+
+def _platform_verify_before_execution(
+    req: "CommandRequest",
+    checkpoint: "WorkflowCheckpoint",
+) -> Optional[Dict[str, Any]]:
+    """Phase 1.5 broker pre-check (invariant ``approval.execution_intent_hash == intent.execution_intent_hash``).
+
+    No-op with the gate off. Returns an error result (fail closed) or None.
+    """
+    from backend.config.feature_flags import science_gate_enabled
+
+    if not science_gate_enabled():
+        return None
+    from backend.orchestration.approval_service import verify_approved_for_execution
+    from backend.orchestration.invariants import InvariantViolation
+
+    try:
+        verify_approved_for_execution(req.session_id, checkpoint)
+    except InvariantViolation as exc:
+        logger.warning("[platform] execution blocked by invariant %s: %s", exc.invariant, exc.detail)
+        return {
+            "status": "execution_blocked",
+            "success": False,
+            "text": f"Execution blocked: {exc.detail}.",
+            "invariant": exc.invariant,
+            "workflow_state": checkpoint.state.value,
+        }
+    return None
+
 
 class CommandRequest(BaseModel):
     command: str
@@ -2099,6 +2244,11 @@ def build_standard_response(
 
     # Add tree data to top level for frontend
     response.update(tree_data)
+
+    # Phase 1: platform record identifiers (trace_id, plan/intent hashes, approve_url)
+    # are promoted so clients can bind approvals without unwrapping raw_result.
+    if isinstance(truncated_result, dict) and isinstance(truncated_result.get("platform"), dict):
+        response["platform"] = truncated_result["platform"]
     
     return response
 
@@ -3003,13 +3153,29 @@ async def execute(req: CommandRequest, request: Request):
             )
             pending_plan = _cp_plan or _get_pending_plan(req.session_id)
             if isinstance(pending_plan, dict) and isinstance(pending_plan.get("plan"), dict):
+                # Phase 1 (HELIX_SCIENCE_GATE_V1): record the chat approval against the staged
+                # ExecutionIntent *before* input autobinding mutates the plan. Fail closed on
+                # a missing or changed plan/intent.
+                _approved_cp, _approval_block = _platform_approve_via_chat(req, _checkpoint)
+                if _approval_block is not None:
+                    return await _dispatch_result(
+                        req, "__plan__", _approval_block, tool_args={}, execution_path="approval_blocked_stale_intent"
+                    )
+                _checkpoint = _approved_cp or _checkpoint
                 plan = _autobind_plan_inputs(pending_plan["plan"], session_context)
 
                 # ── Tabular analysis execution path ──────────────────────────────
                 # When the user approves a plan generated by analysis_planner,
                 # run it through the code interpreter instead of the bio-tool broker.
                 if plan.get("type") == "tabular_analysis":
-                    _exec_cp = WorkflowCheckpoint(state=WorkflowState.EXECUTING)
+                    _verify_block = _platform_verify_before_execution(req, _checkpoint)
+                    if _verify_block is not None:
+                        return await _dispatch_result(
+                            req, "__plan__", _verify_block, tool_args={}, execution_path="approval_verify_failed"
+                        )
+                    _exec_cp = WorkflowCheckpoint(state=WorkflowState.EXECUTING).with_platform_records(
+                        **_checkpoint.platform_records()
+                    )
                     history_manager.save_checkpoint(req.session_id, _exec_cp)
                     try:
                         from backend.tabular_qa.analysis_executor import execute_analysis_plan
@@ -3103,7 +3269,7 @@ async def execute(req: CommandRequest, request: Request):
                                     "plan": pending_plan["plan"],
                                     "command": _cmd_for_pending,
                                 },
-                            ),
+                            ).with_platform_records(**_checkpoint.platform_records()),
                         )
                     _ta_result = (
                         {
@@ -3193,7 +3359,7 @@ async def execute(req: CommandRequest, request: Request):
                     _new_cp = WorkflowCheckpoint.waiting_for_inputs(
                         pending_plan=pending_plan,
                         missing_inputs=list(binding_check.get("missing_inputs", [])),
-                    )
+                    ).with_platform_records(**_checkpoint.platform_records())
                     history_manager.save_checkpoint(req.session_id, _new_cp)
                     std = build_standard_response(
                         prompt=req.command,
@@ -3211,8 +3377,18 @@ async def execute(req: CommandRequest, request: Request):
                     )
                     return CustomJSONResponse(std)
 
+                # Phase 1 broker pre-check: the staged intent must carry an approved
+                # HumanApproval bound to its hash (no-op with the gate off).
+                _verify_block = _platform_verify_before_execution(req, _checkpoint)
+                if _verify_block is not None:
+                    return await _dispatch_result(
+                        req, "__plan__", _verify_block, tool_args={}, execution_path="approval_verify_failed"
+                    )
+
                 # All inputs bound — transition to EXECUTING
-                _exec_cp = WorkflowCheckpoint(state=WorkflowState.EXECUTING)
+                _exec_cp = WorkflowCheckpoint(state=WorkflowState.EXECUTING).with_platform_records(
+                    **_checkpoint.platform_records()
+                )
                 history_manager.save_checkpoint(req.session_id, _exec_cp)
 
                 # Detect plans whose ALL steps are router-level placeholders
@@ -3424,6 +3600,9 @@ async def execute(req: CommandRequest, request: Request):
                                     pending_plan={"plan": _ap, "command": req.command},
                                 ),
                             )
+                            _ap_platform = _platform_stage_pending_plan(
+                                req.session_id, req.command, _ap, session_context, router_params=_approval_params
+                            )
                             _ap_response = {
                                 "status": "workflow_planned",
                                 "workflow_state": WorkflowState.WAITING_FOR_APPROVAL.value,
@@ -3437,6 +3616,8 @@ async def execute(req: CommandRequest, request: Request):
                                     f"Review the steps below and click **Approve & Run** to execute."
                                 ),
                             }
+                            if _ap_platform:
+                                _ap_response["platform"] = _ap_platform
                             std = build_standard_response(
                                 prompt=req.command,
                                 tool="tabular_analysis_plan",
@@ -3469,6 +3650,9 @@ async def execute(req: CommandRequest, request: Request):
                             pending_plan={"plan": pending_plan, "command": req.command},
                         ),
                     )
+                    _plan_platform = _platform_stage_pending_plan(
+                        req.session_id, req.command, pending_plan, session_context, router_params=_approval_params
+                    )
                     _workflow_state_for_preview = WorkflowState.WAITING_FOR_APPROVAL.value
                     # Status is always workflow_planned so the scorer (and UI) treat this as
                     # a plan awaiting approval, regardless of whether file inputs are bound.
@@ -3484,6 +3668,8 @@ async def execute(req: CommandRequest, request: Request):
                     }
                     if binding_check:
                         plan_preview["binding_diagnostics"] = binding_check
+                    if _plan_platform:
+                        plan_preview["platform"] = _plan_platform
                     return await _dispatch_result(
                         req,
                         "__plan__",
