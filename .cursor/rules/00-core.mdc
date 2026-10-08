@@ -28,6 +28,14 @@ The system must support iterative analysis requests, workflow revision, bug fixi
 - Use fixture data, sandbox data, or explicitly marked safe data.
 - Never hardcode credentials, tokens, or environment-specific secrets.
 
+# Public repository rules
+This repository is public. Helix.AI and DataWeaver.AI are public; `business-docs`, `outreach`, the website and the other Noricum-BioSoft repos are private.
+- Never put non-public information anywhere in this repo: code, docs, plans, `artifacts/` (including `artifacts/worklog.md`), test fixtures, commit messages, branch names, PR titles/descriptions, or review comments.
+- Non-public includes potential or ongoing partnerships and collaborations, meeting notes, proposals, pricing or negotiation details, customer/prospect/investor information, outreach, fundraising, and website operations.
+- Put that material in the private `Noricum-BioSoft/business-docs` repo (partner work under `partnerships/`).
+- Integrations with third-party services may document the provider's public API, but must not reveal business relationships or intent.
+- If unsure whether something is public, ask before committing or pushing. Removing it after a push requires rewriting history and contacting GitHub Support.
+
 # Completion rules
 A task is complete only when all of the following are true:
 1. relevant lint/type/tests pass,
