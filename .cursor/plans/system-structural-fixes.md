@@ -1,6 +1,7 @@
 # Plan: System Structural Fixes — Stop the "Whack-a-Mole"
 
 **Status:** Proposed
+
 **Goal:** Address the recurring "fix one thing, break another" pattern by tightening structural contracts rather than adding more heuristics. Complements `.cursor/plans/eliminate-keyword-routing.md` (which removes keyword routing); this plan removes the *layered architecture* that makes routing fragile in the first place.
 
 ---
