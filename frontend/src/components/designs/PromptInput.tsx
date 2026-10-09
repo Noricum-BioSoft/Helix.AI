@@ -90,7 +90,7 @@ export const PromptInput: React.FC<PromptInputProps> = ({
               <Button
                 variant="primary"
                 className="prompt-primary-button"
-                onClick={onAgentSubmit}
+                onClick={onSubmit}
                 disabled={loading || agentLoading || !command.trim()}
                 aria-label={loading || agentLoading ? 'Processing' : 'Run'}
               >

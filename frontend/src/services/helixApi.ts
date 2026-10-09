@@ -115,6 +115,23 @@ export const helixApi = {
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
+        let resultReceived = false;
+
+        const handleSseLine = (line: string) => {
+          if (!line.startsWith('data: ')) return;
+          try {
+            const event = JSON.parse(line.slice(6));
+            if (event.type === 'progress') {
+              onProgress(event.phase ?? '', event.message ?? '');
+            } else if (event.type === 'result') {
+              resultReceived = true;
+              onResult(event.data);
+            } else if (event.type === 'error') {
+              resultReceived = true;
+              onError(new Error(event.detail ?? 'Server error'));
+            }
+          } catch { /* malformed line — skip */ }
+        };
 
         while (true) {
           const { done, value } = await reader.read();
@@ -125,18 +142,16 @@ export const helixApi = {
           buffer = lines.pop() ?? '';   // keep any partial line
 
           for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            try {
-              const event = JSON.parse(line.slice(6));
-              if (event.type === 'progress') {
-                onProgress(event.phase ?? '', event.message ?? '');
-              } else if (event.type === 'result') {
-                onResult(event.data);
-              } else if (event.type === 'error') {
-                onError(new Error(event.detail ?? 'Server error'));
-              }
-            } catch { /* malformed line — skip */ }
+            handleSseLine(line);
           }
+        }
+
+        if (buffer.trim()) {
+          handleSseLine(buffer.trim());
+        }
+
+        if (!resultReceived && !controller.signal.aborted) {
+          onError(new Error('Stream ended without a result'));
         }
       } catch (err) {
         if ((err as Error).name !== 'AbortError') {

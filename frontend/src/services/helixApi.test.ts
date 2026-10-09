@@ -53,4 +53,39 @@ describe("helixApi regression", () => {
     );
     expect(result).toEqual({ ok: true });
   });
+
+  it("executeCommandStream rejects when the stream ends without a result", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"type":"progress","phase":"received","message":"Working..."}\n\n'));
+        controller.close();
+      },
+    });
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      body: stream,
+    }));
+
+    const onResult = vi.fn();
+    const onError = vi.fn();
+
+    helixApi.executeCommandStream(
+      "analyze my data",
+      "session-1",
+      vi.fn(),
+      onResult,
+      onError,
+    );
+
+    await vi.waitFor(() => {
+      expect(onError).toHaveBeenCalledWith(expect.objectContaining({
+        message: "Stream ended without a result",
+      }));
+    });
+
+    expect(onResult).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
 });

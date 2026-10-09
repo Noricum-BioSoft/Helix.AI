@@ -266,7 +266,7 @@ export const DemoScenariosPanel: React.FC<DemoScenariosPanelProps> = ({
               Helix.AI Demo Scenarios
             </div>
             <div style={{ color: '#94A3B8', fontSize: '0.8rem', marginTop: '2px' }}>
-              5 real bioinformatics workflows — click any scenario to load it
+              6 real bioinformatics workflows — click any scenario to load it
             </div>
           </div>
           <Badge
@@ -279,7 +279,7 @@ export const DemoScenariosPanel: React.FC<DemoScenariosPanelProps> = ({
               borderRadius: '9999px',
             }}
           >
-            5 scenarios
+            6 scenarios
           </Badge>
         </div>
       </Modal.Header>
@@ -339,9 +339,9 @@ export const DemoScenariosPanel: React.FC<DemoScenariosPanelProps> = ({
             <div
               style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(5, minmax(168px, 1fr))',
+                gridTemplateColumns: 'repeat(6, minmax(168px, 1fr))',
                 gap: '12px',
-                minWidth: '880px',
+                minWidth: '1060px',
               }}
             >
               {demoScenarios.map((scenario) => (
