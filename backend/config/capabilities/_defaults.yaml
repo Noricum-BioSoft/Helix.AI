@@ -1,0 +1,10 @@
+## _defaults.yaml — shared defaults merged into every descriptor in this directory.
+##
+## Each capability file is a mapping with a top-level ``capabilities:`` list.
+## Keys set here are applied when a descriptor omits them (shallow merge for
+## top-level scalars/objects; lists are not merged). Keep provider-agnostic.
+defaults:
+  security:
+    data_classes_allowed: [public, internal]
+  provenance:
+    source: manual

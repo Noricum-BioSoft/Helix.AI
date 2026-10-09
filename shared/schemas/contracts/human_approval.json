@@ -1,0 +1,207 @@
+{
+  "$defs": {
+    "Principal": {
+      "additionalProperties": false,
+      "description": "Who approved. ``identity_provider`` records how much the identity can be trusted.",
+      "properties": {
+        "audit_signature": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Reserved for signed audit metadata in production.",
+          "title": "Audit Signature"
+        },
+        "auth_method": {
+          "description": "header | oidc_bearer | chat_message | \u2026",
+          "title": "Auth Method",
+          "type": "string"
+        },
+        "display_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Display Name"
+        },
+        "identity_provider": {
+          "enum": [
+            "dev_header",
+            "oidc",
+            "natural_language",
+            "system"
+          ],
+          "title": "Identity Provider",
+          "type": "string"
+        },
+        "project_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project Id"
+        },
+        "roles": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Roles",
+          "type": "array"
+        },
+        "subject_id": {
+          "description": "Stable subject identifier from the identity provider.",
+          "minLength": 1,
+          "title": "Subject Id",
+          "type": "string"
+        },
+        "tenant_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tenant Id"
+        }
+      },
+      "required": [
+        "subject_id",
+        "identity_provider",
+        "auth_method"
+      ],
+      "title": "Principal",
+      "type": "object"
+    }
+  },
+  "$id": "https://noricum.bio/schemas/contracts/human_approval.json",
+  "additionalProperties": false,
+  "properties": {
+    "approval_id": {
+      "title": "Approval Id",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "decision": {
+      "enum": [
+        "approved",
+        "rejected",
+        "changes_requested"
+      ],
+      "title": "Decision",
+      "type": "string"
+    },
+    "execution_intent_hash": {
+      "minLength": 1,
+      "title": "Execution Intent Hash",
+      "type": "string"
+    },
+    "execution_intent_id": {
+      "title": "Execution Intent Id",
+      "type": "string"
+    },
+    "note": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Note"
+    },
+    "plan_hash": {
+      "minLength": 1,
+      "title": "Plan Hash",
+      "type": "string"
+    },
+    "plan_id": {
+      "title": "Plan Id",
+      "type": "string"
+    },
+    "principal": {
+      "$ref": "#/$defs/Principal"
+    },
+    "schema_version": {
+      "default": 1,
+      "minimum": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "scope": {
+      "default": "plan",
+      "enum": [
+        "plan",
+        "steps"
+      ],
+      "title": "Scope",
+      "type": "string"
+    },
+    "selected_recommendation_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Approver chose an alternative; must be in the recommendation's candidate_set.",
+      "title": "Selected Recommendation Id"
+    },
+    "step_ids": {
+      "description": "Populated when scope == 'steps'.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Step Ids",
+      "type": "array"
+    },
+    "timestamp": {
+      "format": "date-time",
+      "title": "Timestamp",
+      "type": "string"
+    },
+    "trace_id": {
+      "description": "Shared by every record of one scientific loop (orch_<uuid7>).",
+      "title": "Trace Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "trace_id",
+    "approval_id",
+    "execution_intent_id",
+    "execution_intent_hash",
+    "plan_id",
+    "plan_hash",
+    "decision",
+    "principal"
+  ],
+  "title": "HumanApproval",
+  "type": "object"
+}

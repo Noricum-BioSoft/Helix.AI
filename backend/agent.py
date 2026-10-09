@@ -151,6 +151,11 @@ class AgentRole(str, Enum):
     CODEGEN = "CodeGenerator"  # Maps to AgentName.TOOL_GENERATOR
     VISUALIZER = "DataVisualizer"
 
+    # Phase 1: the human approval gate sits between Infra/CodeGen and the Broker.
+    HUMAN_APPROVAL = "HumanApproval"
+    # Phase 2: the Secure Science pre-routing assessment sits between Planner and Infra.
+    SECURITY_ASSESSOR = "SecurityAssessor"
+
 
 class HandoffPolicy:
     """
@@ -182,20 +187,39 @@ class HandoffPolicy:
         # Guru (ask path) can only answer or escalate to Planner with user consent
         AgentRole.GURU: [AgentRole.PLANNER],  # Escalation requires user consent (checked separately)
         
-        # Planner (execute path) must go to Infra next
-        AgentRole.PLANNER: [AgentRole.INFRA],
+        # Planner (execute path) goes to the SecurityAssessor (Phase 2) or, when the
+        # science gate is off, straight to Infra. See validate_handoff(security_gate=...).
+        AgentRole.PLANNER: [AgentRole.SECURITY_ASSESSOR, AgentRole.INFRA],
+
+        # SecurityAssessor must go to Infra (DENY / REQUIRE_REVIEW end the sequence instead)
+        AgentRole.SECURITY_ASSESSOR: [AgentRole.INFRA],
         
-        # Infra must go to CodeGen or Broker (CodeGen is optional)
-        AgentRole.INFRA: [AgentRole.CODEGEN, AgentRole.BROKER],
+        # Infra must go to CodeGen, HumanApproval or Broker. Infra → Broker directly is
+        # legal only when no approval is required (read-only tools); see validate_handoff.
+        AgentRole.INFRA: [AgentRole.CODEGEN, AgentRole.HUMAN_APPROVAL, AgentRole.BROKER],
         
-        # CodeGen must go to Broker
-        AgentRole.CODEGEN: [AgentRole.BROKER],
+        # CodeGen must go to HumanApproval or Broker (same approval rule as Infra)
+        AgentRole.CODEGEN: [AgentRole.HUMAN_APPROVAL, AgentRole.BROKER],
+
+        # HumanApproval must go to Broker
+        AgentRole.HUMAN_APPROVAL: [AgentRole.BROKER],
         
         # Broker must go to Visualizer
         AgentRole.BROKER: [AgentRole.VISUALIZER],
         
         # Visualizer is terminal (no further handoffs)
         AgentRole.VISUALIZER: [],
+    }
+
+    # Handoffs that skip the human approval gate; illegal when approval is required.
+    APPROVAL_BYPASS_HANDOFFS = {
+        (AgentRole.INFRA, AgentRole.BROKER),
+        (AgentRole.CODEGEN, AgentRole.BROKER),
+    }
+
+    # Handoffs that skip the Secure Science assessment; illegal when the science gate is on.
+    SECURITY_BYPASS_HANDOFFS = {
+        (AgentRole.PLANNER, AgentRole.INFRA),
     }
     
     # Intent-based routing rules
@@ -209,7 +233,9 @@ class HandoffPolicy:
         self, 
         from_agent: AgentRole, 
         to_agent: AgentRole,
-        user_consent: bool = False
+        user_consent: bool = False,
+        approval_required: bool = False,
+        security_gate: bool = False,
     ) -> None:
         """
         Validate that a handoff from one agent to another is allowed.
@@ -218,6 +244,11 @@ class HandoffPolicy:
             from_agent: Agent initiating the handoff
             to_agent: Agent receiving the handoff
             user_consent: Whether user has explicitly consented (for Guru→Planner escalation)
+            approval_required: Whether the approval policy requires a human approval for
+                this action. When True, Infra/CodeGen → Broker must pass through
+                HumanApproval (Phase 1.5).
+            security_gate: Whether the Secure Science gate is on. When True,
+                Planner → Infra must pass through SecurityAssessor (Phase 2).
         
         Raises:
             PolicyViolationError: If the handoff is not allowed
@@ -234,6 +265,20 @@ class HandoffPolicy:
         if from_agent == AgentRole.GURU and to_agent == AgentRole.PLANNER and not user_consent:
             raise PolicyViolationError(
                 f"Guru → Planner escalation requires explicit user consent"
+            )
+
+        # Phase 1: when approval is required, the Broker may only be reached via HumanApproval.
+        if approval_required and (from_agent, to_agent) in self.APPROVAL_BYPASS_HANDOFFS:
+            raise PolicyViolationError(
+                f"Illegal handoff: {from_agent.value} → {to_agent.value} bypasses HumanApproval "
+                f"but the approval policy requires one"
+            )
+
+        # Phase 2: with the science gate on, Infra may only be reached via SecurityAssessor.
+        if security_gate and (from_agent, to_agent) in self.SECURITY_BYPASS_HANDOFFS:
+            raise PolicyViolationError(
+                f"Illegal handoff: {from_agent.value} → {to_agent.value} bypasses SecurityAssessor "
+                f"but the Secure Science gate is on"
             )
     
     def get_allowed_next_agents(self, from_agent: AgentRole) -> List[AgentRole]:
@@ -272,7 +317,9 @@ class HandoffPolicy:
     def validate_workflow_sequence(
         self, 
         agent_sequence: List[AgentRole],
-        intent: str
+        intent: str,
+        approval_required: bool = False,
+        security_gate: bool = False,
     ) -> None:
         """
         Validate that a complete workflow sequence follows the policy.
@@ -306,7 +353,7 @@ class HandoffPolicy:
         for i in range(len(agent_sequence) - 1):
             from_agent = agent_sequence[i]
             to_agent = agent_sequence[i + 1]
-            self.validate_handoff(from_agent, to_agent)
+            self.validate_handoff(from_agent, to_agent, approval_required=approval_required, security_gate=security_gate)
 
 
 class PolicyViolationError(Exception):

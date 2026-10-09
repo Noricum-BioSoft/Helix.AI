@@ -22,7 +22,7 @@ This document evaluates the `docs/` folder and defines what is **needed for rele
 | Keep | Path | Reason |
 |------|------|--------|
 | ✅ | **agent.md** | BioAgent system prompt: principles, micro/macroflow, session awareness, output contract. |
-| ✅ | **HELIX_VS_CLAWBIO.md** | Positioning and comparison; informs architecture and product decisions. |
+| ➡️ | *HELIX_VS_CLAWBIO.md* | Moved to the private `Noricum-BioSoft/business-docs` repo (`strategy/`) — positioning material, not code documentation. |
 
 ### 3. User scenarios
 
@@ -84,8 +84,8 @@ deployment/COPILOT_*.md, CDK_*.md, DEPLOYMENT_ALTERNATIVES*.md, DEPLOYMENT_STATU
 **Analysis and investigations:**  
 analysis/*.md (EMR, job validation, PySpark, performance, etc.), CODEBASE_ORGANIZATION_ANALYSIS.md, COMPLETE_SUMMARY.md, COMPLETE_TRACE_CATALOG.md, DEMO_EVAL_SYSTEM_COMPLETE.md, END_TO_END_VERIFICATION.md, INTEGRATION_SUCCESS.md, JOB_STATUS_TRACKING.md, SEMANTIC_INVARIANTS.md, TRACE_*.md, TASK_ARCHITECTURE.md.
 
-**Strategy / GTM / pitch (optional):**  
-HELIX_AI_GTM_STRATEGY_INPUT.md, PITCH_DECK_OUTLINE.md, TRL_ASSESSMENT.md, TDS_HELIX_AI_DRAFT.md — keep only if you want them in the repo for release.
+**Strategy / GTM / pitch:**  
+HELIX_AI_GTM_STRATEGY_INPUT.md, PITCH_DECK_OUTLINE.md, TRL_ASSESSMENT.md, TDS_HELIX_AI_DRAFT.md — moved to the private `Noricum-BioSoft/business-docs` repo (2026-10-07).
 
 **Duplicate or moved content:**  
 Various fixes in `docs/fixes/` that duplicate or supersede root-level fix docs; `docs/agent.md` vs `docs/reference/agent.md` (keep one; README points to `docs/agent.md`).
@@ -104,7 +104,6 @@ docs/
 ├── AWS_USAGE.md                ← How AWS is used (hosting, data, compute)
 ├── ORCHESTRATION_DUALITY.md
 ├── agent.md                    ← Agents (BioAgent prompt)
-├── HELIX_VS_CLAWBIO.md
 ├── USER_SCENARIOS.md           ← User scenarios
 ├── TESTBED.md                  ← Tests
 ├── FASTQC_EXECUTION_FLOW.md    ← Optional
@@ -133,7 +132,7 @@ Historical docs are in **docs/archive/**; the **release set** is what **README.m
 ## Summary
 
 - **Architecture:** SYSTEM_OVERVIEW.md + architecture/* + ORCHESTRATION_DUALITY.md.
-- **Agents:** agent.md + HELIX_VS_CLAWBIO.md.
+- **Agents:** agent.md (competitive positioning lives in `business-docs/strategy/`).
 - **User scenarios:** USER_SCENARIOS.md.
 - **Tests:** TESTBED.md (+ `tests/testbed/` in code).
 - **Operations:** getting-started, deployment, development, troubleshooting.

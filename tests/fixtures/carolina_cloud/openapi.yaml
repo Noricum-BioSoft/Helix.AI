@@ -1,0 +1,2056 @@
+openapi: 3.0.3
+info:
+  title: Carolina Cloud API
+  version: 1.2.0
+  description: |-
+    **What is Carolina Cloud?**
+
+    Carolina Cloud provides compute resources through two deployment types: **QEMU/KVM VMs** (Ubuntu 24.04) and **pre-built containers** with persistent storage. Both are represented as 'Compute Instances' with *100% dedicated* CPU, RAM, and NVMe storage—no shared or burstable resources. VMs include SSH access and a public IPv4 address by default. Both have fully persistent storage that survives stop/restart cycles.Containers support specialized 'flavors' for data science workflows (RStudio Server, Marimo notebooks, Genomics stacks). To make a QEMU/KVM Ubuntu 24.04 VM please include {"resource_type": "vm"} in the request body.
+
+    **API Authentication:**
+
+    - **"Try it out" in Swagger:** Works automatically if you're logged into Carolina Cloud Console in the same browser (uses session authentication)
+    - **cURL / Programmatic Access:** Requires API key as Bearer token (you can get this in the 'API Key' section of the dashboard)
+    - **To get valid cURL examples:** Click the 'Authorize' button (top right) and enter your API key. Swagger will then generate cURL commands with the proper `Authorization: Bearer <your_api_key>` header.
+    - **Without authorizing:** cURL examples won't include the Bearer token, but "Try it out" will still work if you're logged in to the console on this browser.
+paths:
+  /api/buckets/:
+    get:
+      operationId: buckets_retrieve
+      description: Your personal scratch bucket plus all of your org's buckets (org
+        scratch + project buckets). Each row includes the bucket's S3 endpoint and
+        its scoped access credentials.
+      summary: List all buckets visible to you
+      tags:
+      - Storage
+      responses:
+        '200':
+          description: No response body
+      security:
+      - BearerAuth: []
+    post:
+      operationId: buckets_create
+      description: 'Body: `{"project": <id or name>, "provider": "wasabi"|"cloudflare",
+        "region": <optional, wasabi only>}`. Provider `wasabi` (default) is standard
+        warm storage with a 90-day minimum storage duration; `cloudflare` is an R2
+        pipeline bucket with no minimum duration and zero egress fees. One bucket
+        per project per provider. Requires an org and org-admin rights.'
+      summary: Create a project bucket (org admins only)
+      tags:
+      - Storage
+      responses:
+        '200':
+          description: No response body
+      security:
+      - BearerAuth: []
+  /api/buckets/{bucket_id}/:
+    delete:
+      operationId: buckets_destroy
+      description: Tears down the bucket at the provider and removes it. Project buckets
+        only — scratch buckets can't be deleted here. Deletion is permanent; Wasabi
+        buckets still accrue their 90-day minimum storage duration charge.
+      summary: Delete a project bucket (org admins only)
+      parameters:
+      - in: path
+        name: bucket_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - Storage
+      responses:
+        '204':
+          description: No response body
+      security:
+      - BearerAuth: []
+  /api/instance/:
+    get:
+      operationId: instance_list
+      description: |-
+        List all compute instances (VMs and Containers)
+
+        Returns all virtual machines and containers owned by the authenticated user.
+        Pool-worker containers (lifecycle_role='pool_worker') belonging to a
+        Nextflow PipelineRun are excluded — they surface under their PipelineRun
+        instead. The filter only applies to listing; pool workers remain reachable
+        at /api/instance/{uuid}/ for resize/exec/destroy.
+      summary: List all compute instances
+      tags:
+      - Compute Instances
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Instance'
+              examples:
+                ExampleInstances:
+                  value:
+                  - - uuid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+                      name: glowing-meadow-243
+                      lan_ipv4: 192.168.30.15
+                      state: provisioning
+                      n_vcpus: 16
+                      disk_size_gib: 100
+                      n_gpus: 0
+                      mem_gib: 32
+                      wan_ssh_port: 30150
+                      resource_type: vm
+                      owner_email: user@example.com
+                      flavor: base
+                      distro: ubuntu
+                      public_ipv4: 10.10.10.10
+                      original_ccloud_password: a4bbe7236982
+                      created_at: '2025-12-21T12:09:52.144Z'
+                      vcpu_cost_hourly_usd: 0.05
+                      ram_cost_hourly_usd: 0.02
+                      storage_cost_hourly_usd: 0.001
+                      gpu_cost_hourly_usd: 0.0
+                      gpu_model: null
+                      cpu_tier: general-purpose
+                      ssh_command: ssh ccloud@10.10.10.10
+                    - uuid: f9e8d7c6-b5a4-3210-fedc-ba9876543210
+                      name: genomics-workstation-42
+                      lan_ipv4: 192.168.60.25
+                      state: running
+                      n_vcpus: 64
+                      disk_size_gib: 100
+                      n_gpus: 0
+                      mem_gib: 128
+                      wan_ssh_port: 30160
+                      resource_type: container
+                      owner_email: user@example.com
+                      flavor: genomics
+                      distro: null
+                      public_ipv4: null
+                      original_ccloud_password: b5ccf8347a91
+                      created_at: '2025-12-20T08:15:30.522Z'
+                      vcpu_cost_hourly_usd: 0.05
+                      ram_cost_hourly_usd: 0.02
+                      storage_cost_hourly_usd: 0.001
+                      gpu_cost_hourly_usd: 0.0
+                      gpu_model: null
+                      cpu_tier: general-purpose
+                      ssh_command: ssh -p 30160 ccloud@login.carolinacloud.io
+                  summary: Example instances
+          description: Successfully retrieved list of instances
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailErrorResponse'
+          description: Unauthenticated - Invalid or missing API key
+      security:
+      - BearerAuth: []
+    post:
+      operationId: instance_create
+      description: |-
+        Create a new VM or Container
+
+        Provision a new KVM/QEMU Virtual Machine (Ubuntu or Debian guest, set via `distro`)
+        or container-based compute instance with custom CPU, RAM, disk, and optional GPU.
+        Requires a valid payment method or trial credits.
+      summary: Create a new compute instance
+      tags:
+      - Compute Instances
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstanceCreation'
+            examples:
+              UbuntuVMWithPublicIP:
+                value:
+                  resource_type: vm
+                  distro: ubuntu
+                  mem_gib: 16
+                  n_vcpus: 8
+                  disk_size_gib: 100
+                  cpu_tier: general-purpose
+                  public_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE9... user@example.com
+                summary: Ubuntu VM with public IP
+              DebianVM:
+                value:
+                  resource_type: vm
+                  distro: debian
+                  mem_gib: 16
+                  n_vcpus: 8
+                  disk_size_gib: 100
+                  cpu_tier: general-purpose
+                  public_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE9... user@example.com
+                summary: Debian VM
+              RStudioServerPre-loadedWithAnAWSS3Bucket:
+                value:
+                  resource_type: container
+                  flavor: rstudioserver
+                  mem_gib: 16
+                  n_vcpus: 8
+                  disk_size_gib: 100
+                  name: rstudio-with-bucket-prefill
+                  cpu_tier: high-performance
+                  aws_access_key_id: YOUR_ACCESS_KEY_ID
+                  aws_secret_access_key: YOUR_SECRET_ACCESS_KEY
+                  aws_endpoint_url: https://s3.us-east-1.amazonaws.com
+                  aws_prefill_bucket: your-bucket/experiments/results
+                summary: R Studio Server pre-loaded with an AWS S3 bucket
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/InstanceCreation'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/InstanceCreation'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Instance'
+              examples:
+                UbuntuVMWithPublicIPII:
+                  value:
+                    uuid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+                    name: zealous-cloud-42
+                    lan_ipv4: 192.168.30.15
+                    state: provisioning
+                    n_vcpus: 8
+                    disk_size_gib: 100
+                    n_gpus: 0
+                    mem_gib: 16
+                    wan_ssh_port: 30140
+                    resource_type: vm
+                    owner_email: user@example.com
+                    flavor: base
+                    distro: ubuntu
+                    public_ipv4: 10.10.10.10
+                    original_ccloud_password: abc123def456
+                    created_at: '2025-12-21T12:09:52.144Z'
+                    vcpu_cost_hourly_usd: 0.05
+                    ram_cost_hourly_usd: 0.02
+                    storage_cost_hourly_usd: 0.001
+                    gpu_cost_hourly_usd: 0
+                    gpu_model: null
+                    cpu_tier: general-purpose
+                    ssh_command: ssh -p 30142 ccloud@login.carolinacloud.io
+                  summary: Ubuntu VM with public IP II
+                RStudioServerPre-loadedWithAnAWSS3Bucket:
+                  value:
+                    uuid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+                    name: rstudio-with-bucket-prefill
+                    lan_ipv4: 192.168.30.15
+                    state: provisioning
+                    n_vcpus: 8
+                    disk_size_gib: 100
+                    n_gpus: 0
+                    mem_gib: 16
+                    wan_ssh_port: 40140
+                    resource_type: container
+                    owner_email: user@example.com
+                    flavor: rstudioserver
+                    distro: null
+                    public_ipv4: 10.10.10.10
+                    original_ccloud_password: abc123def456
+                    created_at: '2025-12-21T12:09:52.144Z'
+                    vcpu_cost_hourly_usd: 0.05
+                    ram_cost_hourly_usd: 0.02
+                    storage_cost_hourly_usd: 0.001
+                    gpu_cost_hourly_usd: 0
+                    gpu_model: null
+                    cpu_tier: high-performance
+                    ssh_command: ssh -p 40140 ccloud@login.carolinacloud.io
+                  summary: R Studio Server pre-loaded with an AWS S3 bucket
+          description: Instance created successfully
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstanceCreation400'
+          description: Bad request - Invalid field values
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailErrorResponse'
+          description: Unauthenticated - Invalid or missing API key
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstanceCreation422'
+          description: Insufficient resources available
+      security:
+      - BearerAuth: []
+  /api/instance/{uuid}/:
+    get:
+      operationId: instance_retrieve
+      description: |-
+        Get instance details
+
+        Retrieve detailed information about a specific VM or Container including
+        the root password, SSH command, IP address, and resource specifications.
+      summary: Get instance details
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+        required: true
+      tags:
+      - Compute Instances
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Instance'
+              examples:
+                UbuntuVMWithPublicIPv4:
+                  value:
+                    uuid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+                    name: glowing-meadow-243
+                    lan_ipv4: 192.168.30.15
+                    state: provisioning
+                    n_vcpus: 16
+                    disk_size_gib: 100
+                    n_gpus: 0
+                    mem_gib: 32
+                    wan_ssh_port: 30150
+                    resource_type: vm
+                    owner_email: user@example.com
+                    flavor: base
+                    distro: ubuntu
+                    public_ipv4: 10.10.10.10
+                    original_ccloud_password: a4bbe7236982
+                    created_at: '2025-12-21T12:09:52.144Z'
+                    vcpu_cost_hourly_usd: 0.05
+                    ram_cost_hourly_usd: 0.02
+                    storage_cost_hourly_usd: 0.001
+                    gpu_cost_hourly_usd: 0.0
+                    gpu_model: null
+                    cpu_tier: general-purpose
+                    ssh_command: ssh ccloud@10.10.10.10
+                  summary: Ubuntu VM with Public IPv4
+                GenomicsContainerExample:
+                  value:
+                    uuid: f9e8d7c6-b5a4-3210-fedc-ba9876543210
+                    name: genomics-workstation-42
+                    lan_ipv4: 192.168.60.25
+                    state: running
+                    n_vcpus: 64
+                    disk_size_gib: 100
+                    n_gpus: 0
+                    mem_gib: 128
+                    wan_ssh_port: 30160
+                    resource_type: container
+                    owner_email: user@example.com
+                    flavor: genomics
+                    distro: null
+                    public_ipv4: null
+                    original_ccloud_password: b5ccf8347a91
+                    created_at: '2025-12-20T08:15:30.522Z'
+                    vcpu_cost_hourly_usd: 0.05
+                    ram_cost_hourly_usd: 0.02
+                    storage_cost_hourly_usd: 0.001
+                    gpu_cost_hourly_usd: 0.0
+                    gpu_model: null
+                    cpu_tier: general-purpose
+                    ssh_command: ssh -p 30160 ccloud@login.carolinacloud.io
+                  summary: Genomics Container Example
+          description: Instance details retrieved successfully
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailErrorResponse'
+          description: Unauthenticated - Invalid or missing API key
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Instance not found
+      security:
+      - BearerAuth: []
+    patch:
+      operationId: instance_partial_update
+      description: |-
+        Update instance properties.
+
+        Supports updating:
+        - name: for any instance
+        - project: billing-project assignment (name, or null to clear)
+        - n_vcpus / mem_gib / disk_size_gib:
+            - containers: live resize via slave (disk is a live XFS quota on
+              sovereign hosts; DB-only soft limit elsewhere)
+            - VMs: resize via slave, which reboots the VM to apply (the
+              frontend confirms the reboot before sending). Capacity is checked
+              the same way for both.
+      summary: Update instance name, resources, or billing project
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+        required: true
+      tags:
+      - Compute Instances
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedInstanceUpdateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedInstanceUpdateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedInstanceUpdateRequest'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Instance'
+          description: Instance updated successfully
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailErrorResponse'
+          description: Bad request - Invalid field or validation error
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailErrorResponse'
+          description: Unauthenticated - Invalid or missing API key
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Instance not found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstanceCreation422'
+          description: Insufficient resources available for resource update
+      security:
+      - BearerAuth: []
+    delete:
+      operationId: instance_destroy
+      description: |-
+        Delete an instance
+
+        Permanently delete a virtual machine or container. All data will be lost.
+        Billing stops immediately upon deletion.
+      summary: Delete an instance
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+        required: true
+      tags:
+      - Compute Instances
+      responses:
+        '204':
+          description: Instance deleted successfully
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailErrorResponse'
+          description: Unauthenticated - Invalid or missing API key
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Instance not found
+      security:
+      - BearerAuth: []
+  /api/instance/{uuid}/add-port/:
+    post:
+      operationId: instance_add_port_create
+      description: Add a port to an instance
+      summary: Add a port to an instance
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+        required: true
+      tags:
+      - Compute Instances
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstanceAddPort'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/InstanceAddPort'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/InstanceAddPort'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstanceActionResponse'
+          description: Port added successfully
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailErrorResponse'
+          description: Bad request - Invalid port
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailErrorResponse'
+          description: Unauthenticated - Invalid or missing API key
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Instance not found
+      security:
+      - BearerAuth: []
+  /api/instance/{uuid}/clone/:
+    post:
+      operationId: instance_clone_create
+      description: |-
+        Clone a VM or container
+
+        Make an independent copy of an instance — same disk, same setup, its own new
+        IP and SSH port. For a VM the source is briefly stopped while its disk copies,
+        then auto-resumed; a container's source keeps running throughout.
+
+        The clone lands on a Carolina Cloud host with room for it (chosen for you).
+        Limited by a concurrent copy budget: up to 500 GiB of clone disk may be
+        copying at once per account (one larger clone is allowed by itself), plus
+        a backstop of 6 clone requests per minute. Returns 202; the clone appears
+        as a new instance (`<source>-clone-<id>`) once it boots — poll
+        `GET /api/instance/`.
+      summary: Clone a VM or container
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+        required: true
+      tags:
+      - Compute Instances
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CloneInstance'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CloneInstance'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CloneInstance'
+      responses:
+        '202':
+          description: Clone accepted; new instance boots shortly
+        '402':
+          description: Org spend cap reached
+        '409':
+          description: Instance is in a state that can't be cloned
+        '422':
+          description: 'No host has capacity for the clone, or your clone copy budget
+            is saturated (bottleneck: clone_budget)'
+        '429':
+          description: Rate limited — max 6 clone requests per minute
+      security:
+      - BearerAuth: []
+  /api/instance/{uuid}/remove-port/:
+    post:
+      operationId: instance_remove_port_create
+      description: Remove a port from an instance
+      summary: Remove a port from an instance
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+        required: true
+      tags:
+      - Compute Instances
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstancePortUpdate'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/InstancePortUpdate'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/InstancePortUpdate'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstanceActionResponse'
+          description: Port removed successfully
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailErrorResponse'
+          description: Bad request - Invalid port
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailErrorResponse'
+          description: Unauthenticated - Invalid or missing API key
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Instance not found
+      security:
+      - BearerAuth: []
+  /api/instance/{uuid}/restart/:
+    post:
+      operationId: instance_restart_create
+      description: |-
+        Restart a stopped instance
+
+        Restart a previously stopped VM or exited container. Billing resumes upon restart.
+        All data and configurations are preserved.
+      summary: Restart a stopped instance
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+        required: true
+      tags:
+      - Compute Instances
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstanceActionResponse'
+          description: Instance restarted successfully
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailErrorResponse'
+          description: Bad request - Invalid state
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailErrorResponse'
+          description: Unauthenticated - Invalid or missing API key
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Instance not found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstanceCreation422'
+          description: Insufficient resources available
+      security:
+      - BearerAuth: []
+  /api/instance/{uuid}/stats/:
+    get:
+      operationId: instance_stats_retrieve
+      description: Returns real-time CPU, RAM, and disk usage by proxying to the host.
+        Container-based instances only.
+      summary: Get live resource stats for a running container
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+        required: true
+      tags:
+      - Compute Instances
+      responses:
+        '200':
+          description: Live stats returned successfully
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Instance is not running
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Instance not found
+        '502':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Failed to reach host
+      security:
+      - BearerAuth: []
+  /api/instance/{uuid}/stop/:
+    post:
+      operationId: instance_stop_create
+      description: |-
+        Stop a running VM or Container
+
+        Gracefully stop a running instance. Data is preserved and billing is paused.
+      summary: Stop a running instance
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+        required: true
+      tags:
+      - Compute Instances
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstanceActionResponse'
+          description: Instance stopped successfully
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailErrorResponse'
+          description: Bad request - Invalid state
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailErrorResponse'
+          description: Unauthenticated - Invalid or missing API key
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Instance not found
+      security:
+      - BearerAuth: []
+  /api/limits/:
+    get:
+      operationId: limits_retrieve
+      description: Shortcut for the `limits` key of `/api/whoami/`.
+      summary: Get your account limits, usage, and rate limits
+      tags:
+      - Account & Limits
+      responses:
+        '200':
+          description: No response body
+      security:
+      - BearerAuth: []
+  /api/org/:
+    get:
+      operationId: org_retrieve
+      description: 'Not in an org: `{"in_org": false}`. Members get the org summary.
+        Org admins additionally get `members`: each member''s role flags, spend allocation
+        (cap + consumed, null cap = uncapped), instance counts and per-instance breakdown,
+        storage, and total hourly cost.'
+      summary: Get your organization
+      tags:
+      - Account & Limits
+      responses:
+        '200':
+          description: No response body
+      security:
+      - BearerAuth: []
+    patch:
+      operationId: org_partial_update
+      description: 'Body: `{"name": "<new name>"}`. Only the display name changes
+        — billing and audit history key on the org id.'
+      summary: Rename your organization (org admins only)
+      tags:
+      - Account & Limits
+      responses:
+        '200':
+          description: No response body
+      security:
+      - BearerAuth: []
+  /api/pipeline-launch/:
+    post:
+      operationId: pipeline_launch_create
+      description: |-
+        Preflights the pipeline reference and outdir bucket, provisions an ephemeral Nextflow head, and dispatches `nextflow run` into it — no manual SSH or head provisioning required. Returns immediately; poll `GET /api/pipeline-run/{id}/` for status, and the other pipeline-run endpoints for tasks/logs/output. The head is torn down automatically once the run closes.
+
+        **Key fields**
+
+        - `pipeline` — what to run: an nf-core name (`nf-core/rnaseq`) or git URL with `pipeline_type: "ref"`, or the raw text of a `main.nf` script with `pipeline_type: "script"`.
+        - `engine_flags` — single-dash options consumed by the Nextflow engine itself, as a flat list of strings: `["-resume", "-profile", "test", "-r", "3.14.0"]`. `-c`/`-config` and `-plugins` are managed by the platform and rejected here.
+        - `pipeline_params` — double-dash parameters consumed by the pipeline (what nf-core docs call params), same flat-list format: `["--input", "s3://my-bucket/samplesheet.csv", "--genome", "GRCh38"]`.
+        - `outdir` — s3:// URI where the pipeline writes results. It's validated up front (the bucket must exist and be yours, or be writable via `external_aws_creds`) and then passed to the pipeline as `--outdir` automatically — don't repeat it in `pipeline_params`.
+        - `config` — the *contents* of a `nextflow.config` as a string, not a filename. Equivalent to `nextflow run -c nextflow.config`: it's staged onto the head and layered on top of the head's built-in executor config. Use it for process resources, `withName:` overrides, params defaults, etc.
+      summary: Launch a Nextflow pipeline
+      tags:
+      - Nextflow Pipelines
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PipelineLaunch'
+            examples:
+              RunAnNf-corePipeline:
+                value:
+                  pipeline: nf-core/demo
+                  pipeline_type: ref
+                  outdir: s3://my-bucket/pipeline-runs/demo-1/out
+                  engine_flags:
+                  - -profile
+                  - test
+                  pipeline_params: []
+                summary: Run an nf-core pipeline
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PipelineLaunch'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PipelineLaunch'
+        required: true
+      responses:
+        '202':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PipelineLaunchResponse'
+          description: Launch accepted — head and run are starting in the background
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Invalid request body, or the pipeline/outdir preflight failed
+        '402':
+          description: No card or credits on file
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: outdir bucket not found or not owned by you
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Head provisioning failed
+      security:
+      - BearerAuth: []
+  /api/pipeline-run/:
+    get:
+      operationId: pipeline_run_list
+      description: Newest-first, capped at 200. POST (open a run) is plugin-internal
+        and hidden from this schema — see POST /api/pipeline-launch/ instead.
+      summary: List your pipeline runs
+      tags:
+      - Nextflow Pipelines
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PipelineRunSummary'
+          description: The caller's pipeline runs
+      security:
+      - BearerAuth: []
+  /api/pipeline-run/{id}/:
+    get:
+      operationId: pipeline_run_detail
+      description: Fetch a PipelineRun's current state (GET) or close it (DELETE).
+        Owner-only.
+      summary: Get pipeline run status
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - Nextflow Pipelines
+      responses:
+        '200':
+          description: The run's current status/outcome
+      security:
+      - BearerAuth: []
+    delete:
+      operationId: pipeline_run_close
+      description: Tears down surviving pool workers (and the head, if it was launched
+        via /api/pipeline-launch/). Idempotent — safe to call on an already-closed
+        run.
+      summary: Close/cancel a pipeline run
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - Nextflow Pipelines
+      responses:
+        '200':
+          description: The run's final state
+      security:
+      - BearerAuth: []
+  /api/pipeline-run/{id}/console/:
+    get:
+      operationId: pipeline_run_console_retrieve
+      description: |-
+        Run-level detail for the console runs-browser drilldown. Owner-only. Lighter than
+        /ui/ — it skips the DAG graph build; just the launch metadata, verdict, counts, cost.
+      summary: Get run summary (status, verdict, task counts, cost)
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - Nextflow Pipelines
+      responses:
+        '200':
+          description: Lightweight run summary — no DAG graph
+      security:
+      - BearerAuth: []
+  /api/pipeline-run/{id}/debug-log/:
+    get:
+      operationId: pipeline_run_debug_log_retrieve
+      description: |-
+        Markdown bug report for a run, for one-click paste into an LLM. Owner-only. Builds
+        on demand (stats a few S3 control files) — the frontend fetches it only on button click.
+      summary: Get a debug report for a failed run
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - Nextflow Pipelines
+      responses:
+        '200':
+          description: Markdown bug report, paste-ready for an LLM
+      security:
+      - BearerAuth: []
+  /api/pipeline-run/{id}/tasks/:
+    get:
+      operationId: pipeline_run_tasks_retrieve
+      description: |-
+        Tasks for a run, optionally filtered to one process via `?process=<FQ name>` —
+        feeds the DAG viewer's per-process task table. Owner-only. `container_uuid` is the
+        pool-worker the task ran on, for the detail drilldown's live /quickstats.
+      summary: List a run's tasks
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      - in: query
+        name: process
+        schema:
+          type: string
+        description: Filter to one process's tasks by its fully-qualified name
+      tags:
+      - Nextflow Pipelines
+      responses:
+        '200':
+          description: Tasks for the run (or one process)
+      security:
+      - BearerAuth: []
+  /api/projects/:
+    get:
+      operationId: projects_list
+      description: |-
+        GET ?include_archived=1 to include archived projects too.
+
+        Always includes each project's VM uuids, live compute burn, and
+        storage bucket — but not full per-instance detail, which is what
+        GET /api/projects/{id}/ is for. Keeps this endpoint cheap regardless
+        of how many projects (and VMs) an org has.
+      summary: List billing projects
+      parameters:
+      - in: query
+        name: include_archived
+        schema:
+          type: boolean
+        description: 'Include archived projects too. Default: live projects only.'
+      tags:
+      - Project Management
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Project'
+          description: ''
+      security:
+      - BearerAuth: []
+    post:
+      operationId: projects_create
+      description: |-
+        Create a billing project. Org admin only; each organization has a
+        maximum number of projects it can hold.
+      summary: Create a billing project
+      tags:
+      - Project Management
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Project'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Project'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Project'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+          description: ''
+      security:
+      - BearerAuth: []
+  /api/projects/{id}/:
+    get:
+      operationId: projects_retrieve
+      description: |-
+        Full detail for one project, including its live instances (name,
+        state, specs, host, per-instance cost) and storage bucket.
+      summary: Get a billing project
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this project.
+        required: true
+      tags:
+      - Project Management
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+          description: ''
+      security:
+      - BearerAuth: []
+    patch:
+      operationId: projects_partial_update
+      description: Rename a project (org admin only).
+      summary: Rename a billing project
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this project.
+        required: true
+      tags:
+      - Project Management
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedProject'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedProject'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedProject'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+          description: ''
+      security:
+      - BearerAuth: []
+  /api/projects/{id}/archive/:
+    post:
+      operationId: projects_archive_create
+      description: Archive a project (org admin only). Idempotent; never hard-deleted.
+      summary: Archive a billing project
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this project.
+        required: true
+      tags:
+      - Project Management
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Project'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Project'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Project'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+          description: ''
+      security:
+      - BearerAuth: []
+  /api/projects/{id}/spend/:
+    get:
+      operationId: projects_spend_retrieve
+      description: Cumulative all-time charged spend for one project (any org member).
+      summary: Get a project's cumulative spend
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this project.
+        required: true
+      tags:
+      - Project Management
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+          description: ''
+      security:
+      - BearerAuth: []
+  /api/whoami/:
+    get:
+      operationId: whoami_retrieve
+      description: Special endpoint for the UI to get information on the user
+      summary: Get your account identity, limits, and usage
+      tags:
+      - Account & Limits
+      responses:
+        '200':
+          description: No response body
+      security:
+      - BearerAuth: []
+components:
+  schemas:
+    CloneInstance:
+      type: object
+      description: |-
+        Validates a clone request for a VM or container. Capacity is checked in the view
+        when it resolves the target host. NOTE: a clone is a NEW instance — the view reserves
+        the FULL vCPU/RAM/disk on the target (a brand-new disk). This is the OPPOSITE of a
+        restart, which reserves disk=0 because the disk was never freed.
+      properties:
+        name:
+          type: string
+          description: Name for the clone (kebab-case). Omitted, we auto-name it '<source>-clone-<id>'.
+        move_public_ip:
+          type: boolean
+          default: false
+          description: 'Move the source''s dedicated public IP to the clone. Default:
+            leave it on the source.'
+        include_overlay:
+          type: boolean
+          default: false
+          description: 'Containers only. Default false: the clone runs the same flavor
+            image + your copied home/data volumes (fast). True: also copy the container''s
+            filesystem overlay (custom changes outside your volumes) — slower, copies
+            the full image.'
+        target_host:
+          type: string
+          description: 'Ops-only: pin the target host by hostname. Ignored for non-superusers
+            (host is auto-selected).'
+    DetailErrorResponse:
+      type: object
+      description: DRF standard error response (used for auth failures)
+      properties:
+        detail:
+          type: string
+      required:
+      - detail
+    ErrorResponse:
+      type: object
+      description: Generic error response
+      properties:
+        error:
+          type: string
+      required:
+      - error
+    ExternalAwsCreds:
+      type: object
+      description: BYO S3-compatible credentials for a pipeline-launch outdir we don't
+        manage.
+      properties:
+        endpoint_url:
+          type: string
+        access_key_id:
+          type: string
+        secret_access_key:
+          type: string
+      required:
+      - access_key_id
+      - endpoint_url
+      - secret_access_key
+    Instance:
+      type: object
+      description: |-
+        Unified serializer for all instance operations (list, detail, create response).
+        Includes all fields including costs, password, and computed properties.
+      properties:
+        uuid:
+          type: string
+          maxLength: 80
+        name:
+          type: string
+          description: User-friendly name for the VM/Container (must be unique)
+          maxLength: 255
+        lan_ipv4:
+          type: string
+          maxLength: 255
+        state:
+          enum:
+          - running
+          - shut_off
+          - exited
+          - lost
+          - provisioning
+          - error
+          - unhealthy
+          - migrating
+          - cloning
+          - resizing
+          - deleting
+          - deleted
+          - idle
+          type: string
+          description: |-
+            * `running` - Running
+            * `shut_off` - Shut Off
+            * `exited` - Exited
+            * `lost` - Lost
+            * `provisioning` - Provisioning
+            * `error` - Error
+            * `unhealthy` - Unhealthy
+            * `migrating` - Migrating
+            * `cloning` - Cloning
+            * `resizing` - Resizing
+            * `deleting` - Deleting
+            * `deleted` - Deleted
+            * `idle` - Idle
+          x-spec-enum-id: 459eac7551aeaa0c
+        n_vcpus:
+          type: integer
+          maximum: 100
+          minimum: 1
+        disk_size_gib:
+          type: integer
+          maximum: 500
+          minimum: 1
+        n_gpus:
+          type: integer
+          maximum: 100
+          minimum: 0
+        mem_gib:
+          type: number
+          format: double
+          maximum: 512
+          minimum: 0.5
+        wan_ssh_port:
+          type: integer
+          maximum: 65535
+          minimum: 1
+          nullable: true
+          description: SSH port number on login.carolinacloud.io for accessing this
+            instance
+        resource_type:
+          enum:
+          - vm
+          - container
+          type: string
+          x-spec-enum-id: 5f1c2f2b2b2cbc3f
+          description: |-
+            Whether this is a VM or Container
+
+            * `vm` - Virtual Machine
+            * `container` - Container
+        owner_email:
+          type: string
+          format: email
+          readOnly: true
+        flavor:
+          enum:
+          - base
+          - vm
+          - marimo
+          - rstudioserver
+          - rgeospatial
+          - datascience
+          - datasciencemarimo
+          - genomics
+          - jupyterlab
+          - nextflow-head
+          - sandboxbio
+          - chromium
+          type: string
+          x-spec-enum-id: ef9ba4ea14d9c963
+          description: |-
+            The flavor of the VM/Container (e.g. marimo, rserver, genomics or null for generic)
+
+            * `base` - Base
+            * `vm` - Virtual Machine
+            * `marimo` - Marimo
+            * `rstudioserver` - RStudio Server
+            * `rgeospatial` - RStudio Server (geospatial)
+            * `datascience` - Data Science
+            * `datasciencemarimo` - Data Science Notebook
+            * `genomics` - Genomics
+            * `jupyterlab` - JupyterLab
+            * `nextflow-head` - Nextflow Head
+            * `sandboxbio` - Sandbox.bio Nextflow Tutorial
+            * `chromium` - Chromium
+        distro:
+          enum:
+          - ubuntu
+          - debian
+          - ''
+          - null
+          type: string
+          x-spec-enum-id: e984d888a47a05d7
+          nullable: true
+          description: |-
+            Guest OS distribution for VMs ('ubuntu' or 'debian'). Null for containers.
+
+            * `ubuntu` - Ubuntu
+            * `debian` - Debian
+        public_ipv4:
+          type: string
+          nullable: true
+          maxLength: 255
+        original_ccloud_password:
+          type: string
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        vcpu_cost_hourly_usd:
+          type: number
+          format: double
+        ram_cost_hourly_usd:
+          type: number
+          format: double
+        storage_cost_hourly_usd:
+          type: number
+          format: double
+        gpu_cost_hourly_usd:
+          type: number
+          format: double
+        hourly_cost_usd:
+          type: number
+          format: double
+          readOnly: true
+        currently_running_sentieon:
+          type: boolean
+          readOnly: true
+        sentieon_hourly_cost_usd:
+          type: number
+          format: double
+          readOnly: true
+        gpu_model:
+          enum:
+          - rtx-4090
+          - rtx-5090
+          - pro-6000-blackwell
+          - ''
+          - null
+          type: string
+          description: |-
+            * `rtx-4090` - NVIDIA GeForce RTX 4090
+            * `rtx-5090` - NVIDIA GeForce RTX 5090
+            * `pro-6000-blackwell` - NVIDIA RTX PRO 6000 Blackwell
+          x-spec-enum-id: aa84de56b5eb69d1
+          nullable: true
+        cpu_tier:
+          enum:
+          - general-purpose
+          - high-performance
+          type: string
+          x-spec-enum-id: 6dc34ff4ff009ea2
+          description: |-
+            CPU performance tier for this instance
+
+            * `general-purpose` - General Purpose
+            * `high-performance` - High Performance
+        ssh_command:
+          type: string
+          readOnly: true
+        webapp_url:
+          type: string
+          readOnly: true
+        wan_ports: {}
+        auto_stop_enabled:
+          type: boolean
+          description: 'Containers only: automatically stop when CPU has been idle
+            for auto_stop_minutes.'
+        auto_stop_minutes:
+          type: integer
+          maximum: 1440
+          minimum: 1
+          description: Minutes of continuous idle CPU (<5%) before auto-stop triggers.
+        project:
+          type: string
+          readOnly: true
+        host:
+          type: string
+          readOnly: true
+      required:
+      - created_at
+      - currently_running_sentieon
+      - disk_size_gib
+      - host
+      - hourly_cost_usd
+      - mem_gib
+      - n_vcpus
+      - name
+      - original_ccloud_password
+      - owner_email
+      - project
+      - ram_cost_hourly_usd
+      - sentieon_hourly_cost_usd
+      - ssh_command
+      - storage_cost_hourly_usd
+      - uuid
+      - vcpu_cost_hourly_usd
+      - webapp_url
+    InstanceActionResponse:
+      type: object
+      description: Response for instance stop/restart actions
+      properties:
+        message:
+          type: string
+        uuid:
+          type: string
+        state:
+          type: string
+      required:
+      - message
+      - state
+      - uuid
+    InstanceAddPort:
+      type: object
+      description: Validates a port number for opening on an instance's firewall.
+      properties:
+        port:
+          type: integer
+          maximum: 65535
+          minimum: 1
+      required:
+      - port
+    InstanceCreation:
+      type: object
+      properties:
+        resource_type:
+          enum:
+          - vm
+          - container
+          type: string
+          x-spec-enum-id: 4c77caab3d234544
+          description: |-
+            Type of compute resource: 'vm' for isolated virtual machine, 'container' for a container with SSH access and an optional software environment (see flavor field).
+
+            * `vm` - vm
+            * `container` - container
+        mem_gib:
+          type: integer
+          maximum: 512
+          minimum: 1
+          description: Memory in GiB (e.g., 8, 16, 32)
+        n_vcpus:
+          type: integer
+          maximum: 256
+          minimum: 1
+          description: Number of virtual CPU cores (e.g., 2, 4, 8)
+        disk_size_gib:
+          type: integer
+          maximum: 2000
+          minimum: 10
+          description: Disk size in GiB (e.g., 50, 100, 500)
+        cpu_tier:
+          enum:
+          - general-purpose
+          - high-performance
+          type: string
+          x-spec-enum-id: 93b6f0088301c991
+          default: general-purpose
+          description: |-
+            CPU performance tier: 'general-purpose' for balanced workloads, 'high-performance' for CPUs with clock speeds over 5GHz (AMD Threadripper, EPYC Genoa/Turin)
+
+            * `general-purpose` - general-purpose
+            * `high-performance` - high-performance
+        public_key:
+          type: string
+          nullable: true
+          description: SSH public key for passwordless authentication
+        password_auth:
+          type: boolean
+          default: true
+          description: If false, disable SSH password authentication on the instance.
+            Requires public_key to be provided. Default true.
+        gpu_model:
+          enum:
+          - NVIDIA GeForce RTX 4090
+          - NVIDIA GeForce RTX 5090
+          - NVIDIA RTX PRO 6000 Blackwell
+          - null
+          type: string
+          x-spec-enum-id: 98f9d21237d072d4
+          nullable: true
+          description: |-
+            GPU model to attach (e.g., 'rtx-4090', 'rtx-5090', 'pro-6000-blackwell'). Leave null for CPU-only instances.
+
+            * `NVIDIA GeForce RTX 4090` - NVIDIA GeForce RTX 4090
+            * `NVIDIA GeForce RTX 5090` - NVIDIA GeForce RTX 5090
+            * `NVIDIA RTX PRO 6000 Blackwell` - NVIDIA RTX PRO 6000 Blackwell
+        flavor:
+          enum:
+          - base
+          - vm
+          - marimo
+          - rstudioserver
+          - rgeospatial
+          - datascience
+          - datasciencemarimo
+          - genomics
+          - jupyterlab
+          - nextflow-head
+          - sandboxbio
+          - chromium
+          type: string
+          x-spec-enum-id: ce7861dc460082a8
+          default: base
+          description: |-
+            Pre-configured software environment: 'base' (plain OS image), 'vm' (isolated VM), 'marimo' (Marimo notebooks), 'rstudioserver' (RStudio Server), 'genomics' (Genomics stack)
+
+            * `base` - base
+            * `vm` - vm
+            * `marimo` - marimo
+            * `rstudioserver` - rstudioserver
+            * `rgeospatial` - rgeospatial
+            * `datascience` - datascience
+            * `datasciencemarimo` - datasciencemarimo
+            * `genomics` - genomics
+            * `jupyterlab` - jupyterlab
+            * `nextflow-head` - nextflow-head
+            * `sandboxbio` - sandboxbio
+            * `chromium` - chromium
+        distro:
+          enum:
+          - ubuntu
+          - debian
+          - null
+          type: string
+          x-spec-enum-id: 15dc1bcda4741760
+          nullable: true
+          description: |-
+            Guest OS distribution for VMs: 'ubuntu' or 'debian'. Required when resource_type='vm'; omitted/null for containers (always Ubuntu-based).
+
+            * `ubuntu` - ubuntu
+            * `debian` - debian
+        name:
+          type: string
+          nullable: true
+          description: User-friendly name for the VM/Container. If not provided, a
+            random name will be generated.
+          maxLength: 255
+        aws_endpoint_url:
+          type: string
+          nullable: true
+          description: AWS endpoint URL for the S3 bucket (optional).
+        aws_access_key_id:
+          type: string
+          nullable: true
+          description: AWS access key ID for the S3 bucket (optional).
+        aws_secret_access_key:
+          type: string
+          nullable: true
+          description: AWS secret access key for the S3 bucket (optional).
+        aws_prefill_bucket:
+          type: string
+          nullable: true
+          description: Prefill bucket path for the S3 bucket (optional).
+        use_nextflow_bucket:
+          type: boolean
+          default: true
+          description: 'Nextflow heads only. True: wire the head to your Carolina
+            Cloud Nextflow (R2) bucket, provisioning it if needed. False: bring your
+            own bucket via the aws_* fields + nextflow_bucket_name.'
+        nextflow_bucket_name:
+          type: string
+          nullable: true
+          description: 'Nextflow heads with use_nextflow_bucket=False: the bucket
+            the pipeline workDir lives in (name only, no s3:// prefix).'
+        mount_ccloud_bucket:
+          type: boolean
+          default: true
+          description: Mount the user's Carolina Cloud S3 bucket into the container
+            via s3fs. Enabled by default.
+        wants_public_ipv4:
+          type: boolean
+          description: Request a public IPv4 address. Defaults to True for VMs, False
+            for containers. Only available for VMs and containers with flavor 'base'.
+        anthropic_api_key:
+          type: string
+          nullable: true
+          description: Anthropic API key for the instance (optional).
+        from_aws_compare:
+          type: boolean
+          default: false
+          description: 'Internal: set by the /aws-c8a landing page. Pins placement
+            to the apollo host (EPYC 9655) since that''s the CPU we advertise as the
+            c8a-equivalent — landing anywhere else would misrepresent the comparison.'
+        pin_host:
+          type: string
+          nullable: true
+          description: 'Superuser only: pin placement to this hostname (e.g. ''remus''),
+            bypassing normal tier/pool filtering. Silently ignored for non-superusers.'
+      required:
+      - disk_size_gib
+      - mem_gib
+      - n_vcpus
+      - resource_type
+    InstanceCreation400:
+      type: object
+      description: |-
+        Instance creation 400 error response - field validation errors.
+        Each key is a field name, each value is a list of error messages.
+      properties:
+        mem_gib:
+          type: array
+          items:
+            type: string
+        n_vcpus:
+          type: array
+          items:
+            type: string
+        disk_size_gib:
+          type: array
+          items:
+            type: string
+        flavor:
+          type: array
+          items:
+            type: string
+        distro:
+          type: array
+          items:
+            type: string
+        resource_type:
+          type: array
+          items:
+            type: string
+    InstanceCreation422:
+      type: object
+      description: |-
+        Instance creation 422 error response — insufficient resources. Host-capacity
+        breaches carry nearest_available; account-cap breaches (bottleneck account_*)
+        carry limit + current instead.
+      properties:
+        message:
+          type: string
+        requested:
+          $ref: '#/components/schemas/ResourceRequest'
+        nearest_available:
+          $ref: '#/components/schemas/ResourceAvailability'
+        bottleneck:
+          type: array
+          items:
+            type: string
+        limit:
+          $ref: '#/components/schemas/ResourceRequest'
+        current:
+          $ref: '#/components/schemas/ResourceRequest'
+      required:
+      - bottleneck
+      - message
+      - requested
+    InstancePortUpdate:
+      type: object
+      description: Validates a port number for updating on an instance's firewall.
+      properties:
+        message:
+          type: string
+        uuid:
+          type: string
+        wan_ports:
+          type: array
+          items:
+            type: integer
+            maximum: 65535
+            minimum: 1
+      required:
+      - message
+      - uuid
+      - wan_ports
+    PatchedInstanceUpdateRequest:
+      type: object
+      description: |-
+        Swagger request body for PATCH /api/instance/{uuid}/ ONLY — the view
+        handles 'project' itself (SetInstanceProjectSerializer) before the real
+        InstancePartialUpdateSerializer runs, so this must never be used to save.
+      properties:
+        name:
+          type: string
+          description: User-friendly name for the VM/Container (must be unique)
+          maxLength: 255
+        n_vcpus:
+          type: integer
+          maximum: 256
+          minimum: 1
+          description: New vCPU count. Containers resize live; VMs reboot to apply
+            (~60-90s of downtime, instance enters a 'resizing' state). Can be increased
+            or decreased.
+        mem_gib:
+          type: integer
+          maximum: 768
+          minimum: 1
+          description: New RAM in GiB. Containers resize live; VMs reboot to apply
+            (~60-90s of downtime, instance enters a 'resizing' state). Can be increased
+            or decreased.
+        disk_size_gib:
+          type: integer
+          maximum: 2000
+          minimum: 10
+          description: New disk size in GiB. Containers can grow or shrink (live XFS
+            quota on sovereign hosts; DB-only soft limit elsewhere). VMs can only
+            grow -- a request to shrink a VM's disk is rejected -- and reboot to apply
+            (~60-90s of downtime, 'resizing' state).
+        auto_stop_enabled:
+          type: boolean
+        auto_stop_minutes:
+          type: integer
+          maximum: 1440
+          minimum: 1
+        project:
+          type: string
+          nullable: true
+          description: Billing project to attribute this instance to (project name),
+            or null to clear. Must be an active project of your org.
+    PatchedProject:
+      type: object
+      description: |-
+        Billing-attribution project. `name` is kebab-case-validated by the model's
+        RegexValidator (ModelSerializer carries it over). `vm_count` is annotated by
+        the view (Count("vms")); defaults to 0 on a freshly created project.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        name:
+          type: string
+          pattern: ^[a-z]+(-[a-z]+)*$
+          maxLength: 63
+        archived:
+          type: boolean
+          readOnly: true
+        vm_count:
+          type: integer
+          readOnly: true
+          default: 0
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+    PipelineLaunch:
+      type: object
+      description: 'Validates POST /api/pipeline-launch/: what to run, and where to
+        put the output.'
+      properties:
+        pipeline:
+          type: string
+          description: nf-core name, git URL (pipeline_type='ref'), or raw main.nf
+            source (pipeline_type='script').
+        pipeline_type:
+          enum:
+          - ref
+          - script
+          type: string
+          description: |-
+            * `ref` - ref
+            * `script` - script
+          x-spec-enum-id: 7b83a4569472e9c6
+          default: ref
+        config:
+          type: string
+          default: ''
+          description: nextflow.config text, layered on top of the head's own executor
+            config via -c.
+        engine_flags:
+          type: array
+          items:
+            type: string
+          description: Nextflow engine flags, e.g. ['-resume', '-profile', 'test'].
+        pipeline_params:
+          type: array
+          items:
+            type: string
+          description: Pipeline parameters, e.g. ['--input', 'samplesheet.csv']. --outdir
+            is added automatically.
+        staged_files:
+          type: array
+          items:
+            $ref: '#/components/schemas/StagedFile'
+          description: Small local files referenced by name in engine_flags/pipeline_params
+            (e.g. a samplesheet whose columns point at s3://... URLs) — contents are
+            staged onto the head's run directory before dispatch and the reference
+            is rewritten to the staged path. Combined content capped at 5 MiB.
+        outdir:
+          type: string
+          description: s3:// URI for pipeline output — a bucket you own, or pair with
+            external_aws_creds.
+        cloned_from:
+          type: string
+          format: uuid
+          nullable: true
+          description: Run this launch was cloned from in the console — links the
+            two in the runs list.
+        external_aws_creds:
+          allOf:
+          - $ref: '#/components/schemas/ExternalAwsCreds'
+          nullable: true
+          description: Omit to use a Carolina Cloud bucket you own; provide to write
+            to an external S3-compatible bucket.
+      required:
+      - outdir
+      - pipeline
+    PipelineLaunchResponse:
+      type: object
+      description: Response for POST /api/pipeline-launch/ — poll GET /api/pipeline-run/{id}/
+        next.
+      properties:
+        id:
+          type: string
+          format: uuid
+        state:
+          type: string
+        head_uuid:
+          type: string
+      required:
+      - head_uuid
+      - id
+      - state
+    PipelineRunSummary:
+      type: object
+      description: One row of GET /api/pipeline-run/ — newest-first list of the caller's
+        runs.
+      properties:
+        id:
+          type: string
+          format: uuid
+        head_url:
+          type: string
+          nullable: true
+          description: Live URL of the head's web terminal, if it still exists.
+        status:
+          enum:
+          - active
+          - closed
+          - aborted
+          type: string
+          description: |-
+            * `active` - active
+            * `closed` - closed
+            * `aborted` - aborted
+          x-spec-enum-id: b0755bfa1f69cb57
+        outcome:
+          enum:
+          - succeeded
+          - failed
+          - null
+          type: string
+          x-spec-enum-id: c784105c2922494d
+          nullable: true
+          description: |-
+            Null while active or if the run never reported a verdict.
+
+            * `succeeded` - succeeded
+            * `failed` - failed
+        nf_run_name:
+          type: string
+          nullable: true
+        nf_session_uuid:
+          type: string
+          nullable: true
+          description: Shared across -resume attempts of the same session.
+        cloned_from:
+          type: string
+          format: uuid
+          nullable: true
+          description: Parent run id when this run was cloned in the console.
+        created_at:
+          type: string
+          format: date-time
+        closed_at:
+          type: string
+          format: date-time
+          nullable: true
+        duration_ms:
+          type: integer
+          nullable: true
+          description: Nextflow's own workflow duration; null until completion.
+      required:
+      - closed_at
+      - created_at
+      - duration_ms
+      - head_url
+      - id
+      - nf_run_name
+      - nf_session_uuid
+      - outcome
+      - status
+    Project:
+      type: object
+      description: |-
+        Billing-attribution project. `name` is kebab-case-validated by the model's
+        RegexValidator (ModelSerializer carries it over). `vm_count` is annotated by
+        the view (Count("vms")); defaults to 0 on a freshly created project.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        name:
+          type: string
+          pattern: ^[a-z]+(-[a-z]+)*$
+          maxLength: 63
+        archived:
+          type: boolean
+          readOnly: true
+        vm_count:
+          type: integer
+          readOnly: true
+          default: 0
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - archived
+      - created_at
+      - id
+      - name
+      - vm_count
+    ResourceAvailability:
+      type: object
+      description: Resource availability details (ram/disk in GiB)
+      properties:
+        cpus:
+          type: integer
+        ram:
+          type: number
+          format: double
+        disk:
+          type: integer
+        gpu_model:
+          type: string
+        gpus:
+          type: integer
+      required:
+      - cpus
+      - disk
+      - ram
+    ResourceRequest:
+      type: object
+      description: Resource request details (ram/disk in GiB)
+      properties:
+        cpus:
+          type: integer
+        ram:
+          type: integer
+        disk:
+          type: integer
+        gpu_model:
+          type: string
+      required:
+      - cpus
+      - disk
+      - ram
+    StagedFile:
+      type: object
+      description: |-
+        One local file to stage onto the head before dispatch — same mechanism as `config`,
+        generalized. `name` must match a value verbatim in engine_flags/pipeline_params so the
+        dispatcher knows which reference to rewrite to the staged path.
+      properties:
+        name:
+          type: string
+          maxLength: 255
+        content:
+          type: string
+      required:
+      - content
+      - name
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: Enter your API key (it will be automatically prefixed with 'Bearer
+        ')
+tags:
+- name: Storage
+- name: Compute Instances
+- name: Nextflow Pipelines
+- name: Project Management
+- name: Account & Limits

@@ -360,6 +360,56 @@ Desired deliverable format
     ],
   },
 
+  // ── 6. Tabular Q&A · Pan-cancer T cell DE table ──────────────────────────────
+  {
+    id: 'tabular-qa-tcell-targets',
+    title: 'Tabular Q&A: T Cell Target Ranking',
+    subtitle: 'Upload a DE results CSV — rank therapeutic candidates by fold-change and significance',
+    domain: 'Data Analysis',
+    domainColor: '#0E7490',
+    icon: '📊',
+    tags: ['Tabular Q&A', 'DE Analysis', 'T Cell Targets', 'Pan-Cancer'],
+    expectedBehavior: 'needs_inputs',
+    behaviorLabel: 'Upload & Ask',
+    tool: 'tabular_qa',
+    estimatedRuntime: '< 30 s',
+    inputs: [
+      { label: 'DE results table (CSV)', description: 'Upload a CSV with gene, log2FC, padj, baseMean columns — no copy-paste needed' },
+      { label: 'Analysis question', description: 'e.g. "top 10 genes by abs(log2FC) with padj < 0.05"' },
+    ],
+    outputs: [
+      { label: 'Ranked gene table', type: 'csv' },
+      { label: 'Analysis summary', type: 'report' },
+    ],
+    prompt: `I have a differential expression results table from a pan-cancer T cell target study and I want to identify the top therapeutic candidates.
+
+Please analyse the uploaded DE table to:
+  1. Rank all genes by absolute log2 fold-change.
+  2. Identify which of the top hits are statistically significant (padj < 0.05).
+  3. Flag any known T cell checkpoint or co-stimulatory genes (e.g. PDCD1, CD274, HAVCR2, TIGIT, LAG3, CTLA4, CD226).
+
+Upload your DE results CSV (columns: gene, log2FC, padj, baseMean) and I will run the analysis.`,
+    followUpPrompt: `What are the top 10 therapeutic T cell targets ranked by absolute log2FC that are statistically significant (padj < 0.05)?
+file_path: s3://noricum-ngs-data/demo/tabular_qa/pan_cancer_tcell_de_results.csv`,
+    dataPreview: [
+      {
+        title: 'DE Results Table (pan_cancer_tcell_de_results.csv)',
+        headers: ['gene', 'log2FC', 'padj', 'baseMean'],
+        rows: [
+          ['PDCD1',  '-3.21', '0.0000081', '445.3'],
+          ['CD274',  '2.87',  '0.000023',  '678.4'],
+          ['HAVCR2', '-2.64', '0.000041',  '312.7'],
+          ['TIGIT',  '-2.45', '0.000098',  '289.1'],
+          ['LAG3',   '-2.33', '0.00015',   '334.6'],
+          ['CD226',  '1.98',  '0.0012',    '567.9'],
+          ['CTLA4',  '-1.87', '0.0021',    '234.5'],
+          ['…',      '…',     '…',         '…'],
+        ],
+        note: '247 genes · Pan-cancer exhausted vs. functional T cell comparison · s3://noricum-ngs-data/demo/tabular_qa/pan_cancer_tcell_de_results.csv',
+      },
+    ],
+  },
+
   // ── 5. Phylogenetic analysis · SARS-CoV-2 spike ──────────────────────────────
   {
     id: 'phylogenetics-sarscov2',
@@ -473,6 +523,7 @@ export const getDemoScenarioByCommandAndTool = (
     'scrna-sle-pbmc':            ['lupus', 'sle', 'pbmc', 'single-cell', 'single cell', '10x genomics', 'umap', 'leiden'],
     'amplicon-qc-pipeline':      ['16s', 'amplicon', 'microbiome', 'fastqc', 'gut'],
     'phylogenetics-sarscov2':    ['sars', 'covid', 'spike protein', 'phylogen', 'wuhan', 'omicron', 'variant'],
+    'tabular-qa-tcell-targets':  ['pdcd1', 'pd-1', 'havcr2', 'tim-3', 'tigit', 'lag3', 'ctla4', 'therapeutic target', 't cell target', 'pan-cancer', 'pan cancer'],
   };
 
   // Check each scenario whose tool matches
@@ -503,6 +554,7 @@ export const getDemoScenarioByCommand = (command: string): DemoScenario | undefi
     'scrna-sle-pbmc':            ['lupus', 'sle', 'pbmc', 'single-cell', 'single cell', '10x genomics', 'umap', 'leiden'],
     'amplicon-qc-pipeline':      ['16s', 'amplicon', 'microbiome', 'fastqc', 'gut'],
     'phylogenetics-sarscov2':    ['sars', 'covid', 'spike protein', 'phylogen', 'wuhan', 'omicron', 'variant'],
+    'tabular-qa-tcell-targets':  ['pdcd1', 'pd-1', 'havcr2', 'tim-3', 'tigit', 'lag3', 'ctla4', 'therapeutic target', 't cell target', 'pan-cancer', 'pan cancer'],
   };
   for (const scenario of demoScenarios) {
     if (!scenario.followUpPrompt) continue;

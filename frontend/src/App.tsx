@@ -470,6 +470,10 @@ function App() {
     // regardless of where the user was in the conversation.
     setTimeout(() => pendingItemRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
 
+    if (clearInputsAfter) {
+      setCommand('');
+    }
+
     setLoading(true);
     const activityId = addActivity('Processing your request...');
     
@@ -750,48 +754,7 @@ function App() {
   };
 
   const handleAgentSubmit = async () => {
-    if (!command.trim()) return;
-
-    setAgentLoading(true);
-
-    try {
-      let finalCommand = enhanceCommandWithContext(command);
-
-      // Uploaded files are persisted by session and should not be inlined into prompts.
-
-      // ALWAYS use /execute endpoint - the agent handles everything
-      // If files are needed, they should be included in the command text or handled by the agent
-      const response = await helixApi.executeCommand(finalCommand, sessionId || undefined);
-
-      if ((response as any).session_id && !sessionId) {
-        const sid = (response as any).session_id;
-        setSessionId(sid);
-        try {
-          sessionStorage.setItem(SESSION_STORAGE_KEY, sid);
-        } catch {}
-      }
-
-      const historyItem: HistoryItem = {
-        input: command,
-        output: (response && response.result) ? response.result : response,
-        type: 'agent',
-        timestamp: new Date(),
-      };
-
-      setHistory(prev => [historyItem, ...prev]);
-    } catch (error) {
-      console.error('Error executing agent command:', error);
-      const historyItem: HistoryItem = {
-        input: command,
-        output: { error: error instanceof Error ? error.message : 'Unknown error' },
-        type: 'agent_error',
-        timestamp: new Date(),
-      };
-      setHistory(prev => [historyItem, ...prev]);
-    } finally {
-      setCommand('');
-      setAgentLoading(false);
-    }
+    return handleSubmit();
   };
 
 

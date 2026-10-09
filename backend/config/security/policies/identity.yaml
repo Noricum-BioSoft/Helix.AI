@@ -1,0 +1,15 @@
+# Identity — which risk categories need an authenticated principal and which roles may proceed.
+policy_id: identity
+version: "2026.10"
+
+# Categories below this threshold may proceed without a principal (chat / dev usage).
+principal_required_from_category: external_compute
+
+# Role requirements per category (any listed role suffices). Empty list = any principal.
+roles_required:
+  external_compute: []
+  experimental: [scientist, approver, security_reviewer]
+  synthesis: [approver, security_reviewer]
+
+# Roles allowed to resolve WAITING_FOR_SECURITY_REVIEW via the review endpoint.
+review_roles: [security_reviewer]

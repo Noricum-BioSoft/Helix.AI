@@ -482,6 +482,8 @@ docs/**/*.json
 !docs/[A-Z]*.md
 # Deployment guides (EC2_GIT_BETA.md etc.) — UPPER_SNAKE names match the ignore above
 !docs/deployment/*.md
+# Execution-provider reference docs (note: core.ignorecase=true makes [A-Z] match lowercase on macOS)
+!docs/providers/*.md
 
 tests/*PROOF*.md
 tests/*SUMMARY*.md

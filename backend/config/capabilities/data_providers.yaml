@@ -1,0 +1,47 @@
+## Data-retrieval capabilities (read-only external references). These are
+## category: data — fetching public records, not compute or experiment.
+## Routed through the legacy broker adapter in P3A.
+capabilities:
+  - provider: ncbi_entrez
+    capability_id: ncbi_entrez:fetch_sequence
+    category: data
+    description: Fetch a sequence record from NCBI Entrez (nuccore/protein).
+    tool_name_aliases: [fetch_ncbi_sequence]
+    inputs:
+      - name: accession
+        type: string
+        required: true
+    outputs:
+      - name: sequence
+        type: sequence
+        format: fasta
+    cost:
+      model: free
+    integration:
+      adapter: backend.execution.providers.legacy_broker:LegacyBrokerProvider
+      execution_mode: sync
+      idempotency_support: none
+    security:
+      data_classes_allowed: [public]
+
+  - provider: uniprot
+    capability_id: uniprot:fetch_protein
+    category: data
+    description: Fetch a protein record from UniProt.
+    tool_name_aliases: [fetch_uniprot_protein]
+    inputs:
+      - name: accession
+        type: string
+        required: true
+    outputs:
+      - name: protein
+        type: string
+        format: fasta
+    cost:
+      model: free
+    integration:
+      adapter: backend.execution.providers.legacy_broker:LegacyBrokerProvider
+      execution_mode: sync
+      idempotency_support: none
+    security:
+      data_classes_allowed: [public]

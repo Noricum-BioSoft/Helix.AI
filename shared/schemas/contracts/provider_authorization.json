@@ -1,0 +1,161 @@
+{
+  "$defs": {
+    "AuthorizationCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "check_id": {
+          "description": "data_class | capability_supported | residency | screening_satisfied | human_approval_flag | envelope_compliance | provider_constraint:<name>",
+          "title": "Check Id",
+          "type": "string"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detail"
+        },
+        "result": {
+          "enum": [
+            "pass",
+            "fail",
+            "not_applicable"
+          ],
+          "title": "Result",
+          "type": "string"
+        }
+      },
+      "required": [
+        "check_id",
+        "result"
+      ],
+      "title": "AuthorizationCheck",
+      "type": "object"
+    },
+    "RationaleItem": {
+      "description": "One statement \u2192 conclusion pair, optionally backed by evidence references.",
+      "properties": {
+        "conclusion": {
+          "description": "What follows from the statement for this decision.",
+          "minLength": 1,
+          "title": "Conclusion",
+          "type": "string"
+        },
+        "confidence": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Confidence"
+        },
+        "evidence_refs": {
+          "description": "Ids/URIs of evidence this item relies on (dataset:\u2026, artifact:\u2026, criterion:\u2026, policy:\u2026).",
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "statement": {
+          "description": "Observed fact or assumption, stated plainly.",
+          "minLength": 1,
+          "title": "Statement",
+          "type": "string"
+        }
+      },
+      "required": [
+        "statement",
+        "conclusion"
+      ],
+      "title": "RationaleItem",
+      "type": "object"
+    }
+  },
+  "$id": "https://noricum.bio/schemas/contracts/provider_authorization.json",
+  "additionalProperties": false,
+  "properties": {
+    "assessment_id": {
+      "title": "Assessment Id",
+      "type": "string"
+    },
+    "authorization_id": {
+      "title": "Authorization Id",
+      "type": "string"
+    },
+    "capability_id": {
+      "title": "Capability Id",
+      "type": "string"
+    },
+    "checks": {
+      "items": {
+        "$ref": "#/$defs/AuthorizationCheck"
+      },
+      "title": "Checks",
+      "type": "array"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "provider_id": {
+      "title": "Provider Id",
+      "type": "string"
+    },
+    "rationale": {
+      "items": {
+        "$ref": "#/$defs/RationaleItem"
+      },
+      "title": "Rationale",
+      "type": "array"
+    },
+    "recommendation_id": {
+      "title": "Recommendation Id",
+      "type": "string"
+    },
+    "result": {
+      "enum": [
+        "AUTHORIZED",
+        "DENIED",
+        "REQUIRES_SCREENING",
+        "REQUIRES_REVIEW"
+      ],
+      "title": "Result",
+      "type": "string"
+    },
+    "schema_version": {
+      "default": 1,
+      "minimum": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "trace_id": {
+      "description": "Shared by every record of one scientific loop (orch_<uuid7>).",
+      "title": "Trace Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "trace_id",
+    "authorization_id",
+    "recommendation_id",
+    "assessment_id",
+    "provider_id",
+    "capability_id",
+    "result"
+  ],
+  "title": "ProviderAuthorization",
+  "type": "object"
+}

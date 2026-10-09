@@ -1,0 +1,365 @@
+{
+  "$defs": {
+    "CapabilityCost": {
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "enum": [
+            "free",
+            "per_vcpu_hour",
+            "per_instance_hour",
+            "per_sample",
+            "per_request",
+            "per_gb",
+            "quoted"
+          ],
+          "title": "Model",
+          "type": "string"
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Notes"
+        },
+        "unit_usd_range": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit Usd Range"
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "title": "CapabilityCost",
+      "type": "object"
+    },
+    "CapabilityIO": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "format": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "fastq | bam | csv | fasta | \u2026",
+          "title": "Format"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "required": {
+          "default": true,
+          "title": "Required",
+          "type": "boolean"
+        },
+        "type": {
+          "description": "file-path | directory-path | sequence | table | string | number | \u2026",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "type"
+      ],
+      "title": "CapabilityIO",
+      "type": "object"
+    },
+    "CapabilityIntegration": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {
+          "description": "Import path 'module:Class' of the ExecutionProvider implementation.",
+          "title": "Adapter",
+          "type": "string"
+        },
+        "api_available": {
+          "default": true,
+          "title": "Api Available",
+          "type": "boolean"
+        },
+        "execution_mode": {
+          "default": "sync",
+          "enum": [
+            "sync",
+            "async"
+          ],
+          "title": "Execution Mode",
+          "type": "string"
+        },
+        "idempotency_support": {
+          "default": "none",
+          "enum": [
+            "native",
+            "client_dedup",
+            "none"
+          ],
+          "title": "Idempotency Support",
+          "type": "string"
+        }
+      },
+      "required": [
+        "adapter"
+      ],
+      "title": "CapabilityIntegration",
+      "type": "object"
+    },
+    "CapabilityProvenance": {
+      "additionalProperties": false,
+      "properties": {
+        "catalog_fetched_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Catalog Fetched At"
+        },
+        "catalog_sha": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Catalog Sha"
+        },
+        "pinned_release": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pinned Release"
+        },
+        "source": {
+          "default": "manual",
+          "enum": [
+            "manual",
+            "generated",
+            "provider"
+          ],
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "title": "CapabilityProvenance",
+      "type": "object"
+    },
+    "CapabilitySecurity": {
+      "additionalProperties": false,
+      "properties": {
+        "data_classes_allowed": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Data Classes Allowed",
+          "type": "array"
+        },
+        "human_approval_required": {
+          "default": false,
+          "title": "Human Approval Required",
+          "type": "boolean"
+        },
+        "regions": {
+          "description": "Where the provider runs/stores data; empty = unspecified.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Regions",
+          "type": "array"
+        },
+        "screening_required": {
+          "default": false,
+          "title": "Screening Required",
+          "type": "boolean"
+        }
+      },
+      "title": "CapabilitySecurity",
+      "type": "object"
+    },
+    "CapabilityTurnaround": {
+      "additionalProperties": false,
+      "properties": {
+        "estimated_days": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Estimated Days"
+        },
+        "estimated_minutes": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Estimated Minutes"
+        }
+      },
+      "title": "CapabilityTurnaround",
+      "type": "object"
+    }
+  },
+  "$id": "https://noricum.bio/schemas/contracts/capability_descriptor.json",
+  "additionalProperties": false,
+  "properties": {
+    "capability_id": {
+      "description": "Globally unique, e.g. 'nextflow:nf-core/rnaseq', 'mock_experimental:protein_expression'.",
+      "title": "Capability Id",
+      "type": "string"
+    },
+    "category": {
+      "enum": [
+        "computational",
+        "experimental",
+        "data",
+        "advisory"
+      ],
+      "title": "Category",
+      "type": "string"
+    },
+    "constraints": {
+      "additionalProperties": true,
+      "title": "Constraints",
+      "type": "object"
+    },
+    "cost": {
+      "$ref": "#/$defs/CapabilityCost"
+    },
+    "description": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Description"
+    },
+    "inputs": {
+      "items": {
+        "$ref": "#/$defs/CapabilityIO"
+      },
+      "title": "Inputs",
+      "type": "array"
+    },
+    "integration": {
+      "$ref": "#/$defs/CapabilityIntegration"
+    },
+    "outputs": {
+      "items": {
+        "$ref": "#/$defs/CapabilityIO"
+      },
+      "title": "Outputs",
+      "type": "array"
+    },
+    "prior_performance": {
+      "additionalProperties": true,
+      "title": "Prior Performance",
+      "type": "object"
+    },
+    "provenance": {
+      "$ref": "#/$defs/CapabilityProvenance"
+    },
+    "provider": {
+      "description": "Provider id, e.g. local_compute, nextflow, mock_experimental_provider.",
+      "title": "Provider",
+      "type": "string"
+    },
+    "security": {
+      "$ref": "#/$defs/CapabilitySecurity"
+    },
+    "supported_systems": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Supported Systems",
+      "type": "array"
+    },
+    "tool_name_aliases": {
+      "description": "Helix tool names that resolve to this capability.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Tool Name Aliases",
+      "type": "array"
+    },
+    "turnaround": {
+      "$ref": "#/$defs/CapabilityTurnaround"
+    }
+  },
+  "required": [
+    "provider",
+    "capability_id",
+    "category",
+    "cost",
+    "integration"
+  ],
+  "title": "CapabilityDescriptor",
+  "type": "object"
+}

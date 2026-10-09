@@ -1,3 +1,61 @@
 ---
-alwaysApply: true
+description: React + TypeScript frontend rules for Helix.AI
+globs:
+  - "frontend/**/*.ts"
+  - "frontend/**/*.tsx"
+  - "tests/frontend/**/*.ts"
+  - "tests/frontend/**/*.tsx"
 ---
+
+# Frontend commands
+Use the smallest relevant verification first, then expand.
+
+Preferred commands:
+- `npm --prefix frontend run test`
+- `npm --prefix frontend run build`
+- `npm --prefix frontend run lint`
+- `npm --prefix frontend run typecheck`
+
+# Key frontend files
+- `frontend/src/App.tsx`
+- `frontend/src/services/mcpApi.ts`
+- `frontend/src/components/`
+- `frontend/src/components/designs/`
+
+# Frontend behavior expectations
+The UI must clearly support:
+- entering an analysis request,
+- viewing or editing a generated plan,
+- launching workflows,
+- monitoring progress/state,
+- reviewing outputs,
+- revising plots,
+- adding files after the first run,
+- retrying or continuing iterative workflows,
+- viewing errors and recovery guidance.
+
+# Change rules
+- Preserve existing app structure and API integration patterns.
+- Prefer small component-level changes over broad refactors unless required.
+- If changing data flow, validate request/response compatibility with `frontend/src/services/mcpApi.ts`.
+- Do not break long-running workflow UX, loading states, or error visibility.
+
+# Required frontend coverage for bug fixes
+For each frontend bug fix, add or update tests for affected behavior:
+- workflow creation/editing,
+- file upload and additional file attachment,
+- plot display or update controls,
+- run status/progress rendering,
+- error, retry, and resume states,
+- API failure handling,
+- session/history continuity where applicable.
+
+# UI validation rules
+After meaningful UI changes:
+- run frontend tests,
+- run build/type checks,
+- validate the affected flow in browser tooling when practical.
+
+# UX priorities
+Prefer correctness and state clarity over cosmetic changes.
+For complex workflows, make agent state, current step, and failure context visible.

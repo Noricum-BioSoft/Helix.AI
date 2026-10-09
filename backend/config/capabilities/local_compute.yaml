@@ -1,0 +1,95 @@
+## Local compute capabilities — tools that run in-process / in the local sandbox
+## via Helix's ``dispatch_tool``. Hand-curated for P3A; the full generated form
+## (from tool_schemas.py + environment_capabilities.yaml) lands with the
+## discovery work in P3C.
+##
+## Adapter: backend.execution.providers.local_compute:LocalComputeProvider
+## Idempotency: client_dedup (the fabric looks up the key in the ledger before
+## re-dispatching; a local tool run itself is not transactional).
+capabilities:
+  - provider: local_compute
+    capability_id: local_compute:bulk_rnaseq_analysis
+    category: computational
+    description: Bulk RNA-seq differential expression (DESeq2-style) on a counts matrix.
+    tool_name_aliases: [bulk_rnaseq_analysis]
+    inputs:
+      - name: counts_file
+        type: file-path
+        format: csv
+        required: true
+    outputs:
+      - name: results
+        type: table
+        format: csv
+    cost:
+      model: free
+    integration:
+      adapter: backend.execution.providers.local_compute:LocalComputeProvider
+      execution_mode: sync
+      idempotency_support: client_dedup
+
+  - provider: local_compute
+    capability_id: local_compute:fastqc_quality_analysis
+    category: computational
+    description: FastQC-style read quality control.
+    tool_name_aliases: [fastqc_quality_analysis]
+    inputs:
+      - name: fastq_file
+        type: file-path
+        format: fastq
+        required: true
+    cost:
+      model: free
+    integration:
+      adapter: backend.execution.providers.local_compute:LocalComputeProvider
+      execution_mode: sync
+      idempotency_support: client_dedup
+
+  - provider: local_compute
+    capability_id: local_compute:tabular_analysis
+    category: computational
+    description: Tabular/dataframe analysis (filter, aggregate, correlate, plot).
+    tool_name_aliases: [tabular_analysis, tabular_qa]
+    inputs:
+      - name: data_file
+        type: file-path
+        required: true
+    cost:
+      model: free
+    integration:
+      adapter: backend.execution.providers.local_compute:LocalComputeProvider
+      execution_mode: sync
+      idempotency_support: client_dedup
+
+  - provider: local_compute
+    capability_id: local_compute:single_cell_analysis
+    category: computational
+    description: Single-cell RNA-seq analysis (QC, clustering, UMAP).
+    tool_name_aliases: [single_cell_analysis]
+    inputs:
+      - name: data_file
+        type: file-path
+        format: h5ad
+        required: true
+    cost:
+      model: free
+    integration:
+      adapter: backend.execution.providers.local_compute:LocalComputeProvider
+      execution_mode: sync
+      idempotency_support: client_dedup
+
+  - provider: local_compute
+    capability_id: local_compute:sequence_alignment
+    category: computational
+    description: Pairwise/multiple sequence alignment.
+    tool_name_aliases: [sequence_alignment]
+    inputs:
+      - name: sequences
+        type: sequence
+        required: true
+    cost:
+      model: free
+    integration:
+      adapter: backend.execution.providers.local_compute:LocalComputeProvider
+      execution_mode: sync
+      idempotency_support: client_dedup

@@ -147,9 +147,10 @@ class TestHandoffPolicy:
         assert AgentRole.GURU in allowed
         assert AgentRole.PLANNER in allowed
         
-        # Planner must go to Infra
+        # Planner goes to SecurityAssessor (Phase 2) or Infra (gate off)
         allowed = self.policy.get_allowed_next_agents(AgentRole.PLANNER)
-        assert allowed == [AgentRole.INFRA]
+        assert set(allowed) == {AgentRole.SECURITY_ASSESSOR, AgentRole.INFRA}
+        assert self.policy.get_allowed_next_agents(AgentRole.SECURITY_ASSESSOR) == [AgentRole.INFRA]
         
         # Visualizer is terminal (no next agents)
         allowed = self.policy.get_allowed_next_agents(AgentRole.VISUALIZER)
@@ -283,3 +284,90 @@ class TestCommandProcessorHandoffPolicy:
         assert len(processor.agent_sequence) >= 2
         assert processor.agent_sequence[0] == AgentRole.INTENT_DETECTOR
         assert processor.agent_sequence[1] == AgentRole.PLANNER
+
+
+class TestHumanApprovalHandoff:
+    """Phase 1.5: Infra/CodeGen → HumanApproval → Broker; direct → Broker only when no approval is required."""
+
+    def setup_method(self):
+        self.policy = HandoffPolicy()
+
+    def test_human_approval_is_reachable_from_infra_and_codegen(self):
+        self.policy.validate_handoff(AgentRole.INFRA, AgentRole.HUMAN_APPROVAL)
+        self.policy.validate_handoff(AgentRole.CODEGEN, AgentRole.HUMAN_APPROVAL)
+        self.policy.validate_handoff(AgentRole.HUMAN_APPROVAL, AgentRole.BROKER)
+
+    def test_human_approval_only_hands_off_to_broker(self):
+        with pytest.raises(PolicyViolationError, match="Illegal handoff.*HumanApproval"):
+            self.policy.validate_handoff(AgentRole.HUMAN_APPROVAL, AgentRole.VISUALIZER)
+        with pytest.raises(PolicyViolationError):
+            self.policy.validate_handoff(AgentRole.HUMAN_APPROVAL, AgentRole.PLANNER)
+
+    def test_direct_broker_handoff_legal_only_without_approval_requirement(self):
+        # Read-only / no-approval actions: unchanged legacy behaviour
+        self.policy.validate_handoff(AgentRole.INFRA, AgentRole.BROKER)
+        self.policy.validate_handoff(AgentRole.CODEGEN, AgentRole.BROKER)
+        # Approval required: must pass through HumanApproval
+        with pytest.raises(PolicyViolationError, match="bypasses HumanApproval"):
+            self.policy.validate_handoff(AgentRole.INFRA, AgentRole.BROKER, approval_required=True)
+        with pytest.raises(PolicyViolationError, match="bypasses HumanApproval"):
+            self.policy.validate_handoff(AgentRole.CODEGEN, AgentRole.BROKER, approval_required=True)
+
+    def test_workflow_sequence_with_and_without_approval(self):
+        gated = [
+            AgentRole.INTENT_DETECTOR,
+            AgentRole.PLANNER,
+            AgentRole.INFRA,
+            AgentRole.HUMAN_APPROVAL,
+            AgentRole.BROKER,
+            AgentRole.VISUALIZER,
+        ]
+        self.policy.validate_workflow_sequence(gated, intent="execute", approval_required=True)
+        ungated = [
+            AgentRole.INTENT_DETECTOR,
+            AgentRole.PLANNER,
+            AgentRole.INFRA,
+            AgentRole.BROKER,
+            AgentRole.VISUALIZER,
+        ]
+        self.policy.validate_workflow_sequence(ungated, intent="execute")
+        with pytest.raises(PolicyViolationError, match="bypasses HumanApproval"):
+            self.policy.validate_workflow_sequence(ungated, intent="execute", approval_required=True)
+
+
+class TestSecurityAssessorHandoff:
+    """Phase 2: SecurityAssessor sits between Planner and Infra when the science gate is on."""
+
+    def setup_method(self):
+        self.policy = HandoffPolicy()
+
+    def test_planner_to_security_assessor_to_infra_is_legal(self):
+        self.policy.validate_handoff(AgentRole.PLANNER, AgentRole.SECURITY_ASSESSOR, security_gate=True)
+        self.policy.validate_handoff(AgentRole.SECURITY_ASSESSOR, AgentRole.INFRA, security_gate=True)
+
+    def test_security_assessor_cannot_skip_to_broker_or_approval(self):
+        for target in (AgentRole.BROKER, AgentRole.HUMAN_APPROVAL, AgentRole.CODEGEN, AgentRole.VISUALIZER):
+            with pytest.raises(PolicyViolationError):
+                self.policy.validate_handoff(AgentRole.SECURITY_ASSESSOR, target)
+
+    def test_planner_to_infra_illegal_only_when_gate_on(self):
+        # Gate off: legacy behaviour unchanged
+        self.policy.validate_handoff(AgentRole.PLANNER, AgentRole.INFRA)
+        # Gate on: must go through the assessor
+        with pytest.raises(PolicyViolationError, match="bypasses SecurityAssessor"):
+            self.policy.validate_handoff(AgentRole.PLANNER, AgentRole.INFRA, security_gate=True)
+
+    def test_full_gated_sequence(self):
+        gated = [
+            AgentRole.INTENT_DETECTOR,
+            AgentRole.PLANNER,
+            AgentRole.SECURITY_ASSESSOR,
+            AgentRole.INFRA,
+            AgentRole.HUMAN_APPROVAL,
+            AgentRole.BROKER,
+            AgentRole.VISUALIZER,
+        ]
+        self.policy.validate_workflow_sequence(gated, intent="execute", approval_required=True, security_gate=True)
+        bypass = [AgentRole.INTENT_DETECTOR, AgentRole.PLANNER, AgentRole.INFRA, AgentRole.HUMAN_APPROVAL, AgentRole.BROKER]
+        with pytest.raises(PolicyViolationError, match="bypasses SecurityAssessor"):
+            self.policy.validate_workflow_sequence(bypass, intent="execute", approval_required=True, security_gate=True)

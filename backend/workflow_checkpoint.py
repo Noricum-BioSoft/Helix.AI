@@ -15,6 +15,10 @@ EXECUTING               – Pipeline is running.
 FAILED                  – Last step failed; recovery options available.
 FAILED_WAITING_FOR_USER – Failure recovery needs user guidance before retrying.
 COMPLETED               – Workflow finished successfully.
+WAITING_FOR_SECURITY_REVIEW – (Phase 2) Secure Science assessment requires a human reviewer
+                          before an execution intent may be built.
+DENIED                  – (Phase 2) Secure Science assessment denied the plan; terminal for this
+                          plan, can never transition to READY_TO_EXECUTE / EXECUTING.
 """
 
 from __future__ import annotations
@@ -37,6 +41,8 @@ class WorkflowState(str, Enum):
     FAILED = "FAILED"
     FAILED_WAITING_FOR_USER = "FAILED_WAITING_FOR_USER"
     COMPLETED = "COMPLETED"
+    WAITING_FOR_SECURITY_REVIEW = "WAITING_FOR_SECURITY_REVIEW"
+    DENIED = "DENIED"
 
 
 # States where the system is actively waiting for the user to act.
@@ -45,6 +51,7 @@ WAITING_STATES = {
     WorkflowState.WAITING_FOR_INPUTS,
     WorkflowState.WAITING_FOR_APPROVAL,
     WorkflowState.FAILED_WAITING_FOR_USER,
+    WorkflowState.WAITING_FOR_SECURITY_REVIEW,
 }
 
 # States that block a new independent workflow from starting.
@@ -73,20 +80,67 @@ class WorkflowCheckpoint:
     current_step: Optional[str] = None
     resume_node: Optional[str] = None                    # logical label for where to resume
 
+    # Platform records (Phase 1, populated only when HELIX_SCIENCE_GATE_V1 is on).
+    # The plan IR dict in `pending_plan` stays authoritative for back-compat;
+    # these identify the persisted ScientificObjective / ScientificPlan /
+    # ExecutionIntent / HumanApproval records in the ledger.
+    trace_id: Optional[str] = None
+    objective_id: Optional[str] = None
+    pending_plan_id: Optional[str] = None
+    pending_plan_hash: Optional[str] = None
+    pending_execution_intent_id: Optional[str] = None
+    pending_execution_intent_hash: Optional[str] = None
+    approval_id: Optional[str] = None
+    assessment_id: Optional[str] = None          # Phase 2
+    security_outcome: Optional[str] = None       # Phase 2: ALLOW | ALLOW_WITH_APPROVAL | REQUIRE_REVIEW | DENY
+
     # Timestamps (unix seconds)
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 
+    PLATFORM_FIELDS = (
+        "trace_id",
+        "objective_id",
+        "pending_plan_id",
+        "pending_plan_hash",
+        "pending_execution_intent_id",
+        "pending_execution_intent_hash",
+        "approval_id",
+        "assessment_id",
+        "security_outcome",
+    )
+
     def transition(self, new_state: WorkflowState) -> "WorkflowCheckpoint":
-        """Return a new checkpoint with state updated and timestamp bumped."""
+        """Return a new checkpoint with state updated and timestamp bumped.
+
+        Raises ``InvariantViolation`` for DENIED → READY_TO_EXECUTE / EXECUTING (Phase 2 invariant).
+        """
         import copy
+        from backend.orchestration.invariants import check_state_transition_allowed
+
+        check_state_transition_allowed(self.state.value, new_state.value)
         cp = copy.copy(self)
         cp.state = new_state
         cp.updated_at = time.time()
         return cp
 
+    def with_platform_records(self, **records: Optional[str]) -> "WorkflowCheckpoint":
+        """Return a copy carrying the given platform record identifiers."""
+        import copy
+        unknown = set(records) - set(self.PLATFORM_FIELDS)
+        if unknown:
+            raise ValueError(f"unknown platform fields: {sorted(unknown)}")
+        cp = copy.copy(self)
+        for key, value in records.items():
+            setattr(cp, key, value)
+        cp.updated_at = time.time()
+        return cp
+
+    def platform_records(self) -> Dict[str, Optional[str]]:
+        return {k: getattr(self, k) for k in self.PLATFORM_FIELDS}
+
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d = {
             "workflow_id": self.workflow_id,
             "state": self.state.value,
             "pending_plan": self.pending_plan,
@@ -100,6 +154,12 @@ class WorkflowCheckpoint:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
+        # Only serialise platform fields when set, keeping legacy checkpoints byte-identical.
+        for key in self.PLATFORM_FIELDS:
+            value = getattr(self, key)
+            if value is not None:
+                d[key] = value
+        return d
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "WorkflowCheckpoint":
@@ -116,6 +176,7 @@ class WorkflowCheckpoint:
             resume_node=d.get("resume_node"),
             created_at=d.get("created_at", time.time()),
             updated_at=d.get("updated_at", time.time()),
+            **{k: d.get(k) for k in cls.PLATFORM_FIELDS},
         )
 
     @classmethod
@@ -182,6 +243,23 @@ class WorkflowCheckpoint:
             pending_plan=pending_plan,
             resume_node="failure_recovery",
         )
+
+    @classmethod
+    def waiting_for_security_review(
+        cls,
+        pending_plan: Dict[str, Any],
+        *,
+        resume_node: str = "security_review",
+    ) -> "WorkflowCheckpoint":
+        return cls(
+            state=WorkflowState.WAITING_FOR_SECURITY_REVIEW,
+            pending_plan=pending_plan,
+            resume_node=resume_node,
+        )
+
+    @classmethod
+    def denied(cls, pending_plan: Optional[Dict[str, Any]] = None) -> "WorkflowCheckpoint":
+        return cls(state=WorkflowState.DENIED, pending_plan=pending_plan, resume_node=None)
 
     @classmethod
     def executing(cls, run_id: str, current_step: str = "step1") -> "WorkflowCheckpoint":
